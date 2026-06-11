@@ -150,8 +150,9 @@ pub const CAP_ZEPHYR_DT_SHUTDOWN_1: CapabilityRow = CapabilityRow {
                pending C-4 pin, per A-18",
 };
 
-/// Zephyr `on_deinit`: exists v4.2.0+, unverified/undesigned, scheduled
-/// (C03 row 3).
+/// Zephyr `on_deinit`: DELIVERED by spec-convergence-pl011 (C03 row 3,
+/// flipped IN PLACE per its GRILL D05 — no N+1: this unit delivers exactly
+/// what the -1 row scheduled, as pre-registered).
 pub const CAP_ZEPHYR_DT_DEINIT_1: CapabilityRow = CapabilityRow {
     id: "CAP-ZEPHYR-DT-DEINIT-1",
     target_os: TargetOs::Zephyr,
@@ -159,9 +160,10 @@ pub const CAP_ZEPHYR_DT_DEINIT_1: CapabilityRow = CapabilityRow {
     bus_family: "any",
     registration_form: RegistrationForm::StaticDevicetree,
     slot: LifecycleSlot::OnDeinit,
-    disposition: Disposition::DesignedScheduled,
-    citation: "`device_deinit()` exists v4.2.0+; unverified/undesigned (B-6, C-3, D06); \
-               delivered by spec-convergence-pl011",
+    disposition: Disposition::Delivered,
+    citation: "`device_deinit()` device.h:928; `DEVICE_DT_DEINIT_DEFINE` device.h:243; \
+               rc returned verbatim kernel/device.c:199; `CONFIG_DEVICE_DEINIT_SUPPORT` \
+               kernel/Kconfig.device:36; delivered by spec-convergence-pl011 GRILL D03",
 };
 
 /// Linux PCI `on_surprise_remove`: delivered (C03 row 4 — the

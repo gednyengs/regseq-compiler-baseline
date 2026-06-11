@@ -522,28 +522,99 @@ fn multi_compatible_match_set_is_unsupported() {
     ));
 }
 
-#[test]
-fn on_deinit_is_rejected_citing_d06_not_unsupported() {
-    let mut m = minimal_dt_model();
-    let ut = unit_ty(&mut m);
-    let cb = push_intrinsic(&mut m, "dummy", IntrinsicKind::PollUntil, vec![], ut);
-    let on_deinit = push_callback_calling(&mut m, cb, ut);
+// -- the deinit lowering (spec-convergence-pl011 C04/D05): authored
+//    on_deinit lowers a deinit fn + the conditional macro swap; unauthored
+//    leaves the scaffold byte-identical (I05) ------------------------------
+
+/// The emitting model plus a legal `Ok(())` `on_deinit` body (C04).
+fn deinit_model() -> RegseqModel {
+    let mut m = emitting_model(&["HardwareError", "DeviceBusy"]);
+    let driver_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| {
+            matches!(t, Ty::Struct { item, .. } if {
+                m.strings.resolve(m.items[*item].def_path.rendered) == "Minimal"
+            })
+        })
+        .map(|(id, _)| id)
+        .unwrap();
+    let result_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| matches!(t, Ty::Enum { item, .. } if m.items[*item].is_result))
+        .map(|(id, _)| id)
+        .unwrap();
+    let on_deinit = push_ok_callback(&mut m, driver_ty, result_ty, "on_deinit");
     let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
     driver.ops.on_deinit = Some(on_deinit);
-    let err = emit_zephyr_c(&m).unwrap_err();
-    let EmitError::Rejected(s) = err else {
-        panic!("expected Rejected, got {err:?}");
-    };
-    // D06 re-cite: names the v4.4 fork state AND the delivering unit; the
-    // wording is a scheduling statement, not a capability denial.
+    m
+}
+
+#[test]
+fn authored_on_deinit_lowers_the_full_c04_shape() {
+    let emit = emit_zephyr_c(&deinit_model()).expect("authored on_deinit must emit (C04)");
+    let tu = &emit.tu;
+    // The deinit fn, C04 signature, after init and before the instantiation
+    // block.
+    let init = tu.find("static int minimal_init(").expect("init fn");
+    let deinit = tu
+        .find("static int minimal_deinit(const struct device *dev)")
+        .unwrap_or_else(|| panic!("C04 deinit signature:\n{tu}"));
+    let inst_block = tu
+        .find("DEVICE_DT_INST_DEINIT_DEFINE(n, minimal_init, minimal_deinit, NULL,")
+        .unwrap_or_else(|| panic!("the conditional macro swap:\n{tu}"));
+    assert!(init < deinit && deinit < inst_block);
     assert!(
-        s.contains("device_deinit()") && s.contains("spec-convergence-pl011"),
-        "{s}"
+        !tu.contains("DEVICE_DT_INST_DEFINE(n,"),
+        "swapped, not duplicated"
     );
-    assert!(!s.to_lowercase().contains("unsupported"), "{s}");
-    // D14: the scheduling diagnostic is table-cited (rendered from the row
-    // const, never a literal).
-    assert!(s.contains(capability::CAP_ZEPHYR_DT_DEINIT_1.id), "{s}");
+    // The fused adapter inside the deinit fn: same nine-row negated-errno
+    // shape as init, arms in deterministic variant order.
+    let deinit_body = &tu[deinit..inst_block];
+    assert!(deinit_body.contains("if (__tag != 0x2)"), "{deinit_body}");
+    let eio = deinit_body.find("return -EIO;").expect("HardwareError arm");
+    let ebusy = deinit_body.find("return -EBUSY;").expect("DeviceBusy arm");
+    assert!(eio < ebusy, "deterministic variant order (C04)");
+    assert!(deinit_body.contains("default:"), "corrupt-tag defense");
+    assert!(deinit_body.contains("\treturn 0;"), "Ok(()) => return 0");
+    // The explicit no-op postamble callout (the map_region mirror, C04).
+    assert!(
+        deinit_body.contains("deliberate NO-OP"),
+        "the unmap mirror is an explicit callout, not silence: {deinit_body}"
+    );
+    // The TU-header Kconfig pin row naming the silent-drop hazard.
+    assert!(tu.contains("CONFIG_DEVICE_DEINIT_SUPPORT=y"), "{tu}");
+    assert!(tu.contains("device.h:1175-1180"), "{tu}");
+    // Conformance: on_deinit delivered, citing the flipped row (D05).
+    let entry = emit
+        .conformance
+        .delivered_slots
+        .iter()
+        .find(|e| e.slot == "on_deinit")
+        .expect("on_deinit in delivered_slots");
+    assert_eq!(entry.row.as_deref(), Some(capability::CAP_ZEPHYR_DT_DEINIT_1.id));
+    assert!(
+        emit.conformance
+            .summary_line()
+            .contains("on_deinit:CAP-ZEPHYR-DT-DEINIT-1"),
+        "{}",
+        emit.conformance.summary_line()
+    );
+}
+
+#[test]
+fn unauthored_on_deinit_leaves_the_scaffold_byte_identical() {
+    // I05: the conditional swap — without on_deinit no deinit artifact
+    // exists at all (the absentslot/init-fail goldens stay byte-frozen,
+    // proven by their snapshot e2es needing no re-bless).
+    let tu = emit_zephyr_c(&emitting_model(&["HardwareError", "DeviceBusy"]))
+        .expect("must emit")
+        .tu;
+    assert!(tu.contains("DEVICE_DT_INST_DEFINE(n, minimal_init, NULL,"));
+    assert!(!tu.contains("DEINIT"), "no deinit trace in the scaffold");
+    assert!(!tu.contains("minimal_deinit"));
+    assert!(!tu.contains("CONFIG_DEVICE_DEINIT_SUPPORT"));
 }
 
 // -- the ratified OS-absent slot (os-capability-disposition unit): authored

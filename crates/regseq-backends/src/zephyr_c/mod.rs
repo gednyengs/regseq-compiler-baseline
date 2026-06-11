@@ -230,17 +230,11 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
     }
     let compatible = dt_compatibles[0];
 
-    // Lifecycle ops: the bring-up half is this unit's scope (D12). The two
-    // scheduling rejections are table-cited (D14: the diagnostics GAIN their
-    // ratified row IDs, rendered from the row consts, never literals).
-    if driver.ops.on_deinit.is_some() {
-        return Err(EmitError::Rejected(format!(
-            "authored `on_deinit` under TargetOs::Zephyr: the teardown slot exists on v4.4 \
-             (`device_deinit()`, v4.2.0+) but is unverified/undesigned (D.2/B-6, C-3, D06) — \
-             delivered by spec-convergence-pl011 [capability row {}]",
-            capability::CAP_ZEPHYR_DT_DEINIT_1.id
-        )));
-    }
+    // Lifecycle ops: bring-up (D12) + teardown (spec-convergence-pl011 C04:
+    // the former scheduling rejection is delivered — `on_deinit` lowers to a
+    // deinit fn behind `DEVICE_DT_INST_DEINIT_DEFINE`, row
+    // CAP-ZEPHYR-DT-DEINIT-1 flipped Delivered in place, D05). The remaining
+    // scheduling rejection (shutdown) is table-cited (D14).
     // `on_surprise_remove`: the one ratified OS-absent slot. The capability
     // table decides — an `AbsentDispatch` row licenses auditable non-emission
     // (lowered in full into a throwaway context below, audit block in place);
@@ -368,6 +362,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
     let callbacks = [
         ("on_init", &driver.ops.on_init),
         ("on_init_failure", &driver.ops.on_init_failure),
+        ("on_deinit", &driver.ops.on_deinit),
     ];
     let mut roots: Vec<(&'static str, InstanceId)> = Vec::new();
     for (name, op) in callbacks {
@@ -555,6 +550,12 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         find("on_init"),
         find("on_init_failure"),
     )?;
+    // -- the deinit function (spec-convergence-pl011 C04): authored
+    //    `on_deinit` only — unauthored leaves the scaffold byte-identical
+    //    (I05: the absentslot/init-fail goldens stay frozen).
+    let deinit_fn = find("on_deinit")
+        .map(|id| emit_deinit_fn(&mut cx, &drv, id))
+        .transpose()?;
 
     // -- type definitions, now that every use is known -----------------------
     let type_defs = emit_type_defs(&mut cx, driver_ty)?;
@@ -577,18 +578,21 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         &type_defs,
         &bodies,
         &init_fn,
+        deinit_fn.as_deref(),
     )?;
     let binding_yaml = emit_binding_yaml(model, &drv, compatible, driver);
 
     // -- the per-target conformance report (amendment 6, C05): slots in
     //    LifecycleOps declaration order; delivered rows carry a ratified row
-    //    ID only when one exists (none does for the zephyr bring-up slots);
+    //    ID only when one exists (`on_deinit` cites CAP-ZEPHYR-DT-DEINIT-1,
+    //    the D05 in-place flip; the bring-up slots have none);
     //    rejected_slots structurally empty (I07).
     let delivered_slots = roots
         .iter()
         .map(|(name, _)| capability::SlotEntry {
             slot: (*name).to_string(),
-            row: None,
+            row: (*name == "on_deinit")
+                .then(|| capability::CAP_ZEPHYR_DT_DEINIT_1.id.to_string()),
             citation: None,
         })
         .collect();
@@ -683,6 +687,37 @@ fn emit_init_fn(
         )?;
         out.push_str(&adapter);
     }
+    out.push_str("\treturn 0;\n}\n");
+    Ok(out)
+}
+
+/// Synthesize the per-instance deinit function (spec-convergence-pl011 C04):
+/// the authored `on_deinit` body through the SAME lowering pipeline and the
+/// SAME fused nine-row negated-errno adapter as init (deterministic variant
+/// order). Error-channel semantics are the kernel's, cited not invented
+/// (v4.4.0 kernel/device.c:199-218): our negative rc is returned by
+/// `device_deinit()` VERBATIM and `initialized` stays true on failure; on
+/// success it clears, so `device_is_ready()` flips false. No failure hook:
+/// `on_init_failure` is the init path's cleanup slot only.
+fn emit_deinit_fn(
+    cx: &mut body::LowerCx<'_>,
+    drv: &str,
+    on_deinit: InstanceId,
+) -> Result<String, EmitError> {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "/* the teardown dispatch hub (spec-convergence-pl011 C04) */\nstatic int {drv}_deinit(const struct device *dev)\n{{\n"
+    ));
+    out.push_str(&format!("\tstruct {drv}_data *data = dev->data;\n\n"));
+    let sym = cx.fn_symbols[&on_deinit].clone();
+    out.push_str(
+        "\t/* authored on_deinit over the embedded spec driver; the authored\n\t * RegseqError crosses the negated-errno adapter exactly as in init\n\t * (kernel/device.c:199: the rc is returned verbatim; `initialized`\n\t * stays true on failure, clears on success) */\n",
+    );
+    let adapter = emit_result_adapter(cx, on_deinit, &format!("{sym}(&data->inner)"), None)?;
+    out.push_str(&adapter);
+    out.push_str(
+        "\t/* postamble (integration §5.2): map_region's unmap mirror is a\n\t * deliberate NO-OP — no DEVICE_MMIO unmap exists on Zephyr; nothing\n\t * is invented (C04) */\n",
+    );
     out.push_str("\treturn 0;\n}\n");
     Ok(out)
 }
@@ -1298,6 +1333,7 @@ fn emit_tu(
     type_defs: &str,
     bodies: &str,
     init_fn: &str,
+    deinit_fn: Option<&str>,
 ) -> Result<String, EmitError> {
     let model = cx.model;
     let inner_tag = cx.names.name_of(model, driver_ty)?;
@@ -1318,6 +1354,15 @@ fn emit_tu(
     if cx.width8_used {
         tu.push_str(
             " *\n * Width-8 MMIO note (D19/C-2): sys_read64/sys_write64 are\n * arch-conditional; this TU is validated on aarch64 — a target arch\n * lacking them fails the C compile loud.\n",
+        );
+    }
+    if deinit_fn.is_some() {
+        // The A-9 pin row for teardown (spec-convergence-pl011 C04): the
+        // hazard is compile-SILENT — Z_DEVICE_OPS drops deinit_fn under
+        // IF_ENABLED when the Kconfig is off (device.h:1175-1180), the build
+        // stays clean, and device_deinit() returns -ENOTSUP at runtime.
+        tu.push_str(
+            " *\n * Teardown Kconfig pin (A-9, documented not asserted):\n * CONFIG_DEVICE_DEINIT_SUPPORT=y — Z_DEVICE_OPS silently DROPS deinit_fn\n * under IF_ENABLED when off (device.h:1175-1180); the build passes and\n * device_deinit() returns -ENOTSUP.\n",
         );
     }
     tu.push_str(" */\n\n");
@@ -1394,10 +1439,17 @@ fn emit_tu(
     tu.push_str(bodies);
     tu.push_str(init_fn);
     tu.push('\n');
+    if let Some(deinit) = deinit_fn {
+        tu.push_str(deinit);
+        tu.push('\n');
+    }
 
     // §1 item 8: the build-time instantiation block —
     // register/match/create/associate as build-time facts (§2); init level
-    // hardcoded (D13); api NULL for ClassTag::Generic ONLY (A-16).
+    // hardcoded (D13); api NULL for ClassTag::Generic ONLY (A-16). With an
+    // authored on_deinit the macro swaps to DEVICE_DT_INST_DEINIT_DEFINE
+    // (device.h:272→243 — DEVICE_DT_DEFINE plus the deinit_fn arg);
+    // unauthored stays byte-identical (C04/I05).
     tu.push_str("/* build-time register/match/create/associate (scaffold §2) */\n");
     tu.push_str(&format!(
         "#define RSEQ_INIT(n)\\\n\tstatic struct {drv}_data {drv}_data_##n;\\\n"
@@ -1411,9 +1463,15 @@ fn emit_tu(
             "\tstatic const struct {drv}_config {drv}_config_##n;\\\n"
         ));
     }
-    tu.push_str(&format!(
-        "\tDEVICE_DT_INST_DEFINE(n, {drv}_init, NULL,\\\n\t\t&{drv}_data_##n, &{drv}_config_##n,\\\n\t\tPOST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,\\\n\t\tNULL /* api: ClassTag::Generic only (A-16) */);\n"
-    ));
+    if deinit_fn.is_some() {
+        tu.push_str(&format!(
+            "\tDEVICE_DT_INST_DEINIT_DEFINE(n, {drv}_init, {drv}_deinit, NULL,\\\n\t\t&{drv}_data_##n, &{drv}_config_##n,\\\n\t\tPOST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,\\\n\t\tNULL /* api: ClassTag::Generic only (A-16) */);\n"
+        ));
+    } else {
+        tu.push_str(&format!(
+            "\tDEVICE_DT_INST_DEFINE(n, {drv}_init, NULL,\\\n\t\t&{drv}_data_##n, &{drv}_config_##n,\\\n\t\tPOST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,\\\n\t\tNULL /* api: ClassTag::Generic only (A-16) */);\n"
+        ));
+    }
     tu.push_str("DT_INST_FOREACH_STATUS_OKAY(RSEQ_INIT)\n\n");
 
     // §1 item 9: the mandatory single-instance guard (A-2/D18) — a
