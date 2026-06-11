@@ -15,8 +15,8 @@ pub use options::CompilerOptions;
 pub use param::{validate_dotted_ident, ParamParseError, ParamScope, RegseqParam};
 pub use platform::{
     parse_platform_bindings_path, parse_platform_bindings_str, parse_platform_file_path,
-    parse_platform_file_str, MmioBindingSpec, PlatformBindings, PlatformFile, PlatformIdentityRaw,
-    PlatformParseError,
+    parse_platform_file_str, InterruptBindingSpec, MmioBindingSpec, PlatformBindings,
+    PlatformFile, PlatformIdentityRaw, PlatformParseError,
 };
 pub use toolchain::CC_FLAGS;
 pub use types::{ColorChoice, DumpStage, LogLevel, ParseEnumError};

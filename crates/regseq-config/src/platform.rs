@@ -9,8 +9,11 @@
 //! and runs the `BRM-005/006` validation. This module does **not** validate the
 //! binding-pair or resolve effective BARs — it only deserializes the keys.
 //!
-//! Two sections are parsed (in one pass — [`parse_platform_file_str`]): the
-//! `[mmio.<id>]` bindings above, and the `[platform]` table into a
+//! Three sections are parsed (in one pass — [`parse_platform_file_str`]): the
+//! `[mmio.<id>]` bindings above, the `[interrupt.<id>]` bindings of the
+//! device-interrupt construct (#6, contract C03 — structural only; the
+//! canonical-spelling validation of `trigger_type`/`trigger_polarity` is the
+//! `regseq-l2` interrupt tenant's), and the `[platform]` table into a
 //! [`PlatformIdentityRaw`] (os/board/arch, structural only — the os token's
 //! closed-vocabulary check is `regseq-l2`'s, keeping this crate a `serde`-only
 //! leaf; R5/D8). Any other top-level construct section is accepted-and-ignored
@@ -38,13 +41,40 @@ pub struct MmioBindingSpec {
     pub bar_type_io: Option<bool>,
 }
 
-/// The L2 bindings parsed from a platform file: the `[mmio.<id>]` sections keyed
-/// by resource id.
+/// One `[interrupt.<id>]` binding parsed from a platform file (device-interrupt
+/// construct #6, contract C03). Structural parse only: `trigger_type` /
+/// `trigger_polarity` are captured **verbatim** — the canonical-spelling
+/// validation (`level|edge`; `active_high|active_low|rising|falling`, GRILL
+/// D10/R12) is the `regseq-l2` interrupt tenant's. `shared` defaults `false`
+/// when absent (the C03 board-truth default, GRILL D05/I08).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InterruptBindingSpec {
+    /// `irq_number` — the platform line number (required for generic-c/static
+    /// targets, advisory for zephyr, unused for linux runtime resolution —
+    /// R10; enforced downstream).
+    pub irq_number: Option<u32>,
+    /// `trigger_type` token, verbatim (e.g. `"level"`).
+    pub trigger_type: Option<String>,
+    /// `trigger_polarity` token, verbatim (e.g. `"active_high"`).
+    pub trigger_polarity: Option<String>,
+    /// `priority` — scheduling priority (zephyr `IRQ_CONNECT` argument only).
+    pub priority: Option<u32>,
+    /// `shared` — the line is electrically shared on this board (GRILL D05).
+    /// Defaults `false` when the key is absent.
+    pub shared: bool,
+}
+
+/// The L2 bindings parsed from a platform file: the `[mmio.<id>]` and
+/// `[interrupt.<id>]` sections keyed by resource id.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlatformBindings {
     /// `[mmio.<id>]` sections, keyed by the resource id (`#[rseq::mmio(id =
     /// "<id>")]`).
     pub mmio: BTreeMap<String, MmioBindingSpec>,
+    /// `[interrupt.<id>]` sections, keyed by the resource id
+    /// (`#[rseq::interrupt(id = "<id>")]`). An absent section is absence in
+    /// the map (Option semantics are the L2 tenant's, C03).
+    pub interrupt: BTreeMap<String, InterruptBindingSpec>,
 }
 
 /// The raw, structurally-parsed `[platform]` identity (R5/D8). `regseq-config`
@@ -95,6 +125,16 @@ pub enum PlatformParseError {
     /// not here — R5.)
     #[error("[platform] {key}: {detail}")]
     BadPlatform { key: String, detail: String },
+    /// An `[interrupt.<id>]` section or one of its keys has the wrong shape
+    /// (device-interrupt construct #6). Distinct from
+    /// [`PlatformParseError::BadValue`] so the diagnostic is labelled
+    /// `[interrupt.…]`, not `[mmio.…]`.
+    #[error("[interrupt.{id}] {key}: {detail}")]
+    BadInterrupt {
+        id: String,
+        key: String,
+        detail: String,
+    },
 }
 
 /// Parse a platform-file string in a single pass (Codex A1 / R5) into its
@@ -128,10 +168,31 @@ pub fn parse_platform_file_str(input: &str) -> Result<PlatformFile, PlatformPars
         }
     }
 
+    let mut interrupt = BTreeMap::new();
+    if let Some(interrupt_val) = table.get("interrupt") {
+        let toml::Value::Table(interrupt_tbl) = interrupt_val else {
+            return Err(PlatformParseError::BadInterrupt {
+                id: "*".to_string(),
+                key: "interrupt".to_string(),
+                detail: "expected an `[interrupt.<id>]` table".to_string(),
+            });
+        };
+        for (id, val) in interrupt_tbl {
+            let toml::Value::Table(section) = val else {
+                return Err(PlatformParseError::BadInterrupt {
+                    id: id.clone(),
+                    key: "<section>".to_string(),
+                    detail: "expected a table".to_string(),
+                });
+            };
+            interrupt.insert(id.clone(), parse_interrupt_section(id, section)?);
+        }
+    }
+
     let identity = parse_platform_identity(&table)?;
 
     Ok(PlatformFile {
-        bindings: PlatformBindings { mmio },
+        bindings: PlatformBindings { mmio, interrupt },
         identity,
     })
 }
@@ -238,6 +299,54 @@ fn parse_mmio_section(
     Ok(spec)
 }
 
+/// Parse one `[interrupt.<id>]` section's C03 keys (`irq_number` /
+/// `trigger_type` / `trigger_polarity` / `priority` / `shared`). Unknown keys
+/// are ignored (forward-compat, matching `[mmio.<id>]`). Structural checks
+/// only: integers must be non-negative and fit `u32`, the trigger tokens must
+/// be strings (captured verbatim), `shared` must be a boolean. The
+/// canonical-spelling vocabulary is the `regseq-l2` tenant's (D10/R12).
+fn parse_interrupt_section(
+    id: &str,
+    section: &toml::Table,
+) -> Result<InterruptBindingSpec, PlatformParseError> {
+    let bad = |key: &str, detail: String| PlatformParseError::BadInterrupt {
+        id: id.to_string(),
+        key: key.to_string(),
+        detail,
+    };
+    let u32_key = |key: &str| -> Result<Option<u32>, PlatformParseError> {
+        match section.get(key) {
+            None => Ok(None),
+            Some(toml::Value::Integer(i)) if *i >= 0 => Ok(Some(
+                u32::try_from(*i).map_err(|_| bad(key, format!("{i} does not fit u32")))?,
+            )),
+            Some(toml::Value::Integer(_)) => Err(bad(key, "must be non-negative".to_string())),
+            Some(_) => Err(bad(key, "expected an integer".to_string())),
+        }
+    };
+    let str_key = |key: &str| -> Result<Option<String>, PlatformParseError> {
+        match section.get(key) {
+            None => Ok(None),
+            Some(toml::Value::String(s)) => Ok(Some(s.clone())),
+            Some(_) => Err(bad(key, "expected a string".to_string())),
+        }
+    };
+    let mut spec = InterruptBindingSpec {
+        irq_number: u32_key("irq_number")?,
+        trigger_type: str_key("trigger_type")?,
+        trigger_polarity: str_key("trigger_polarity")?,
+        priority: u32_key("priority")?,
+        shared: false,
+    };
+    if let Some(v) = section.get("shared") {
+        let toml::Value::Boolean(b) = v else {
+            return Err(bad("shared", "expected a boolean".to_string()));
+        };
+        spec.shared = *b;
+    }
+    Ok(spec)
+}
+
 /// Coerce a TOML value to a non-negative `u64`, or a typed error.
 fn as_u64(id: &str, key: &str, v: &toml::Value) -> Result<u64, PlatformParseError> {
     match v {
@@ -316,6 +425,108 @@ bar = 2
         assert!(
             matches!(&err, PlatformParseError::BadValue { key, .. } if key == "type"),
             "got {err:?}"
+        );
+    }
+
+    // --- [interrupt.<id>] (device-interrupt construct #6, C03): structural
+    // parse only; canonical trigger spellings are validated downstream by the
+    // regseq-l2 interrupt tenant, not here. ---
+
+    #[test]
+    fn parses_interrupt_section_pl011_full_spec_shape() {
+        // The aspirational `pl011-full-spec` fixture's section, verbatim
+        // (C03/S05). `trigger_polarity = "high"` is non-canonical and must
+        // still PARSE here — rejecting it is the L2 binder's job (D10/R12).
+        let input = r#"
+version = "1"
+[platform]
+os = "linux"
+[mmio.uart_regs]
+base = 0x09000000
+size = 4096
+[interrupt.uart_irq]
+irq_number = 37
+trigger_type = "level"
+trigger_polarity = "high"
+shared = false
+"#;
+        let b = parse_platform_bindings_str(input).expect("parse");
+        let irq = b.interrupt.get("uart_irq").expect("uart_irq section");
+        assert_eq!(irq.irq_number, Some(37));
+        assert_eq!(irq.trigger_type.as_deref(), Some("level"));
+        assert_eq!(irq.trigger_polarity.as_deref(), Some("high"));
+        assert_eq!(irq.priority, None);
+        assert!(!irq.shared);
+        // The mmio section still parses alongside.
+        assert_eq!(b.mmio.get("uart_regs").unwrap().size, Some(4096));
+    }
+
+    #[test]
+    fn absent_interrupt_section_parses_to_absence() {
+        let b = parse_platform_bindings_str("[mmio.regs]\nbase = 0\nsize = 16\n").unwrap();
+        assert!(b.interrupt.is_empty());
+    }
+
+    #[test]
+    fn interrupt_shared_defaults_false_and_parses_true() {
+        let b = parse_platform_bindings_str("[interrupt.a]\nirq_number = 1\n").unwrap();
+        assert!(!b.interrupt.get("a").unwrap().shared);
+        let b = parse_platform_bindings_str("[interrupt.a]\nshared = true\n").unwrap();
+        assert!(b.interrupt.get("a").unwrap().shared);
+    }
+
+    #[test]
+    fn interrupt_priority_parses() {
+        let b = parse_platform_bindings_str("[interrupt.a]\npriority = 3\n").unwrap();
+        assert_eq!(b.interrupt.get("a").unwrap().priority, Some(3));
+    }
+
+    #[test]
+    fn interrupt_unknown_keys_are_ignored() {
+        // Forward-compat, matching the `[mmio.<id>]` discipline.
+        let b = parse_platform_bindings_str("[interrupt.a]\nirq_number = 5\nfuture = 1\n").unwrap();
+        assert_eq!(b.interrupt.get("a").unwrap().irq_number, Some(5));
+    }
+
+    #[test]
+    fn interrupt_rejects_non_integer_irq_number() {
+        let err = parse_platform_bindings_str("[interrupt.a]\nirq_number = \"x\"\n").unwrap_err();
+        assert!(
+            matches!(&err, PlatformParseError::BadInterrupt { id, key, .. }
+                if id == "a" && key == "irq_number"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn interrupt_rejects_negative_and_oversized_integers() {
+        let err = parse_platform_bindings_str("[interrupt.a]\nirq_number = -1\n").unwrap_err();
+        assert!(matches!(&err, PlatformParseError::BadInterrupt { .. }), "got {err:?}");
+        let err =
+            parse_platform_bindings_str("[interrupt.a]\npriority = 4294967296\n").unwrap_err();
+        assert!(matches!(&err, PlatformParseError::BadInterrupt { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn interrupt_rejects_non_string_trigger_and_non_bool_shared() {
+        let err = parse_platform_bindings_str("[interrupt.a]\ntrigger_type = 1\n").unwrap_err();
+        assert!(
+            matches!(&err, PlatformParseError::BadInterrupt { key, .. } if key == "trigger_type"),
+            "got {err:?}"
+        );
+        let err = parse_platform_bindings_str("[interrupt.a]\nshared = \"no\"\n").unwrap_err();
+        assert!(
+            matches!(&err, PlatformParseError::BadInterrupt { key, .. } if key == "shared"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn interrupt_error_is_labelled_interrupt_not_mmio() {
+        let err = parse_platform_bindings_str("[interrupt.a]\nshared = 3\n").unwrap_err();
+        assert!(
+            err.to_string().starts_with("[interrupt.a]"),
+            "got {err}"
         );
     }
 
