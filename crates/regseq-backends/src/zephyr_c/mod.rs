@@ -615,6 +615,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         os_version_pin: capability::ZEPHYR_PIN,
         delivered_slots,
         absent_dispatch_slots: absent_entries,
+        structurally_absent_slots: Vec::new(),
         rejected_slots: Vec::new(),
         ignored_match_entries: ignored_audits,
     };

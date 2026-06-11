@@ -6,6 +6,7 @@
     {"slot": "on_deinit", "row": "CAP-ZEPHYR-DT-DEINIT-1"}
   ],
   "absent_dispatch_slots": [],
+  "structurally_absent_slots": [],
   "rejected_slots": [],
   "ignored_match_entries": [
     {"entry": "amba id=0x00041011 mask=0x000fffff", "reason": "foreign transport: not consumed by the ratified static-devicetree registration form; >=1 native entry present", "license": "spec-convergence-pl011 GRILL D08 (D03(a) rule)", "native_on": ["linux_c"]},

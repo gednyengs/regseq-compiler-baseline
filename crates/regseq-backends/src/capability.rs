@@ -18,7 +18,8 @@
 
 use regseq_model::TargetOs;
 
-/// The closed disposition enum (amendment 1 as amended, D01).
+/// The closed disposition enum (amendment 1 as amended, D01; appended by the
+/// device-interrupt unit per its GRILL D03/C02 — O5 minted here).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Disposition {
     Delivered,
@@ -28,6 +29,16 @@ pub enum Disposition {
     // scheduling diagnostic (never the word "unsupported")
     NeedsNewSurface,     // model/fixture gap; escalate, blocks
     RejectedUnsupported, // fail-loud D.2 default
+    /// A compiler-managed OPERATION (not an authored callback) that is
+    /// structurally absent on this registration form (device-interrupt GRILL
+    /// D03: zephyr's static `IRQ_CONNECT` has no runtime disconnect — the
+    /// deregister slot cannot be emitted; `irq_disable` still is, leaving the
+    /// line connected-but-masked). Distinct from [`Disposition::AbsentDispatch`]
+    /// by domain: that licenses non-emission of an authored LIFECYCLE callback
+    /// whose dispatch cannot occur; this licenses non-emission of a managed
+    /// operation the form cannot express. Renders its own audit-block kind
+    /// (`RSEQ-ABSENT-OP`), never the `RSEQ-ABSENT-SLOT` spelling.
+    StructurallyAbsent,
 }
 
 /// The registration form carrying the impossibility claim (D02: the zephyr
@@ -64,6 +75,30 @@ impl LifecycleSlot {
     }
 }
 
+/// The widened slot domain (device-interrupt unit, C02/R07): a row's subject
+/// is either an authored lifecycle callback slot or a compiler-managed
+/// OPERATION slot in dotted-path spelling. Existing lifecycle rows keep their
+/// rendered forms byte-identical (the `Lifecycle` arm delegates to
+/// [`LifecycleSlot::model_name`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilitySlot {
+    /// An authored lifecycle callback slot.
+    Lifecycle(LifecycleSlot),
+    /// A compiler-managed operation slot, dotted-path spelling. First
+    /// occupant: `interrupt.register_handler.deregister` (construct #6).
+    Operation(&'static str),
+}
+
+impl CapabilitySlot {
+    /// The rendered slot name — the spelling every artifact carries.
+    pub fn model_name(self) -> &'static str {
+        match self {
+            CapabilitySlot::Lifecycle(slot) => slot.model_name(),
+            CapabilitySlot::Operation(path) => path,
+        }
+    }
+}
+
 /// One ratified capability-table row (C01).
 #[derive(Debug)]
 pub struct CapabilityRow {
@@ -76,7 +111,7 @@ pub struct CapabilityRow {
     pub os_version_pin: &'static str,
     pub bus_family: &'static str,
     pub registration_form: RegistrationForm,
-    pub slot: LifecycleSlot,
+    pub slot: CapabilitySlot,
     pub disposition: Disposition,
     /// Non-empty; must contain the pin + >=1 source anchor in the pinned
     /// local checkout or vendored reference (D05; L3 empty-ratified rule).
@@ -84,16 +119,34 @@ pub struct CapabilityRow {
 }
 
 impl CapabilityRow {
-    /// The C04 `RSEQ-ABSENT-SLOT` audit block for this row, grammar
-    /// verbatim — generated from the same const as the report row, so
-    /// cross-artifact row-ID consistency holds by construction (D10).
+    /// The C04 audit block for this row, grammar verbatim — generated from
+    /// the same const as the report row, so cross-artifact row-ID consistency
+    /// holds by construction (D10). Each absent-family disposition renders
+    /// its OWN kind spelling (device-interrupt C02: the generalization that
+    /// retired the hard-coded `AbsentDispatch` text): `AbsentDispatch` keeps
+    /// its historical `RSEQ-ABSENT-SLOT` block byte-identical;
+    /// `StructurallyAbsent` renders `RSEQ-ABSENT-OP` with the
+    /// connected-but-masked operation tail.
     pub fn audit_block(&self) -> String {
-        format!(
-            "/* RSEQ-ABSENT-SLOT: {}\n * disposition: AbsentDispatch row: {}\n * [ratified: {}]\n * body checked, not delivered: dispatch cannot occur on this target. */\n",
-            self.slot.model_name(),
-            self.id,
-            self.citation
-        )
+        match self.disposition {
+            Disposition::AbsentDispatch => format!(
+                "/* RSEQ-ABSENT-SLOT: {}\n * disposition: AbsentDispatch row: {}\n * [ratified: {}]\n * body checked, not delivered: dispatch cannot occur on this target. */\n",
+                self.slot.model_name(),
+                self.id,
+                self.citation
+            ),
+            Disposition::StructurallyAbsent => format!(
+                "/* RSEQ-ABSENT-OP: {}\n * disposition: StructurallyAbsent row: {}\n * [ratified: {}]\n * operation not emitted: structurally absent on this registration form. */\n",
+                self.slot.model_name(),
+                self.id,
+                self.citation
+            ),
+            other => unreachable!(
+                "audit_block is rendered only for the absent-family dispositions; \
+                 row `{}` carries {other:?}",
+                self.id
+            ),
+        }
     }
 }
 
@@ -123,7 +176,7 @@ pub const CAP_ZEPHYR_DT_SURPRISE_1: CapabilityRow = CapabilityRow {
     os_version_pin: "v4.4.0 (684c9e8f32e4)",
     bus_family: "any", // incl. PCIe-over-DT (D02: the FORM carries the claim)
     registration_form: RegistrationForm::StaticDevicetree,
-    slot: LifecycleSlot::OnSurpriseRemove,
+    slot: CapabilitySlot::Lifecycle(LifecycleSlot::OnSurpriseRemove),
     disposition: Disposition::AbsentDispatch,
     citation: "Zephyr v4.4.0 (684c9e8f32e4) static DT device model, read live in the \
                eval-workspace checkout 2026-06-10 (os-capability-disposition T02): \
@@ -144,7 +197,7 @@ pub const CAP_ZEPHYR_DT_SHUTDOWN_1: CapabilityRow = CapabilityRow {
     os_version_pin: "v4.4.0 (684c9e8f32e4)", // ratified literal (see SURPRISE-1)
     bus_family: "any",
     registration_form: RegistrationForm::StaticDevicetree,
-    slot: LifecycleSlot::OnSystemShutdown,
+    slot: CapabilitySlot::Lifecycle(LifecycleSlot::OnSystemShutdown),
     disposition: Disposition::DesignedScheduled,
     citation: "PM-device slot witnessed, wrapper designed (scaffold §4); trigger contract \
                pending C-4 pin, per A-18",
@@ -159,7 +212,7 @@ pub const CAP_ZEPHYR_DT_DEINIT_1: CapabilityRow = CapabilityRow {
     os_version_pin: "v4.4.0 (684c9e8f32e4)", // ratified literal (see SURPRISE-1)
     bus_family: "any",
     registration_form: RegistrationForm::StaticDevicetree,
-    slot: LifecycleSlot::OnDeinit,
+    slot: CapabilitySlot::Lifecycle(LifecycleSlot::OnDeinit),
     disposition: Disposition::Delivered,
     citation: "`device_deinit()` device.h:928; `DEVICE_DT_DEINIT_DEFINE` device.h:243; \
                rc returned verbatim kernel/device.c:199; `CONFIG_DEVICE_DEINIT_SUPPORT` \
@@ -174,11 +227,34 @@ pub const CAP_LINUX_PCI_SURPRISE_1: CapabilityRow = CapabilityRow {
     os_version_pin: "v6.6", // ratified literal (see SURPRISE-1)
     bus_family: "pci",
     registration_form: RegistrationForm::PciDynamic,
-    slot: LifecycleSlot::OnSurpriseRemove,
+    slot: CapabilitySlot::Lifecycle(LifecycleSlot::OnSurpriseRemove),
     disposition: Disposition::Delivered,
     citation: "present-predicate dispatch (pci_device_is_present) in `.remove`, \
                e1000-composed/golden.linux.c:370; v6.6 is the linux-backend docs' \
                verification pin (linux-open-questions.md, git.kernel.org ?h=v6.6 anchors)",
+};
+
+/// Zephyr static-`IRQ_CONNECT` interrupt deregister: the table's FIRST
+/// non-lifecycle row (device-interrupt construct #6, GRILL D03/C02). The
+/// operation — not an authored callback — is structurally absent on the
+/// static-connect registration form; `irq_disable` IS emitted and the line is
+/// left connected-but-masked after deinit.
+pub const CAP_ZEPHYR_STATICIRQ_DEREGISTER_1: CapabilityRow = CapabilityRow {
+    id: "CAP-ZEPHYR-STATICIRQ-DEREGISTER-1",
+    target_os: TargetOs::Zephyr,
+    os_version_pin: "v4.4.0 (684c9e8f32e4)", // ratified literal (see SURPRISE-1)
+    bus_family: "any",
+    registration_form: RegistrationForm::StaticDevicetree,
+    slot: CapabilitySlot::Operation("interrupt.register_handler.deregister"),
+    disposition: Disposition::StructurallyAbsent,
+    citation: "Zephyr v4.4.0 (684c9e8f32e4) static IRQ_CONNECT, re-verified live in the \
+               eval-workspace checkout 2026-06-11 (device-interrupt T10): IRQ_CONNECT \
+               (include/zephyr/irq.h:48) expands to ARCH_IRQ_CONNECT, a BUILD-TIME \
+               sw_isr_table install; the only disconnect API is irq_disconnect_dynamic \
+               (irq.h:90), documented for irq_connect_dynamic clients (z_isr_uninstall \
+               sw_isr_table.h:302 is its dynamic-table internal) — no runtime disconnect \
+               exists for a static connect. irq_disable IS emitted at deinit; the line \
+               stays connected-but-masked (GRILL device-interrupt D03/C02)",
 };
 
 /// Every ratified row, in table order (C03).
@@ -187,6 +263,7 @@ pub const CAPABILITY_TABLE: &[&CapabilityRow] = &[
     &CAP_ZEPHYR_DT_SHUTDOWN_1,
     &CAP_ZEPHYR_DT_DEINIT_1,
     &CAP_LINUX_PCI_SURPRISE_1,
+    &CAP_ZEPHYR_STATICIRQ_DEREGISTER_1,
 ];
 
 /// Keyed lookup over the D02 key `(target_os, os_version_pin, bus_family,
@@ -204,7 +281,7 @@ pub fn lookup(
             && row.os_version_pin == os_version_pin
             && (row.bus_family == "any" || row.bus_family == bus_family)
             && row.registration_form == registration_form
-            && row.slot == slot
+            && row.slot == CapabilitySlot::Lifecycle(slot)
     })
 }
 
@@ -217,6 +294,10 @@ pub struct ConformanceReport {
     pub os_version_pin: &'static str,
     pub delivered_slots: Vec<SlotEntry>, // row: Some(id) iff a ratified row exists
     pub absent_dispatch_slots: Vec<SlotEntry>, // row: always Some; citation carried
+    /// Compiler-managed operations structurally absent on the registration
+    /// form (device-interrupt C02): row always Some, citation carried — the
+    /// connected-but-masked statement lives in the row's citation.
+    pub structurally_absent_slots: Vec<SlotEntry>,
     pub rejected_slots: Vec<SlotEntry>,  // structurally empty on successful emit
     /// Recognized foreign-transport identity entries the backend did not
     /// consume, per the D03(a) rule (GRILL spec-convergence-pl011 D08, C02).
@@ -260,11 +341,12 @@ impl ConformanceReport {
             .map(|a| a.entry.as_str())
             .collect();
         format!(
-            "RSEQ-CONFORMANCE [{} @ {}] delivered={} absent_dispatch={} rejected={} ignored=[{}]",
+            "RSEQ-CONFORMANCE [{} @ {}] delivered={} absent_dispatch={} structurally_absent={} rejected={} ignored=[{}]",
             self.target,
             self.os_version_pin,
             list(&self.delivered_slots),
             list(&self.absent_dispatch_slots),
+            list(&self.structurally_absent_slots),
             list(&self.rejected_slots),
             ignored.join(";")
         )
@@ -293,6 +375,7 @@ mod tests {
             Disposition::DesignedScheduled => "DesignedScheduled",
             Disposition::NeedsNewSurface => "NeedsNewSurface",
             Disposition::RejectedUnsupported => "RejectedUnsupported",
+            Disposition::StructurallyAbsent => "StructurallyAbsent",
         }
     }
 
@@ -520,7 +603,7 @@ mod tests {
     #[test]
     fn row_ids_follow_grammar_and_are_unique() {
         let mut seen_ids: Vec<&str> = Vec::new();
-        let mut seen_keys: Vec<(TargetOs, &str, &str, RegistrationForm, LifecycleSlot)> =
+        let mut seen_keys: Vec<(TargetOs, &str, &str, RegistrationForm, CapabilitySlot)> =
             Vec::new();
         for row in CAPABILITY_TABLE {
             let parts: Vec<&str> = row.id.split('-').collect();
@@ -536,22 +619,41 @@ mod tests {
                 TargetOs::Zephyr => "ZEPHYR",
             };
             assert_eq!(parts[1], os, "row `{}`: <OS> must match target_os", row.id);
-            let form = match row.registration_form {
-                RegistrationForm::StaticDevicetree => "DT",
-                RegistrationForm::PciDynamic => "PCI",
+            // The <FORM>/<SLOT> segment pair. Lifecycle rows derive both from
+            // the enum fields; an Operation row's pair is RATIFIED with the
+            // row (the device-interrupt GRILL D03 names
+            // CAP-ZEPHYR-STATICIRQ-DEREGISTER-1: <FORM> = the static
+            // IRQ_CONNECT registration spelling, expressed by the SAME
+            // RegistrationForm::StaticDevicetree — no duplicate enum form is
+            // minted; the segment carries the operation-family precision).
+            let (form, slot) = match row.slot {
+                CapabilitySlot::Lifecycle(lifecycle) => {
+                    let form = match row.registration_form {
+                        RegistrationForm::StaticDevicetree => "DT",
+                        RegistrationForm::PciDynamic => "PCI",
+                    };
+                    let slot = match lifecycle {
+                        LifecycleSlot::OnInit => "INIT",
+                        LifecycleSlot::OnInitFailure => "INITFAIL",
+                        LifecycleSlot::OnDeinit => "DEINIT",
+                        LifecycleSlot::OnSurpriseRemove => "SURPRISE",
+                        LifecycleSlot::OnSystemShutdown => "SHUTDOWN",
+                    };
+                    (form, slot)
+                }
+                CapabilitySlot::Operation("interrupt.register_handler.deregister") => {
+                    ("STATICIRQ", "DEREGISTER")
+                }
+                CapabilitySlot::Operation(other) => panic!(
+                    "row `{}`: operation slot `{other}` has no ratified ID segment pair",
+                    row.id
+                ),
             };
             assert_eq!(
                 parts[2], form,
-                "row `{}`: <FORM> must match registration_form",
+                "row `{}`: <FORM> must match the ratified form segment",
                 row.id
             );
-            let slot = match row.slot {
-                LifecycleSlot::OnInit => "INIT",
-                LifecycleSlot::OnInitFailure => "INITFAIL",
-                LifecycleSlot::OnDeinit => "DEINIT",
-                LifecycleSlot::OnSurpriseRemove => "SURPRISE",
-                LifecycleSlot::OnSystemShutdown => "SHUTDOWN",
-            };
             assert_eq!(parts[3], slot, "row `{}`: <SLOT> must match slot", row.id);
             let n: u32 = parts[4]
                 .parse()
@@ -581,14 +683,16 @@ mod tests {
     #[test]
     fn never_absent_slots_have_no_absent_rows() {
         for row in CAPABILITY_TABLE {
-            if NEVER_ABSENT.contains(&row.slot) {
-                assert_ne!(
-                    row.disposition,
-                    Disposition::AbsentDispatch,
-                    "row `{}` pairs NEVER_ABSENT slot {:?} with AbsentDispatch",
-                    row.id,
-                    row.slot
-                );
+            if let CapabilitySlot::Lifecycle(slot) = row.slot {
+                if NEVER_ABSENT.contains(&slot) {
+                    assert_ne!(
+                        row.disposition,
+                        Disposition::AbsentDispatch,
+                        "row `{}` pairs NEVER_ABSENT slot {:?} with AbsentDispatch",
+                        row.id,
+                        slot
+                    );
+                }
             }
         }
     }
@@ -656,14 +760,20 @@ mod tests {
                 row: Some(CAP_ZEPHYR_DT_SURPRISE_1.id.into()),
                 citation: Some(CAP_ZEPHYR_DT_SURPRISE_1.citation.into()),
             }],
+            structurally_absent_slots: vec![SlotEntry {
+                slot: CAP_ZEPHYR_STATICIRQ_DEREGISTER_1.slot.model_name().into(),
+                row: Some(CAP_ZEPHYR_STATICIRQ_DEREGISTER_1.id.into()),
+                citation: Some(CAP_ZEPHYR_STATICIRQ_DEREGISTER_1.citation.into()),
+            }],
             rejected_slots: vec![],
             ignored_match_entries: vec![],
         };
         assert_eq!(
             report.summary_line(),
             "RSEQ-CONFORMANCE [zephyr_c @ v4.4.0 (684c9e8f32e4)] delivered=[on_init] \
-             absent_dispatch=[on_surprise_remove:CAP-ZEPHYR-DT-SURPRISE-1] rejected=[] \
-             ignored=[]"
+             absent_dispatch=[on_surprise_remove:CAP-ZEPHYR-DT-SURPRISE-1] \
+             structurally_absent=[interrupt.register_handler.deregister:CAP-ZEPHYR-STATICIRQ-DEREGISTER-1] \
+             rejected=[] ignored=[]"
         );
     }
 
@@ -676,6 +786,7 @@ mod tests {
             os_version_pin: ZEPHYR_PIN,
             delivered_slots: vec![],
             absent_dispatch_slots: vec![],
+            structurally_absent_slots: vec![],
             rejected_slots: vec![],
             ignored_match_entries: vec![
                 crate::match_audit::MatchAudit {
@@ -695,7 +806,7 @@ mod tests {
         assert_eq!(
             report.summary_line(),
             "RSEQ-CONFORMANCE [zephyr_c @ v4.4.0 (684c9e8f32e4)] delivered=[] \
-             absent_dispatch=[] rejected=[] \
+             absent_dispatch=[] structurally_absent=[] rejected=[] \
              ignored=[amba id=0x00041011 mask=0x000fffff;amba id=0x00abc123 mask=0x00ffffff]"
         );
     }

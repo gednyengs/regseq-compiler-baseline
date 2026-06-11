@@ -480,6 +480,7 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         os_version_pin: capability::LINUX_PIN,
         delivered_slots,
         absent_dispatch_slots: Vec::new(),
+        structurally_absent_slots: Vec::new(),
         rejected_slots: Vec::new(),
         ignored_match_entries: ignored_audits,
     };

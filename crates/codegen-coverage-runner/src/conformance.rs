@@ -5,7 +5,8 @@
 //! `ZephyrEmit`/`LinuxEmit`); the runner owns the serialized shape. The
 //! rendering is byte-deterministic by construction: fixed field order
 //! (target, os_version_pin, delivered_slots, absent_dispatch_slots,
-//! rejected_slots, ignored_match_entries), slots in the struct's declaration
+//! structurally_absent_slots, rejected_slots, ignored_match_entries), slots
+//! in the struct's declaration
 //! order, no wall-clock. Empty lists render `[]`; a `citation` key appears
 //! only on entries that carry one (the C05 example shape); the
 //! `ignored_match_entries` key is serialized UNCONDITIONALLY
@@ -18,11 +19,12 @@ use regseq_backends::MatchAudit;
 /// Render the C05 JSON, byte-stable across runs.
 pub fn render_json(report: &ConformanceReport) -> String {
     format!(
-        "{{\n  \"target\": {},\n  \"os_version_pin\": {},\n{},\n{},\n{},\n{}\n}}\n",
+        "{{\n  \"target\": {},\n  \"os_version_pin\": {},\n{},\n{},\n{},\n{},\n{}\n}}\n",
         json_str(report.target),
         json_str(report.os_version_pin),
         render_list("delivered_slots", &report.delivered_slots),
         render_list("absent_dispatch_slots", &report.absent_dispatch_slots),
+        render_list("structurally_absent_slots", &report.structurally_absent_slots),
         render_list("rejected_slots", &report.rejected_slots),
         render_audit_list(&report.ignored_match_entries),
     )
@@ -117,6 +119,7 @@ mod tests {
                 row: Some(capability::CAP_ZEPHYR_DT_SURPRISE_1.id.into()),
                 citation: Some("ratified citation \"quoted\"".into()),
             }],
+            structurally_absent_slots: vec![],
             rejected_slots: vec![],
             ignored_match_entries: vec![],
         }
@@ -134,7 +137,7 @@ mod tests {
         assert_eq!(a, b, "byte-stable across runs");
         assert_eq!(
             a,
-            "{\n  \"target\": \"zephyr_c\",\n  \"os_version_pin\": \"v4.4.0 (684c9e8f32e4)\",\n  \"delivered_slots\": [\n    {\"slot\": \"on_init\", \"row\": null}\n  ],\n  \"absent_dispatch_slots\": [\n    {\"slot\": \"on_surprise_remove\", \"row\": \"CAP-ZEPHYR-DT-SURPRISE-1\", \"citation\": \"ratified citation \\\"quoted\\\"\"}\n  ],\n  \"rejected_slots\": [],\n  \"ignored_match_entries\": []\n}\n"
+            "{\n  \"target\": \"zephyr_c\",\n  \"os_version_pin\": \"v4.4.0 (684c9e8f32e4)\",\n  \"delivered_slots\": [\n    {\"slot\": \"on_init\", \"row\": null}\n  ],\n  \"absent_dispatch_slots\": [\n    {\"slot\": \"on_surprise_remove\", \"row\": \"CAP-ZEPHYR-DT-SURPRISE-1\", \"citation\": \"ratified citation \\\"quoted\\\"\"}\n  ],\n  \"structurally_absent_slots\": [],\n  \"rejected_slots\": [],\n  \"ignored_match_entries\": []\n}\n"
         );
     }
 
