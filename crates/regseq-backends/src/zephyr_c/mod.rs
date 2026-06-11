@@ -524,6 +524,12 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         for cid in &absent_closure {
             body::emit_fn(&mut tcx, *cid).map_err(|e| with_fn_context(e, model, *cid))?;
         }
+        // The type-definition pass is a legality check too (aggregate
+        // definitions outside the subset reject HERE, not during body
+        // lowering) — run it over the throwaway names and discard (Codex M1
+        // review finding 1: skipping it would let an absent body carry a
+        // type a delivered body rejects).
+        emit_type_defs(&mut tcx, driver_ty)?;
         bodies.push_str(&row.audit_block());
         bodies.push('\n');
         absent_entries.push(capability::SlotEntry {

@@ -669,6 +669,76 @@ fn absent_surprise_remove_runs_full_lowering_not_just_the_scan() {
 }
 
 #[test]
+fn absent_lowering_runs_the_type_definition_pass() {
+    // The type-defs bank is a legality check of its own: an aggregate whose
+    // DEFINITION is outside the subset (here a u128 field) is named cleanly
+    // during fn_head and rejected only by emit_type_defs. The absent path
+    // must run that pass over the throwaway names too (D06; Codex M1
+    // review finding 1).
+    let mut m = minimal_dt_model();
+    let u128t = m.types.intern(Ty::Uint(UintKind::U128));
+    let field = m.strings.intern("wide");
+    let carrier = push_struct(
+        &mut m,
+        "WideCarrier",
+        struct_layout(
+            16,
+            16,
+            vec![FieldLayout {
+                name: field,
+                ty: u128t,
+                offset: 0,
+            }],
+        ),
+    );
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output: carrier,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let mut body = Body::default();
+    body.local_decls.push(LocalDecl {
+        ty: carrier,
+        mutability: Mutability::Mut,
+        span: span(),
+        debug_name: None,
+    });
+    body.arg_count = 0;
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([]),
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span: span(),
+        },
+    });
+    let fn_item = item(&mut m, ItemKind::Function, "wide_callback");
+    let emission = m.strings.intern("wide_callback");
+    let id = m.instances.push(Instance {
+        item: fn_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body: Some(body),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+    let on_sr = m.instance_ref_of(id);
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_surprise_remove = Some(on_sr);
+    let err = emit_zephyr_c(&m).unwrap_err();
+    let EmitError::Unsupported(s) = err else {
+        panic!("expected Unsupported, got {err:?}");
+    };
+    // The rejection comes from the type-DEFINITION pass, context-named.
+    assert!(s.contains("[while defining `struct WideCarrier`]"), "{s}");
+}
+
+#[test]
 fn no_audit_block_when_no_absent_slot() {
     let emit = emit_zephyr_c(&emitting_model(&["HardwareError", "DeviceBusy"])).expect("must emit");
     assert!(!emit.tu.contains("RSEQ-ABSENT-SLOT"), "{}", emit.tu);
