@@ -4,8 +4,9 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{FieldIdx, ItemId, Symbol, VariantIdx};
+use crate::ids::{FieldIdx, ItemId, StringId, Symbol, VariantIdx};
 use crate::index_vec::IndexVec;
+use crate::interrupt::InterruptForm;
 use crate::source::Span;
 
 /// Sibling tables on `RegseqModel` for structured DSL property
@@ -66,6 +67,28 @@ pub enum AttrData {
     /// framework type (such as the RegseqError error type). The bridge
     /// records this variant; the backend reads it. Fixed at discriminant 1.
     FrameworkType(FrameworkType) = 1,
+    /// Interrupt-resource field marker (`#[rseq::interrupt(id = "…")]`,
+    /// device-interrupt construct #6), stored in
+    /// `DomainAttrTables.field_attrs`. Carries the mandatory resource id
+    /// (the `[interrupt.<id>]` join key, GRILL D08) and the recognized
+    /// declaration form. The joined per-driver facts live in the
+    /// `InterruptTables` sibling table. Appended at discriminant 2.
+    InterruptResource {
+        /// The interned resource id.
+        id: StringId,
+        /// The declaration form (`Interrupt`/`Option<…>`/`[…; N]`).
+        form: InterruptForm,
+    } = 2,
+    /// ISR-binding method marker (`#[rseq::isr]` /
+    /// `#[rseq::isr(field = "…")]`, device-interrupt construct #6), stored in
+    /// `DomainAttrTables.item_attrs`. Appended at discriminant 3.
+    IsrBinding {
+        /// The interned explicit `field = "…"` target, `None` for the bare
+        /// form (which resolves against exactly one resource).
+        field: Option<StringId>,
+        /// Whether this is an array-bind handler (`index: usize` parameter).
+        array_bind: bool,
+    } = 3,
 }
 
 /// Closed, append-only framework-type taxonomy.
@@ -77,6 +100,10 @@ pub enum AttrData {
 pub enum FrameworkType {
     /// The RegseqError framework error type.
     RegseqError = 0,
+    /// The IrqResult ISR dispatch-result type (`#[rseq::framework_type
+    /// ("irq-result")]`, device-interrupt construct #6). A dispatch result,
+    /// not an error type. Appended at discriminant 1.
+    IrqResult = 1,
 }
 
 /// Closed, append-only intrinsic-family taxonomy.
@@ -617,6 +644,57 @@ mod tests {
         // SAFETY-free cast: `FrameworkType` is a fieldless `repr(u8)` enum,
         // so the `as u8` cast yields its pinned discriminant.
         assert_eq!(FrameworkType::RegseqError as u8, 0);
+        // IrqResult appends at 1 (device-interrupt construct #6) without
+        // shifting RegseqError off 0.
+        assert_eq!(FrameworkType::IrqResult as u8, 1);
+    }
+
+    #[test]
+    fn attr_data_interrupt_discriminants_are_stable() {
+        // The construct-#6 variants append at 2 and 3 (I06)...
+        assert_eq!(
+            attr_data_tag(&AttrData::InterruptResource {
+                id: StringId::from_u32(1),
+                form: InterruptForm::Single,
+            }),
+            2
+        );
+        assert_eq!(
+            attr_data_tag(&AttrData::IsrBinding {
+                field: None,
+                array_bind: false,
+            }),
+            3
+        );
+        // ...and adding them must not shift the prior variants.
+        assert_eq!(attr_data_tag(&attr(LogLevel::Debug)), 0);
+        assert_eq!(
+            attr_data_tag(&AttrData::FrameworkType(FrameworkType::RegseqError)),
+            1
+        );
+    }
+
+    #[test]
+    fn attr_data_interrupt_variants_json_round_trip() {
+        for form in [
+            InterruptForm::Single,
+            InterruptForm::Optional,
+            InterruptForm::Array { len: 2 },
+        ] {
+            assert_json_round_trip(AttrData::InterruptResource {
+                id: StringId::from_u32(4),
+                form,
+            });
+        }
+        assert_json_round_trip(AttrData::IsrBinding {
+            field: None,
+            array_bind: false,
+        });
+        assert_json_round_trip(AttrData::IsrBinding {
+            field: Some(StringId::from_u32(9)),
+            array_bind: true,
+        });
+        assert_json_round_trip(AttrData::FrameworkType(FrameworkType::IrqResult));
     }
 
     #[test]

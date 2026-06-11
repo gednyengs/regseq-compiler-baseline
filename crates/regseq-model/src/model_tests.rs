@@ -180,6 +180,7 @@ fn root_struct_exposes_spec_field_set() {
         closure_captures_struct_ty,
         domain_attrs,
         device_lifecycle,
+        interrupt,
     } = m;
 
     assert_eq!(primary_crate, CrateId::ZERO);
@@ -201,6 +202,7 @@ fn root_struct_exposes_spec_field_set() {
     assert!(closure_captures_struct_ty.is_empty());
     assert_eq!(domain_attrs, crate::DomainAttrTables::default());
     assert_eq!(device_lifecycle, crate::DeviceLifecycleTables::default());
+    assert_eq!(interrupt, crate::InterruptTables::default());
 }
 
 // ------------------------------------------------------------------
@@ -895,6 +897,19 @@ fn empty_model_round_trips_through_json() {
     let json = serde_json::to_string(&m).unwrap();
     let back: RegseqModel = serde_json::from_str(&json).unwrap();
     assert_eq!(m, back);
+}
+
+#[test]
+fn pre_interrupt_model_json_still_deserializes() {
+    // A model serialized before the device-interrupt construct (#6) carries
+    // no `interrupt` key; `#[serde(default)]` must accept it (I06).
+    let m = RegseqModel::with_primary("pl011-spec", StableCrateId(0xAAAA));
+    let mut value = serde_json::to_value(&m).unwrap();
+    let map = value.as_object_mut().unwrap();
+    assert!(map.remove("interrupt").is_some());
+    let back: RegseqModel = serde_json::from_value(value).unwrap();
+    assert_eq!(m, back);
+    assert!(back.interrupt.drivers.is_empty());
 }
 
 #[test]

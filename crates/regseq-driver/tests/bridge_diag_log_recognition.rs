@@ -276,6 +276,9 @@ fn item_log_levels(model: &RegseqModel, leaf: &str) -> Vec<LogLevel> {
             AttrData::Intrinsic(_) => None,
             // The framework-type marker is not a log level; skip it.
             AttrData::FrameworkType(_) => None,
+            // Interrupt-construct markers (#6) are not log levels; skip them.
+            AttrData::InterruptResource { .. } => None,
+            AttrData::IsrBinding { .. } => None,
         })
         .collect()
 }

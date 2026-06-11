@@ -376,6 +376,10 @@ fn run_bridge_phase5_peels_all_four_severities() {
                         AttrData::Intrinsic(_) => {}
                         // Not a log level; this fixture produces none, so skip.
                         AttrData::FrameworkType(_) => {}
+                        // Interrupt-construct markers (#6); this fixture
+                        // produces none, so skip.
+                        AttrData::InterruptResource { .. } => {}
+                        AttrData::IsrBinding { .. } => {}
                     }
                 }
             }

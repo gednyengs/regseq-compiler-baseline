@@ -120,6 +120,12 @@ pub struct RegseqModel {
     /// Device-lifecycle driver sibling table (construct #2), keyed by the
     /// `#[rseq::driver]` struct's Item.
     pub device_lifecycle: crate::device_lifecycle::DeviceLifecycleTables,
+
+    /// Device-interrupt sibling table (construct #6), keyed by the
+    /// `#[rseq::driver]` struct's Item. `#[serde(default)]` keeps models
+    /// serialized before the construct existed deserializable (I06).
+    #[serde(default)]
+    pub interrupt: crate::interrupt::InterruptTables,
 }
 
 #[cfg(test)]
@@ -1077,6 +1083,7 @@ impl RegseqModel {
             closure_captures_struct_ty: HashMap::new(),
             domain_attrs: DomainAttrTables::default(),
             device_lifecycle: crate::device_lifecycle::DeviceLifecycleTables::default(),
+            interrupt: crate::interrupt::InterruptTables::default(),
         }
     }
 
@@ -1360,6 +1367,16 @@ impl RegseqModel {
         for (old_id, driver) in old_drivers {
             let new_id = remap[old_id.index()];
             self.device_lifecycle.drivers.insert(new_id, driver);
+        }
+
+        // `interrupt.drivers` is keyed by the same driver-struct `ItemId`
+        // (its values carry no `ItemId` references — StringId/InstanceRef
+        // only, by the same discipline as `device_lifecycle`), so re-key it
+        // by the same remap.
+        let old_interrupts = std::mem::take(&mut self.interrupt.drivers);
+        for (old_id, driver) in old_interrupts {
+            let new_id = remap[old_id.index()];
+            self.interrupt.drivers.insert(new_id, driver);
         }
 
         #[cfg(debug_assertions)]
