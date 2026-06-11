@@ -129,6 +129,13 @@ eth_e1000.c:220-221).
     compile-time diagnostic** (the author wrote a callback that cannot run on
     this target — silence would violate the no-silent-truncation rule); the
     representability question itself is B-7.
+    **SUPERSEDED by the os-capability-disposition rule (2026-06-10):** the
+    diagnose-vs-omit dichotomy was resolved by a third disposition —
+    *auditable non-emission* under the ratified capability row
+    CAP-ZEPHYR-DT-SURPRISE-1 (`AbsentDispatch`): named `RSEQ-ABSENT-SLOT`
+    audit block in the C, conformance-report row, test-log line, body still
+    fully checked. See
+    `docs/discussions/os-capability-disposition/os-capability-disposition-rule.md`.
 
 13. **`MatchEntry::Amba`-only match set — diagnose vs require a companion
     `Devicetree` entry.** *(device-lifecycle Q4's policy half.)* **Recommend
@@ -259,6 +266,13 @@ eth_e1000.c:220-221).
    scenario (`body_emit.rs:5323-5339`) may simply not be representable on
    Zephyr — i.e. a documented not-applicable like enable_device-on-platform,
    rather than a lowerable slot. Escalate alongside B-6.
+   **RESOLVED BY ROW (2026-06-10): not representable, ratified.** The answer
+   is capability row CAP-ZEPHYR-DT-SURPRISE-1 (`AbsentDispatch`, pin v4.4.0
+   (684c9e8f32e4), anchors read live from the pinned checkout): the static-DT
+   device model is build-time-fixed and no hot-remove dispatch API exists.
+   Authored `on_surprise_remove` is now auditably non-emitted per the
+   os-capability-disposition rule, never rejected and never silent. See
+   `docs/discussions/os-capability-disposition/capability-table.md`.
 
 8. **`UserDataField`/`UserDataKind`.** `recognized_not_lowered`
    (`device_lifecycle.rs:262-279`). The C static-storage zero image inherits
@@ -423,7 +437,7 @@ generic_c where generic_c itself carries the shape unvalidated, e.g.
 |---|---|---|
 | `write_config` widths 1/2 (word-RMW) and width 8, both ops (`config_access_width` admits {1,2,4,8}, generic_c `body_emit.rs:2399-2414`) | B-3 | reject at emit (bus-observable RMW / two-word split undesigned; width-1/2 **reads** ARE specified, §B.4) |
 | authored `on_deinit` under `TargetOs::Zephyr` | B-6 / C-3 | reject at emit on the 3.7 baseline (no teardown carrier; 4.x fork unconfirmed) |
-| authored `on_surprise_remove` under `TargetOs::Zephyr` | B-7 | reject at emit (A-12 recommends exactly this diagnostic) |
+| authored `on_surprise_remove` under `TargetOs::Zephyr` | B-7 | **auditable non-emission** per capability row CAP-ZEPHYR-DT-SURPRISE-1 (`AbsentDispatch`, os-capability-disposition rule 2026-06-10): one `RSEQ-ABSENT-SLOT` audit block + conformance-report row + log line, body still fully checked; anything outside the ratified row keeps fail-loud rejection |
 | non-Generic `ClassTag` | B-9 | reject at emit (A-16; silent `NULL` api would hide the declared class) |
 | `MatchEntry::Amba`-only match set | B-5 | reject at emit naming the fix (A-13: add a companion `Devicetree` entry) |
 | `UserDataField` kinds beyond the zero-image guarantee | B-8 | reject at emit (only the inherited all-zero-image shapes pass through) |
