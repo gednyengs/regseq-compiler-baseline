@@ -82,6 +82,14 @@ fn generated_drivers_kbuild_against_the_campaign_tree() {
         .expect("the converged fixture resolves the linux binding (C05)");
     gate("pl011-composed", &emit(&composed));
 
+    // device-interrupt T09: the interrupt-bearing PL011 module — request_irq
+    // (IRQF_NO_AUTOEN) / enable_irq / disable_irq / free_irq + the
+    // irqreturn_t wrapper — compiles against the same campaign tree.
+    let irq = fixture("fixtures/_irq", "irq-pl011")
+        .with_binding(manifest::OsBinding::Linux)
+        .expect("irq-pl011 resolves the linux binding");
+    gate("irq-pl011", &emit(&irq));
+
     // backend-linux-c-e1000 T10: both generated e1000 drivers — the composed
     // PCI keystone and the induced-failure variant — compile against the
     // same campaign tree (C02 item 2). This is the O3 pin's mechanical
