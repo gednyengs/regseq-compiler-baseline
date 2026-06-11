@@ -416,24 +416,28 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
 
     // The PCIe-arm preamble facts (C01): the BAR NUMBER feeding
     // `pcie_get_mbar` is the platform-toml `bar` value (D04 — never
-    // `pcie_probe_mbar`'s memory-BAR ordinal). `bar: Some` iff the model
-    // has a region to map (the binding is already resolved per A-10 above).
+    // `pcie_probe_mbar`'s memory-BAR ordinal). The C01 preamble is
+    // region-shaped (BDF rung → hoisted BAR probe → MEM enable → map): a
+    // PCIe driver with no MMIO region has no preamble contract and keeps
+    // the D.2 fail-loud default (C1 review round-1 finding 1 — a partial
+    // preamble is an uncontracted shape, never emitted).
     let pcie_preamble: Option<PciePreamble> = if pcie {
-        let bar = driver
-            .handle
-            .resource_fields
-            .first()
-            .map(|f| {
-                let fname = c_ident(model.strings.resolve(f.name));
-                f.binding.effective_bar.ok_or_else(|| {
-                    EmitError::Driver(format!(
-                        "PCIe MMIO region `{fname}` resolved with no BAR number \
-                         (effective_bar = L2.bar ?? L1.bar); declare `bar` on the resource \
-                         or in [mmio.{fname}] (D04: pcie_get_mbar takes a BAR NUMBER)"
-                    ))
-                })
-            })
-            .transpose()?;
+        let field = driver.handle.resource_fields.first().ok_or_else(|| {
+            EmitError::Rejected(
+                "bus = \"pci\" with no MMIO resource region: the C01 preamble is \
+                 region-shaped (BDF rung → hoisted BAR probe → MEM enable → map) and no \
+                 region-less PCIe contract exists (D.2 default)"
+                    .into(),
+            )
+        })?;
+        let fname = c_ident(model.strings.resolve(field.name));
+        let bar = field.binding.effective_bar.ok_or_else(|| {
+            EmitError::Driver(format!(
+                "PCIe MMIO region `{fname}` resolved with no BAR number \
+                 (effective_bar = L2.bar ?? L1.bar); declare `bar` on the resource \
+                 or in [mmio.{fname}] (D04: pcie_get_mbar takes a BAR NUMBER)"
+            ))
+        })?;
         Some(PciePreamble { bar })
     } else {
         None
@@ -683,11 +687,12 @@ fn errno_symbol(variant_name: &str) -> Option<&'static str> {
     })
 }
 
-/// The PCIe-arm facts the C01 init preamble consumes.
+/// The PCIe-arm facts the C01 init preamble consumes. Constructed only for
+/// a region-carrying PCIe driver (the region-less shape is the D.2
+/// rejection above), so the full C01 preamble always emits.
 struct PciePreamble {
-    /// The effective BAR number feeding `pcie_get_mbar` (D04) — `Some` iff
-    /// the model carries a (resolved) MMIO region to map.
-    bar: Option<u8>,
+    /// The effective BAR number feeding `pcie_get_mbar` (D04).
+    bar: u8,
 }
 
 /// Synthesize the per-instance init function (scaffold §3): the one runtime
@@ -733,26 +738,23 @@ fn emit_init_fn(
         out.push_str(
             "\t__rseq_pcie = data->pcie; /* TU-static carrier install (D12), pre-body */\n",
         );
-        if let Some(bar) = p.bar {
-            out.push_str(
-                "\n\t/* RSEQ-DEVIATION: get_resource_handle hoisted before enable_device —\n\t * the single ratified per-OS preamble deviation; BAR sizing with\n\t * memory decode off (witness eth_e1000.c:219-224).\n\t * [license: backend-zephyr-c-e1000 GRILL D02] */\n",
-            );
-            out.push_str(&format!(
-                "\tstruct pcie_bar mbar;\n\tif (!pcie_get_mbar(data->pcie->bdf, {bar}, &mbar))\n\t\treturn -ENODEV; /* native channel, unwrapped (D11) */\n"
-            ));
-            out.push_str(
-                "\t/* claim_regions: zero-call elision (the ratified zephyr claim\n\t * disposition) */\n",
-            );
-            out.push_str(
-                "\t/* enable_device: MEM gate only — set_bus_master (PCIE_CONF_CMDSTAT_MASTER)\n\t * fires only when that op is authored; single-call fusion is a permitted\n\t * peephole when both gates fire (unexercised here) */\n",
-            );
-            out.push_str("\tpcie_set_cmd(data->pcie->bdf, PCIE_CONF_CMDSTAT_MEM, true);\n");
-            out.push_str(&format!(
-                "\tdevice_map(&{base_symbol}, mbar.phys_addr, mbar.size, K_MEM_CACHE_NONE);\n\t/* TU-static base install (A-2; the single-instance BUILD_ASSERT below\n\t * covers BOTH TU-statics: base + __rseq_pcie) */\n\n"
-            ));
-        } else {
-            out.push('\n');
-        }
+        let bar = p.bar;
+        out.push_str(
+            "\n\t/* RSEQ-DEVIATION: get_resource_handle hoisted before enable_device —\n\t * the single ratified per-OS preamble deviation; BAR sizing with\n\t * memory decode off (witness eth_e1000.c:219-224).\n\t * [license: backend-zephyr-c-e1000 GRILL D02] */\n",
+        );
+        out.push_str(&format!(
+            "\tstruct pcie_bar mbar;\n\tif (!pcie_get_mbar(data->pcie->bdf, {bar}, &mbar))\n\t\treturn -ENODEV; /* native channel, unwrapped (D11) */\n"
+        ));
+        out.push_str(
+            "\t/* claim_regions: zero-call elision (the ratified zephyr claim\n\t * disposition) */\n",
+        );
+        out.push_str(
+            "\t/* enable_device: MEM gate only — set_bus_master (PCIE_CONF_CMDSTAT_MASTER)\n\t * fires only when that op is authored; single-call fusion is a permitted\n\t * peephole when both gates fire (unexercised here) */\n",
+        );
+        out.push_str("\tpcie_set_cmd(data->pcie->bdf, PCIE_CONF_CMDSTAT_MEM, true);\n");
+        out.push_str(&format!(
+            "\tdevice_map(&{base_symbol}, mbar.phys_addr, mbar.size, K_MEM_CACHE_NONE);\n\t/* TU-static base install (A-2; the single-instance BUILD_ASSERT below\n\t * covers BOTH TU-statics: base + __rseq_pcie) */\n\n"
+        ));
     } else if has_region {
         out.push_str(
             "\t/* resource preamble (scaffold §3): claim_regions = zero calls (the\n\t * ratified elision — the DT `reg` capture happened at build time);\n\t * the canonical map slot precedes every MMIO op */\n",
@@ -1428,6 +1430,16 @@ pub(crate) fn config_shape(
     }
     let off = match args.first() {
         Some(regseq_model::Operand::Constant(id)) => match &model.consts[*id] {
+            // The intrinsic surface types the offset u32 (the fixture's
+            // `read_config<T>(_off: u32)`): a wider constant is an
+            // out-of-domain shape — rejected, never silently truncated
+            // (C1 review round-1 finding 2).
+            regseq_model::Const::Uint(_, v) if *v > u32::MAX as u128 => {
+                return Err(EmitError::Rejected(format!(
+                    "config-space {dir} offset {v:#x} exceeds the u32 offset domain of \
+                     the config intrinsics: no lowering contract (D.2)"
+                )))
+            }
             regseq_model::Const::Uint(_, v) => *v as u64,
             other => {
                 return Err(EmitError::Rejected(format!(

@@ -469,7 +469,10 @@ fn pcie_region_without_effective_bar_is_a_named_driver_error() {
 }
 
 #[test]
-fn pcie_without_region_emits_rung_and_carrier_only() {
+fn pcie_without_region_is_rejected_not_partially_emitted() {
+    // The C01 preamble is region-shaped: a PCIe driver with no MMIO region
+    // has no preamble contract — D.2 fail-loud, never a partial preamble
+    // (C1 review round-1 finding 1).
     let mut m = model();
     let match_set = dt_match_for(&mut m, "regseq,e1000");
     driver_into(
@@ -479,12 +482,14 @@ fn pcie_without_region_emits_rung_and_carrier_only() {
         LifecycleOps::default(),
         Default::default(),
     );
-    let emit = emit_zephyr_c(&m).expect("region-less PCIe model must emit");
-    let tu = &emit.tu;
-    assert!(tu.contains("if (data->pcie->bdf == PCIE_BDF_NONE)"), "{tu}");
-    assert!(tu.contains("__rseq_pcie = data->pcie;"), "{tu}");
-    assert!(!tu.contains("pcie_get_mbar"), "{tu}");
-    assert!(!tu.contains("device_map"), "{tu}");
+    let err = emit_zephyr_c(&m).unwrap_err();
+    let EmitError::Rejected(s) = err else {
+        panic!("expected Rejected, got {err:?}");
+    };
+    assert!(
+        s.contains("no MMIO resource region") && s.contains("region-shaped"),
+        "{s}"
+    );
 }
 
 #[test]
@@ -1629,6 +1634,18 @@ fn config_width8_write_is_rejected_citing_b3() {
         panic!("expected Rejected, got {err:?}");
     };
     assert!(s.contains("two-word") && s.contains("B-3"), "{s}");
+}
+
+#[test]
+fn config_offset_beyond_the_u32_domain_is_rejected_not_truncated() {
+    // A u64 constant above u32::MAX in the offset operand: out of the
+    // intrinsics' u32 offset domain — rejected, never silently truncated
+    // into an unrelated in-range access (C1 review round-1 finding 2).
+    let err = pcie_config_write_emit(UintKind::U32, 0x1_0000_0004, 0x1).unwrap_err();
+    let EmitError::Rejected(s) = err else {
+        panic!("expected Rejected, got {err:?}");
+    };
+    assert!(s.contains("u32 offset domain"), "{s}");
 }
 
 #[test]
