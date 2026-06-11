@@ -635,6 +635,78 @@ pub fn make() -> LineCtl { loop {} }
     );
 }
 
+// --- The R11 shared-discipline warning, END-TO-END (T08 acceptance) ------------
+
+/// The PLAN's pinned negative: a handler whose `NotHandled` return is
+/// SYNTACTICALLY PRESENT in the authored source but unreachable (a
+/// constant-false guard). The authored source flows through the REAL
+/// pipeline — bridge recognition, arm-reachability analysis, the L2
+/// `[interrupt.<id>] shared = true` join — and the warning must still fire:
+/// reachability-based semantics, never syntactic presence (warn-on-unknown).
+const UNREACHABLE_NOTHANDLED: &str = r#"
+#[rseq::driver(name = "sharedwarn", compatible = ["acme,sharedwarn"])]
+pub struct SharedWarn {
+    #[rseq::interrupt(id = "a")]
+    pub a: Interrupt,
+}
+
+impl SharedWarn {
+    #[rseq::isr]
+    pub fn handle(&mut self) -> IrqResult {
+        let always: u32 = 1;
+        if always == 0 {
+            // Syntactically present, never executable.
+            return IrqResult::NotHandled;
+        }
+        IrqResult::Handled
+    }
+}
+
+pub fn make() -> SharedWarn { loop {} }
+"#;
+
+/// Join `[interrupt.a]` (with the given `shared`) onto the bridged model and
+/// return the R11 warnings — the same `bind_all` + query path the production
+/// callback runs.
+fn warnings_with_shared(model: &RegseqModel, shared: bool) -> Vec<String> {
+    let mut model = model.clone();
+    let toml = format!("[interrupt.a]\nirq_number = 5\nshared = {shared}\n");
+    let bindings = regseq_config::parse_platform_bindings_str(&toml).expect("parse platform");
+    regseq_l2::bind_all(&mut model, &bindings).expect("bind_all");
+    regseq_l2::validate_l2_surface(&model).expect("validate");
+    regseq_l2::interrupt::shared_discipline_warnings(&model)
+}
+
+#[test]
+fn shared_line_with_present_but_unreachable_nothandled_still_warns_end_to_end() {
+    let (warnings, not_handled) =
+        with_model("irq_shared_warn", &source(UNREACHABLE_NOTHANDLED), |model| {
+            (
+                warnings_with_shared(model, true),
+                sole_interrupts(model).handlers[0].arms.not_handled,
+            )
+        })
+        .expect("bridge accepts the spec");
+    // Whatever the analysis concluded for the dead arm (folded ->
+    // ProvenUnreachable; surviving -> Unknown), it must NOT be proof.
+    assert_ne!(not_handled, ArmReachability::ProvenReachable);
+    assert_eq!(warnings.len(), 1, "got: {warnings:?}");
+    assert!(
+        warnings[0].contains("IRQ-WARN-SHARED-NOTHANDLED"),
+        "got: {}",
+        warnings[0]
+    );
+}
+
+#[test]
+fn unshared_line_with_same_handler_does_not_warn_end_to_end() {
+    let warnings = with_model("irq_unshared_nowarn", &source(UNREACHABLE_NOTHANDLED), |model| {
+        warnings_with_shared(model, false)
+    })
+    .expect("bridge accepts the spec");
+    assert!(warnings.is_empty(), "got: {warnings:?}");
+}
+
 // --- Drivers without interrupts stay untouched ---------------------------------
 
 #[test]
