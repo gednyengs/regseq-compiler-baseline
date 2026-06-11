@@ -392,7 +392,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
 
     // -- frame scan over the closure: op-shape rejections that must fire
     //    regardless of how far the body banks have grown (D12 frame) --------
-    scan_closure_ops(model, &closure)?;
+    scan_closure_ops(model, &closure, pcie)?;
 
     // -- the lowering context (T06 bank consumer) ----------------------------
     let resources: Vec<(String, bool, String)> = driver
@@ -448,6 +448,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
             resources,
             reg_macros,
             base_symbol: base_symbol.clone(),
+            pcie,
         },
         width8_used: false,
         uses_log: false,
@@ -522,7 +523,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         let absent_closure = reachable_closure(model, std::iter::once(id));
         // Any construct the delivered path rejects still yields the D.2
         // EmitError — the scan first, then full lowering (never scan-only).
-        scan_closure_ops(model, &absent_closure)?;
+        scan_closure_ops(model, &absent_closure, pcie)?;
         let mut tcx = body::LowerCx {
             model,
             names: TypeNames::new(),
@@ -533,6 +534,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
                 resources: cx.driver.resources.clone(),
                 reg_macros: cx.driver.reg_macros.clone(),
                 base_symbol: cx.driver.base_symbol.clone(),
+                pcie: cx.driver.pcie,
             },
             width8_used: false,
             uses_log: false,
@@ -1286,10 +1288,15 @@ fn intrinsic_of(model: &RegseqModel, instance: InstanceId) -> Option<&IntrinsicK
 
 /// The D12 frame scan: walk every `Call(Direct)` site reachable from the
 /// lifecycle roots and reject the op shapes the D.2 ledger has no lowering
-/// contract for — `poll_until` (B-1) and the config-space shapes (B-3 width
-/// gaps; B-4/BRM-001 non-PCI access). Runs BEFORE body lowering so the
-/// rejections hold however far the T06–T08 banks have grown.
-fn scan_closure_ops(model: &RegseqModel, closure: &[InstanceId]) -> Result<(), EmitError> {
+/// contract for — `poll_until` (B-1) and the unlicensed config-space shapes
+/// (the B-3 remainder; B-4/BRM-001 non-PCI access; the [`config_shape`]
+/// classifier). Runs BEFORE body lowering so the rejections hold however
+/// far the T06–T08 banks have grown.
+fn scan_closure_ops(
+    model: &RegseqModel,
+    closure: &[InstanceId],
+    pcie: bool,
+) -> Result<(), EmitError> {
     for id in closure {
         let InstanceKind::Function(data) = &model.instances[*id].kind else {
             continue;
@@ -1313,7 +1320,13 @@ fn scan_closure_ops(model: &RegseqModel, closure: &[InstanceId]) -> Result<(), E
                     ));
                 }
                 Some(IntrinsicKind::Config(op)) => {
-                    return Err(config_rejection(model, *callee, op));
+                    // The same classifier the body lowering runs (C02/C03
+                    // legality): everything outside the licensed shapes
+                    // rejects HERE, before any bank lowers the call.
+                    let TerminatorKind::Call { args, .. } = &bb.terminator.kind else {
+                        unreachable!("matched Call above");
+                    };
+                    config_shape(model, *callee, op, args, pcie)?;
                 }
                 Some(IntrinsicKind::Log(_)) => {
                     // The A-5 gate must fire on the PUBLIC path BEFORE any
@@ -1353,34 +1366,86 @@ fn scan_closure_ops(model: &RegseqModel, closure: &[InstanceId]) -> Result<(), E
     Ok(())
 }
 
-/// The D.2 disposition for a config-space call shape: width-8 (both ops)
-/// and sub-word writes are the B-3 undesigned gaps; the remaining specified
-/// shapes still have no carrier here because config space is PCI-only and
-/// the PCIe scaffold is the e1000 successor's (the upstream BRM-001
-/// non-PCI rejection diagnostic is pending, D.2/B-4).
-pub(crate) fn config_rejection(
+/// The emit-time facts of a LICENSED config-space call shape (the C02/C03
+/// contracts, backend-zephyr-c-e1000): width from the value type, byte
+/// offset from the constant first argument.
+pub(crate) struct ConfigShape {
+    /// Access width in bytes (1, 2, or 4).
+    pub width: u64,
+    /// Constant byte offset into config space.
+    pub off: u64,
+}
+
+/// Classify one config-space call against the C02/C03 contracts; everything
+/// outside the licensed shapes keeps its D.2 rejection wording (I04):
+/// width-8 / 64-bit (the B-3 remainder), non-PCI buses (B-4/BRM-001),
+/// non-constant offsets (the word-0 cache + alignment legality are
+/// emit-time decisions), and misaligned sub-word access. Shared verbatim by
+/// the D12 frame scan and the body lowering so the rejections hold however
+/// far the banks grow.
+pub(crate) fn config_shape(
     model: &RegseqModel,
     callee: InstanceId,
     op: &ConfigOp,
-) -> EmitError {
-    let width = config_width(model, callee, op);
-    let is_write = matches!(op, ConfigOp::Write);
-    match width {
-        Some(8) => EmitError::Rejected(format!(
-            "config-space {} width 8: the two-word split is undesigned (D.2/B-3)",
-            if is_write { "write" } else { "read" }
-        )),
-        Some(w @ (1 | 2)) if is_write => EmitError::Rejected(format!(
-            "config-space write width {w}: the containing-word RMW is observable on the bus \
-             and undesigned (D.2/B-3); width-1/2 reads and width-4 are the specified shapes"
-        )),
-        _ => EmitError::Rejected(
-            "config-space access on a non-PCI-like bus: no carrier in this unit (the \
-             upstream BRM-001 rejection diagnostic is pending, D.2/B-4); the PCIe path is \
-             delivered by backend/zephyr-c-e1000"
+    args: &[regseq_model::Operand],
+    pcie: bool,
+) -> Result<ConfigShape, EmitError> {
+    let dir = if matches!(op, ConfigOp::Write) {
+        "write"
+    } else {
+        "read"
+    };
+    let width = match config_width(model, callee, op) {
+        Some(8) => {
+            return Err(EmitError::Rejected(format!(
+                "config-space {dir} width 8: the two-word split is undesigned (D.2/B-3; \
+                 the ratified B-3 partial lift covers width-1/2 WRITES via the \
+                 containing-word RMW only)"
+            )))
+        }
+        Some(w @ (1 | 2 | 4)) => w,
+        _ => {
+            return Err(EmitError::Rejected(format!(
+                "config-space {dir} with a non-uint value type: no lowering contract \
+                 (D.2/B-3); the specified shapes are u8/u16/u32"
+            )))
+        }
+    };
+    if !pcie {
+        return Err(EmitError::Rejected(
+            "config-space access on a non-PCI-like bus: no carrier (the upstream BRM-001 \
+             rejection diagnostic is pending, D.2/B-4); the PCIe scaffold (bus = \"pci\") \
+             carries the only ratified contract"
                 .into(),
-        ),
+        ));
     }
+    let off = match args.first() {
+        Some(regseq_model::Operand::Constant(id)) => match &model.consts[*id] {
+            regseq_model::Const::Uint(_, v) => *v as u64,
+            other => {
+                return Err(EmitError::Rejected(format!(
+                    "config-space {dir} offset constant {other:?}: only uint-literal \
+                     offsets are specified — the C03 word-0 cache and the alignment \
+                     legality are emit-time decisions (D.2)"
+                )))
+            }
+        },
+        _ => {
+            return Err(EmitError::Rejected(format!(
+                "config-space {dir} with a non-constant offset: the C03 word-0 cache and \
+                 the alignment legality are emit-time decisions — no runtime-offset \
+                 lowering contract exists (D.2)"
+            )))
+        }
+    };
+    if off % width != 0 {
+        return Err(EmitError::Rejected(format!(
+            "config-space {dir} width {width} at offset {off:#x}: misaligned access keeps \
+             the D.2 fail-loud default (B-3; the ratified partial lift covers \
+             naturally-aligned shapes only)"
+        )));
+    }
+    Ok(ConfigShape { width, off })
 }
 
 /// The access width (bytes) of a config intrinsic: the value type — the

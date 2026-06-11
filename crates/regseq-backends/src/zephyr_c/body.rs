@@ -10,8 +10,10 @@
 //! it is a loud [`EmitError::Unsupported`] naming the construct — never
 //! wrong code (I06). Intrinsic-anchored calls (Log/Mmio/Config/PollUntil)
 //! are intercepted by callee item attribute before ordinary call lowering;
-//! the Config/PollUntil arms mirror the D12 frame scan's D.2 rejections
-//! defensively (the scan fires first on every `emit_zephyr_c` path).
+//! the Config arm lowers the licensed C02/C03 shapes on the PCIe arm (the
+//! `config_shape` classifier — shared with the D12 frame scan, which fires
+//! first on every `emit_zephyr_c` path) and the PollUntil arm mirrors the
+//! scan's D.2 rejection defensively.
 //!
 //! Structural sibling of `linux_c::body` (F-1: the lowering MECHANISM —
 //! reaching-def receiver chase, descriptor const-folding, opaque enum
@@ -82,6 +84,10 @@ pub(crate) struct DriverFacts {
     /// faithful first realization, paired with the emitted single-instance
     /// `BUILD_ASSERT` guard).
     pub base_symbol: String,
+    /// Whether this TU is the PCIe arm (bus = "pci"): config-space ops are
+    /// licensed (C02/C03) and read the TU-static `__rseq_pcie` carrier
+    /// (D12); on every other arm they keep the D.2 rejection.
+    pub pcie: bool,
 }
 
 /// The `static <ret> <name>(<params>)` head shared by the forward
@@ -682,7 +688,9 @@ fn emit_call(
                  lowering is invented"
                     .into(),
             )),
-            IntrinsicKind::Config(op) => Err(super::config_rejection(cx.model, *instance, &op)),
+            IntrinsicKind::Config(op) => {
+                cx.emit_config(op, *instance, body, args, destination, out)
+            }
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {
@@ -1371,6 +1379,89 @@ impl LowerCx<'_> {
             .filter(|f| !types::is_zst(self.model, f.ty))
             .map(|f| super::naming::c_ident(self.model.strings.resolve(f.name)))
             .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Config-space lowering (backend-zephyr-c-e1000 T02, contracts C02/C03):
+    // word-index marshalling over the 32-bit `pcie_conf_read/write` pins
+    // (pcie.h:176/:187 — reg is "the configuration word index (not
+    // address)"), reads served from the D06 word-0 ID cache or one live
+    // word read with shift/mask extraction, width-4 writes native, width-1/2
+    // writes via the audited D05 containing-word RMW. Legality (bus, width,
+    // constant offset, alignment) is [`super::config_shape`] — the SAME
+    // classifier the D12 frame scan runs first, so the op site can only see
+    // licensed shapes.
+    // -----------------------------------------------------------------------
+
+    /// Lower one `IntrinsicKind::Config(op)` call per C02/C03 against the
+    /// TU-static `__rseq_pcie` carrier (D12).
+    pub(crate) fn emit_config(
+        &mut self,
+        op: regseq_model::ConfigOp,
+        callee: InstanceId,
+        body: &regseq_model::Body,
+        args: &[Operand],
+        destination: &Place,
+        out: &mut String,
+    ) -> Result<(), EmitError> {
+        use regseq_model::ConfigOp;
+        let shape = super::config_shape(self.model, callee, &op, args, self.driver.pcie)?;
+        let word = shape.off >> 2;
+        let sh = (shape.off & 0x3) * 8;
+        match op {
+            ConfigOp::Read => {
+                let mask = match shape.width {
+                    1 => "0xffu",
+                    2 => "0xffffu",
+                    _ => "0xffffffffu",
+                };
+                let dst = place_lvalue(self, body, destination)?;
+                let dst_ty = place_ty(self.model, body, destination)?;
+                let dst_cty = types::c_type(self.model, &mut self.names, dst_ty)?;
+                let source = if word == 0 {
+                    // The D06 cache: any read whose containing word is word
+                    // 0 (vendor@0x00 AND device@0x02) is served from the
+                    // pcie_dev ID snapshot — zero bus traffic.
+                    "\t\t/* C03 word-0 cache (A-4/D06): VID|DID served from __rseq_pcie->id;\n\t\t * zero bus traffic */\n\t\tuint32_t __cw = __rseq_pcie->id;\n"
+                        .to_string()
+                } else {
+                    format!(
+                        "\t\tuint32_t __cw = pcie_conf_read(__rseq_pcie->bdf, {word}u); /* word index (\"not address\", pcie.h:176) */\n"
+                    )
+                };
+                out.push_str(&format!(
+                    "\t{{\n{source}\t\t{dst} = ({dst_cty})((__cw >> {sh}u) & {mask});\n\t}}\n"
+                ));
+            }
+            ConfigOp::Write => {
+                let val_arg = args.get(1).ok_or_else(|| {
+                    EmitError::Unsupported("write_config with no value argument".into())
+                })?;
+                let val = operand_expr(self, body, val_arg)?;
+                if shape.width == 4 {
+                    out.push_str(&format!(
+                        "\t{{\n\t\tpcie_conf_write(__rseq_pcie->bdf, {word}u, (uint32_t)({val})); /* word index (\"not address\", pcie.h:187) */\n\t}}\n"
+                    ));
+                } else {
+                    // The D05 containing-word RMW (the ratified B-3 partial
+                    // lift), C02 shape verbatim; its internal read is always
+                    // the LIVE word, never the D06 cache.
+                    let off_expr = operand_expr(
+                        self,
+                        body,
+                        args.first().expect("config_shape validated the offset"),
+                    )?;
+                    let lane_mask = if shape.width == 1 { "0xFFu" } else { "0xFFFFu" };
+                    out.push_str(&format!(
+                        "\t{{\n\t\t/* RSEQ-RMW: width-{w} config write lowered to the containing-word RMW\n\t\t * (the ratified B-3 partial lift): one extra word read; adjacent bytes\n\t\t * rewritten with read-back values — benign per PCI config semantics\n\t\t * (QEMU e1000_write_config reacts only to PCI_COMMAND,\n\t\t * hw/net/e1000.c:1624). [license: backend-zephyr-c-e1000 GRILL D05] */\n\t\tunsigned int __w = ({off}) >> 2; /* pcie word index (\"not address\", pcie.h:187) */\n\t\tuint32_t __cur = pcie_conf_read(__rseq_pcie->bdf, __w); /* always the LIVE word, never the word-0 cache (C03) */\n\t\tuint32_t __sh = (({off}) & 0x3u) * 8u; /* byte lane */\n\t\tuint32_t __msk = {lane_mask} << __sh;\n\t\tpcie_conf_write(__rseq_pcie->bdf, __w, (__cur & ~__msk) | (((uint32_t)({val}) << __sh) & __msk));\n\t}}\n",
+                        w = shape.width,
+                        off = off_expr,
+                        val = val
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
