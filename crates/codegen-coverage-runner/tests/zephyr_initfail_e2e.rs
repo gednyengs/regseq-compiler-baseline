@@ -42,6 +42,11 @@ fn zephyr_initfail_snapshot_and_err_path() {
             .expect("write golden.zephyr.c");
         std::fs::write(pipeline::zephyr_binding_path(fixture), &emit.binding_yaml)
             .expect("write golden.zephyr.binding.yaml");
+        std::fs::write(
+            pipeline::zephyr_conformance_path(fixture),
+            codegen_coverage_runner::conformance::render_json(&emit.conformance),
+        )
+        .expect("write conformance.zephyr.json");
         return;
     }
 

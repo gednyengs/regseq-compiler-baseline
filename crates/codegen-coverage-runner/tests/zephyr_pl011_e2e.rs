@@ -46,6 +46,11 @@ fn zephyr_pl011_snapshot_and_l0_structure() {
             .expect("write golden.zephyr.c");
         std::fs::write(pipeline::zephyr_binding_path(fixture), &emit.binding_yaml)
             .expect("write golden.zephyr.binding.yaml");
+        std::fs::write(
+            pipeline::zephyr_conformance_path(fixture),
+            codegen_coverage_runner::conformance::render_json(&emit.conformance),
+        )
+        .expect("write conformance.zephyr.json");
         return;
     }
 
