@@ -648,6 +648,13 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         absent_dispatch_slots: absent_entries,
         rejected_slots: Vec::new(),
         ignored_match_entries: ignored_audits,
+        // The C06 deferred-class note rides the report iff a non-Generic
+        // class registered class-neutral (D14) — same license const as the
+        // TU audit comment.
+        deferred_class: deferred_class.map(|class| capability::DeferredClassNote {
+            class,
+            license: capability::DEFERRED_CLASS_LICENSE,
+        }),
     };
 
     Ok(ZephyrEmit {
@@ -1654,7 +1661,8 @@ fn emit_tu(
         // (D14: the declared class is NOT delivered — audited, never silent;
         // the define itself stays byte-identical to the Generic form).
         tu.push_str(&format!(
-            "\t/* RSEQ-DEFERRED-CLASS: device_class \"{class}\" declared by the spec is NOT\\\n\t * delivered on this target: the class api vtable + macro family are the\\\n\t * deferred Device Class construct's territory (B-9); this device registers\\\n\t * class-neutral (NULL api). [license: backend-zephyr-c-e1000 GRILL D14] */\\\n"
+            "\t/* RSEQ-DEFERRED-CLASS: device_class \"{class}\" declared by the spec is NOT\\\n\t * delivered on this target: the class api vtable + macro family are the\\\n\t * deferred Device Class construct's territory (B-9); this device registers\\\n\t * class-neutral (NULL api). [license: {}] */\\\n",
+            capability::DEFERRED_CLASS_LICENSE
         ));
     }
     if deinit_fn.is_some() {

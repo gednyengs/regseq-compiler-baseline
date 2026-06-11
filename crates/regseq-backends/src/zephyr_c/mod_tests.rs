@@ -628,6 +628,76 @@ fn pcie_mixed_match_triple_renders_each_pci_row() {
     assert!(ya < yc, "audit comments above the compatible line:\n{yaml}");
 }
 
+// -- T04 capability/conformance wiring (backend-zephyr-c-e1000 R06/R14):
+//    the wildcard row over bus "pci"; the C06 deferred-class note ----------
+
+#[test]
+fn pcie_absent_surprise_remove_resolves_the_wildcard_row() {
+    // R06: an authored on_surprise_remove on the PCIe arm queries
+    // bus_family = "pci"; the existing CAP-ZEPHYR-DT-SURPRISE-1 wildcard
+    // resolves (registration form unchanged: StaticDevicetree) and the
+    // absent-slot render is exactly the platform path's. No sibling row.
+    let mut m = pcie_dt_model(Some(0));
+    let (driver_ty, result_ty) = pcie_driver_and_result(&mut m);
+    let on_init = push_ok_callback(&mut m, driver_ty, result_ty, "on_init");
+    let on_sr = push_ok_callback(&mut m, driver_ty, result_ty, "on_surprise_remove");
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_init = Some(on_init);
+    driver.ops.on_surprise_remove = Some(on_sr);
+    let emit = emit_zephyr_c(&m).expect("the PCIe absent slot must emit (R06)");
+    let tu = &emit.tu;
+    let row = &capability::CAP_ZEPHYR_DT_SURPRISE_1;
+    assert_eq!(tu.matches("RSEQ-ABSENT-SLOT:").count(), 1, "{tu}");
+    assert!(
+        tu.contains(&format!("* disposition: AbsentDispatch row: {}", row.id)),
+        "{tu}"
+    );
+    // Non-emission with the body still checked; the conformance row cites
+    // the row ID + full citation (I06).
+    assert!(!tu.contains("minimal_on_surprise_remove"), "{tu}");
+    assert_eq!(
+        emit.conformance.absent_dispatch_slots,
+        vec![capability::SlotEntry {
+            slot: "on_surprise_remove".into(),
+            row: Some(row.id.into()),
+            citation: Some(row.citation.into()),
+        }]
+    );
+}
+
+#[test]
+fn non_generic_class_carries_the_conformance_note() {
+    let mut m = minimal_dt_model();
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.descriptor.device_class = ClassTag::Network;
+    let emit = emit_zephyr_c(&m).expect("non-Generic class must emit (D14)");
+    assert_eq!(
+        emit.conformance.deferred_class,
+        Some(capability::DeferredClassNote {
+            class: "network".into(),
+            license: capability::DEFERRED_CLASS_LICENSE,
+        })
+    );
+    assert!(
+        emit.conformance
+            .summary_line()
+            .ends_with("deferred_class=[network]"),
+        "{}",
+        emit.conformance.summary_line()
+    );
+}
+
+#[test]
+fn generic_class_report_carries_no_note() {
+    let emit = emit_zephyr_c(&minimal_dt_model()).expect("must emit");
+    assert!(emit.conformance.deferred_class.is_none());
+    assert!(
+        !emit.conformance.summary_line().contains("deferred_class"),
+        "{}",
+        emit.conformance.summary_line()
+    );
+}
+
 #[test]
 fn platform_binding_yaml_is_byte_frozen() {
     // The non-PCIe yaml form carries neither the PCIe include nor any
