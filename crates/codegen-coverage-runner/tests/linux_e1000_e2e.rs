@@ -8,7 +8,8 @@
 //!   - the PCI scaffold shape (probe ladder + the T03-pinned managed
 //!     preamble, ledger C-7),
 //!   - the ≥2-row pci_device_id table + zero sentinel + MODULE_DEVICE_TABLE,
-//!   - the foreign-transport match-entry rejection under a PCI driver,
+//!   - the foreign-transport match-entry audit + table filter under a PCI
+//!     driver (C06/A2, spec-convergence-pl011),
 //!   - the per-site container-recovery expression (C01),
 //!   - the driver-receiver-restriction rejection,
 //!   - the non-PCI config rejection,

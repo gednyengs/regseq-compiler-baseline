@@ -219,7 +219,7 @@ fn assert_recognition_facts(model: &RegseqModel) {
     assert!(driver.ops.on_init.is_some(), "on_init overridden");
     assert!(
         driver.ops.on_deinit.is_none(),
-        "NO on_deinit authored (D01: the zephyr ledger emit-rejects it, B-6/D06)"
+        "NO on_deinit authored in this sibling (pair-split history; the deinit\n         lowering itself is delivered, spec-convergence-pl011 C04)"
     );
     assert!(
         driver.ops.on_surprise_remove.is_none()
