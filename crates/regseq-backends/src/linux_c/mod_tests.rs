@@ -338,7 +338,10 @@ fn missing_bus_is_a_named_driver_error() {
 }
 
 #[test]
-fn non_amba_match_entry_is_unsupported_in_unit() {
+fn all_foreign_match_set_under_amba_is_rejected_loud() {
+    // C06 (spec-convergence-pl011): the D03(a) rule licenses ignoring
+    // foreign entries only when >=1 native entry exists — an all-foreign
+    // set rejects loudly naming the fix (the linux analog of zephyr A-13).
     let m = driver_model(
         Some(BusType::Amba),
         vec![MatchEntry::Pci {
@@ -349,10 +352,16 @@ fn non_amba_match_entry_is_unsupported_in_unit() {
         }],
         LifecycleOps::default(),
     );
-    assert!(matches!(
-        emit_linux_c(&m).unwrap_err(),
-        EmitError::UnsupportedInUnit { .. }
-    ));
+    let err = emit_linux_c(&m).unwrap_err();
+    let EmitError::Driver(msg) = err else {
+        panic!("expected Driver error, got {err:?}");
+    };
+    assert!(
+        msg.contains("no native entries")
+            && msg.contains("amba_driver")
+            && msg.contains("amba = [{ id, mask }]"),
+        "the all-foreign rejection names the rule and the fix: {msg}"
+    );
 }
 
 #[test]
@@ -481,6 +490,65 @@ fn full_match_set_renders_with_zero_sentinel() {
         .expect("second entry (FULL match_set)");
     let sentinel = tu.find("{ 0, 0 },").expect("zero sentinel");
     assert!(first < second && second < sentinel);
+}
+
+#[test]
+fn foreign_dt_entry_under_amba_is_audited_not_tabled() {
+    // C06/C03/A2 (spec-convergence-pl011): a recognized foreign entry under
+    // an amba driver EMITS — audited adjacent to the id table, ABSENT from
+    // the emitted table, and carried in the report and the summary line, all
+    // three renders from the one MatchAudit value (D01).
+    let mut m = minimal_amba_model();
+    {
+        let compatible = m.strings.intern("regseq,pl011");
+        let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+        driver
+            .descriptor
+            .match_set
+            .push(MatchEntry::Devicetree { compatible });
+    }
+    let emit = emit_linux_c(&m).expect("mixed set must emit (C06)");
+    let tu = &emit.tu;
+    // (i) the C block, adjacent to (immediately preceding) the id table.
+    let block = tu
+        .find("/* RSEQ-IGNORED-MATCH: devicetree compatible=\"regseq,pl011\"")
+        .unwrap_or_else(|| panic!("audit block present:\n{tu}"));
+    let table = tu
+        .find("static const struct amba_id minimal_ids[]")
+        .expect("table");
+    assert!(block < table, "audit block precedes the table");
+    assert!(tu.contains("not consumed by the ratified amba_driver registration form"));
+    assert!(tu.contains("consumed natively by zephyr_c."));
+    // A2: the foreign entry feeds only the audit — the table carries exactly
+    // the native row; never-synthesize holds structurally.
+    let table_body = &tu[table..tu.find("{ 0, 0 },").expect("sentinel")];
+    assert_eq!(
+        table_body.matches(".id\t=").count(),
+        1,
+        "exactly the native row in the table"
+    );
+    assert!(
+        !table_body.contains("regseq,pl011"),
+        "foreign entry absent from the emitted table (A2)"
+    );
+    assert!(
+        !tu.contains("of_match_table"),
+        "never-synthesize: no of_match_table minted from the compatible"
+    );
+    // (ii) the report section — and the block rendered from the SAME value.
+    assert_eq!(emit.conformance.ignored_match_entries.len(), 1);
+    let audit = &emit.conformance.ignored_match_entries[0];
+    assert_eq!(audit.entry, "devicetree compatible=\"regseq,pl011\"");
+    assert_eq!(audit.native_on, &["zephyr_c"]);
+    assert!(tu.contains(&audit.c_block()), "same-struct render (I03)");
+    // (iii) the summary line section.
+    assert!(
+        emit.conformance
+            .summary_line()
+            .ends_with("ignored=[devicetree compatible=\"regseq,pl011\"]"),
+        "{}",
+        emit.conformance.summary_line()
+    );
 }
 
 /// Build a minimal model with one extra callback (besides on_init) bound.
@@ -1619,27 +1687,93 @@ fn pci_full_match_set_renders_in_order_with_zero_sentinel() {
 }
 
 #[test]
-fn foreign_transport_match_entry_under_a_pci_driver_stays_loud() {
-    // The T05 polarity pin: the lift's boundary is the driver's own
-    // transport — an AMBA (or any foreign) entry under a PCI driver names
-    // the spec-convergence successor, never silently dropped (I03, B-6).
+fn foreign_amba_entry_under_pci_is_audited_not_tabled() {
+    // C06 applied uniformly to the PCI scaffold (D08: nativeness is per
+    // ratified registration form — linux_c+pci consumes Pci entries; an
+    // Amba entry is foreign HERE even though linux_c's amba scaffold would
+    // consume it). The former loud reject naming this unit is lifted by
+    // this unit; the audit replaces it.
     let mut m = minimal_pci_model();
-    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
-    driver.descriptor.match_set.push(MatchEntry::Amba {
-        id: 0x0004_1011,
-        mask: 0x000f_ffff,
-    });
+    {
+        let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+        driver.descriptor.match_set.push(MatchEntry::Amba {
+            id: 0x0004_1011,
+            mask: 0x000f_ffff,
+        });
+    }
+    let emit = emit_linux_c(&m).expect("mixed set must emit (C06)");
+    let tu = &emit.tu;
+    let block = tu
+        .find("/* RSEQ-IGNORED-MATCH: amba id=0x00041011 mask=0x000fffff")
+        .unwrap_or_else(|| panic!("audit block present:\n{tu}"));
+    let table = tu
+        .find("static const struct pci_device_id")
+        .expect("pci table");
+    assert!(block < table, "audit block precedes the table");
+    assert!(tu.contains("not consumed by the ratified pci_driver registration form"));
+    // A2: the foreign entry is absent from the emitted table.
+    let table_body = &tu[table..tu.find("{ 0, },").expect("sentinel")];
+    assert!(
+        !table_body.contains("0x00041011"),
+        "foreign entry absent from the emitted pci table (A2)"
+    );
+    assert_eq!(emit.conformance.ignored_match_entries.len(), 1);
+    let audit = &emit.conformance.ignored_match_entries[0];
+    assert_eq!(audit.entry, "amba id=0x00041011 mask=0x000fffff");
+    assert!(tu.contains(&audit.c_block()), "same-struct render (I03)");
+    assert!(
+        emit.conformance
+            .summary_line()
+            .ends_with("ignored=[amba id=0x00041011 mask=0x000fffff]"),
+        "{}",
+        emit.conformance.summary_line()
+    );
+}
+
+#[test]
+fn deferred_family_entry_alongside_native_is_rejected_loud() {
+    // C06 final-review hardening: the D03(a) license covers RECOGNIZED
+    // foreign entries only — a deferred-family entry (no ratified
+    // registration form on ANY backend) keeps the D.2 fail-loud default
+    // even when a native entry exists, never audited-and-ignored.
+    let mut m = minimal_amba_model();
+    {
+        let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+        driver.descriptor.match_set.push(MatchEntry::Usb {
+            vendor: 0x1234,
+            product: 0x5678,
+        });
+    }
     let err = emit_linux_c(&m).unwrap_err();
-    let EmitError::UnsupportedInUnit { what, unit } = err else {
-        panic!("expected UnsupportedInUnit, got {err:?}");
+    let EmitError::Driver(msg) = err else {
+        panic!("expected Driver error, got {err:?}");
     };
     assert!(
-        what.contains("foreign-transport") && what.contains("B-6"),
-        "the rejection names the mixed-match-set gap: {what}"
+        msg.contains("no ratified registration form") && msg.contains("fail-loud"),
+        "the deferred-family rejection names the rule boundary: {msg}"
     );
+}
+
+#[test]
+fn all_foreign_match_set_under_pci_is_rejected_loud() {
+    // The PCI-scaffold analog of the A-13 all-foreign reject.
+    let mut m = minimal_pci_model();
+    {
+        let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+        driver.descriptor.match_set = vec![MatchEntry::Amba {
+            id: 0x0004_1011,
+            mask: 0x000f_ffff,
+        }];
+    }
+    let err = emit_linux_c(&m).unwrap_err();
+    let EmitError::Driver(msg) = err else {
+        panic!("expected Driver error, got {err:?}");
+    };
     assert!(
-        unit.contains("spec-convergence"),
-        "the rejection names the successor unit: {unit}"
+        msg.contains("no native entries")
+            && msg.contains("pci_driver")
+            && msg.contains("pci = [{ vendor, device }]"),
+        "the all-foreign rejection names the rule and the fix: {msg}"
     );
 }
 

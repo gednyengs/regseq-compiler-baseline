@@ -1,40 +1,26 @@
-//! The composed PL011 Zephyr-sibling oracle gate (backend-zephyr-c unit, M1/C1).
+//! The CONVERGED PL011 fixture under the ZEPHYR binding (spec-convergence-
+//! pl011 C05): the ONE `input.rs` — D09 converged match set, shared
+//! `on_deinit` — bridged against `platform.zephyr.toml` (the eval DUT,
+//! second PL011, base 0x09040000) through the certified six-stage generic_c
+//! path: bridge → L2 bind → emit → snapshot → cc → run → stdout oracle.
 //!
-//! The sibling fixture (GRILL D01) carries the five refined construct surfaces
-//! — register-access, BRM (`bus = "amba"` folding into the Platform path),
-//! device-lifecycle, diagnostics-logging, RegseqError — with a Devicetree
-//! match set (`compatible = ["regseq,pl011"]`, D04) and NO `on_deinit` (D06),
-//! over the eval DUT binding (second PL011, base 0x09040000).
+//! The blessed `expected.zephyr.stdout` is the COMMITTED ZEPHYR-LEG
+//! CANONICAL ORACLE TRACE (GRILL D10): the zephyr L3 trace differential
+//! compares the generated Zephyr driver's QEMU MMIO capture against it —
+//! TEARDOWN EVENTS INCLUDED (the authored `on_deinit` quiesce writes), so
+//! this file is doubly protected (I04 + the L3 artifact).
 //!
-//! The five construct surfaces flow the full certified six-stage path
-//! together: bridge → L2 bind → emit → snapshot → cc → run → stdout oracle.
-//! The blessed `expected.stdout` is the COMMITTED ZEPHYR-LEG CANONICAL ORACLE
-//! TRACE (GRILL D10): the zephyr L3 trace differential compares the generated
-//! Zephyr driver's QEMU MMIO capture against it, so this file is doubly
-//! protected (I04 + the L3 artifact).
-//!
-//! `BLESS=1` writes `golden.c` + `expected.stdout` from a single clean
-//! bind+emit+run, then returns without also verifying (the keystone pattern).
-//!
-//! T03 first exercises the orderly-scenario teardown suffix WITHOUT an
-//! authored `on_deinit` (GRILL risk #9). generic_c's documented shape
-//! (CR-3, `emit_lifecycle` M2): `orderly` always emits
-//! `LC teardown present=1` + the always-on `LC call on_deinit` MARKER —
-//! but with no authored callback the marker carries NO body (no `[WARN]`
-//! line, no quiesce MMIO writes; `LC postamble` follows directly). This is
-//! exactly C04's cited teardown-marker whitelist entry class (B-6/D06).
+//! `BLESS=1` writes `golden.zephyr-oracle.c` + `expected.zephyr.stdout`
+//! (the zephyr-binding C05 artifact pair — never the linux pair) from a
+//! single clean bind+emit+run, then returns without also verifying (the
+//! keystone pattern).
 //!
 //! SOLE test in this binary (like `pl011_composed_e2e`): the emit's MIR is
-//! sensitive to rustc's process-global interner history, so the byte-snapshot
-//! T03 adds is reproducible only in a dedicated clean process.
+//! sensitive to rustc's process-global interner history, so the
+//! byte-snapshot is reproducible only in a dedicated clean process.
 //!
 //! `#![feature(rustc_private)]` + `extern crate rustc_driver;` link the
 //! rustc-backed bridge (stage 1) into the test binary.
-//!
-//! Bridging this fixture emits two benign rustc warnings (`unused_macros` /
-//! `unused_imports` on the diag surface's `warn` macro): the only `warn!`
-//! site lives in the `on_deinit` the sibling drops, and the macro block is
-//! C02 shared-remainder text that cannot diverge from the linux file.
 
 #![feature(rustc_private)]
 
@@ -60,19 +46,21 @@ fn composed_corpus() -> PathBuf {
 
 #[test]
 fn pl011_composed_zephyr_six_stage_oracle() {
-    let dir = composed_corpus().join("pl011-composed-zephyr");
     let fixtures = manifest::discover(&composed_corpus()).expect("discover composed corpus");
     let fixture = fixtures
         .iter()
-        .find(|f| f.manifest.name == "pl011-composed-zephyr")
-        .expect("pl011-composed-zephyr fixture discovered");
+        .find(|f| f.manifest.name == "pl011-composed")
+        .expect("pl011-composed fixture discovered")
+        .with_binding(manifest::OsBinding::Zephyr)
+        .expect("the converged fixture resolves the zephyr binding (C05)");
+    let fixture = &fixture;
 
-    // The fixture MUST carry its sibling platform.toml: per the ratified A-10
-    // policy the L2 literals are the resolution trigger (and the D11 emitted
-    // cross-check consumes them).
+    // The bound fixture MUST carry its per-OS platform file: per the ratified
+    // A-10 policy the L2 literals are the resolution trigger (and the D11
+    // emitted cross-check consumes them).
     assert!(
         fixture.platform.is_some(),
-        "pl011-composed-zephyr must discover a sibling platform.toml (A-10 trigger)"
+        "pl011-composed must resolve platform.zephyr.toml (A-10 trigger, C05)"
     );
 
     if std::env::var_os("BLESS").is_some() {
@@ -96,8 +84,9 @@ fn pl011_composed_zephyr_six_stage_oracle() {
         .expect("emit must succeed");
         let run = toolchain::compile_and_run(&emit.tu, &emit.shim, cc())
             .expect("compile + run must succeed");
-        std::fs::write(dir.join("golden.c"), &emit.tu).expect("write golden.c");
-        std::fs::write(dir.join("expected.stdout"), &run.stdout).expect("write expected.stdout");
+        std::fs::write(&fixture.golden_c, &emit.tu).expect("write golden.zephyr-oracle.c");
+        std::fs::write(&fixture.expected_stdout, &run.stdout)
+            .expect("write expected.zephyr.stdout");
         return;
     }
 
@@ -105,7 +94,7 @@ fn pl011_composed_zephyr_six_stage_oracle() {
     let result = pipeline::run_fixture(fixture, cc());
     assert!(
         result.is_green(),
-        "pl011-composed-zephyr must pass all six stages: {:?}",
+        "pl011-composed (zephyr binding) must pass all six stages: {:?}",
         result.verdict
     );
 
@@ -114,7 +103,8 @@ fn pl011_composed_zephyr_six_stage_oracle() {
     // map_region with the real DUT platform literals (A-10: L2 is the
     // trigger; -1 = no BAR on an AMBA region), under the traced
     // qemu_cortex_a53/aarch64 Zephyr identity.
-    let golden = std::fs::read_to_string(dir.join("golden.c")).expect("read golden.c");
+    let golden =
+        std::fs::read_to_string(&fixture.golden_c).expect("read golden.zephyr-oracle.c");
     assert!(
         golden.contains("regseq_bus_map_region(0x9040000ull, 0x1000ull, -1);"),
         "golden.c must map the real declared DUT (base, size) from platform.toml"
@@ -143,11 +133,12 @@ fn pl011_composed_zephyr_six_stage_oracle() {
     // math lands the 24 MHz / 115200 divisors (IBRD 13, FBRD 1); and the
     // teardown suffix carries NO on_deinit call (GRILL risk #9 / D10's cited
     // whitelist entry class).
-    let stdout =
-        std::fs::read_to_string(dir.join("expected.stdout")).expect("read expected.stdout");
+    let stdout = std::fs::read_to_string(&fixture.expected_stdout)
+        .expect("read expected.zephyr.stdout");
     assert!(
-        stdout.contains("match=dt:regseq,pl011"),
-        "oracle trace must register the D04 devicetree match; got:\n{stdout}"
+        stdout.contains("match=amba:0x41011/0xfffff"),
+        "the register marker keys on match_set.first() = the amba row (D09; \
+         normalizer metadata, never compared by L3); got:\n{stdout}"
     );
     assert!(
         stdout.contains("@0x9040030"),
@@ -162,11 +153,24 @@ fn pl011_composed_zephyr_six_stage_oracle() {
         "oracle trace must carry the bring-up log lines; got:\n{stdout}"
     );
     assert!(
-        stdout.contains("LC teardown present=1")
-            && stdout.contains("LC call on_deinit\nLC postamble regs")
-            && !stdout.contains("pl011 deinit"),
-        "the no-on_deinit orderly teardown suffix: the always-on CR-3 marker \
-         with NO callback body (D01/D06, risk #9); got:\n{stdout}"
+        stdout.contains("LC teardown present=1") && stdout.contains("LC call on_deinit"),
+        "the orderly teardown suffix with the authored on_deinit; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("pl011 deinit: masking interrupts"),
+        "the authored on_deinit body runs (its warn! log line); got:\n{stdout}"
+    );
+    // The three quiesce writes land at the DUT base (teardown events the L3
+    // differential now compares, C07): IMSC<-0x0, CR<-disabled, ICR<-0x7ff.
+    let teardown = stdout
+        .split("LC call on_deinit")
+        .nth(1)
+        .expect("teardown segment");
+    assert!(
+        teardown.contains("@0x9040038") // IMSC = base + 0x38
+            && teardown.contains("@0x9040030") // CR   = base + 0x30
+            && teardown.contains("@0x9040044"), // ICR = base + 0x44
+        "the on_deinit quiesce writes at the DUT base; got:\n{teardown}"
     );
     assert!(
         !stdout.contains("BUS enable_device"),
@@ -178,7 +182,7 @@ fn pl011_composed_zephyr_six_stage_oracle() {
     // interner history the snapshot depends on.
     let mut model = match try_bridge_fixture_path(&fixture.input) {
         BridgeOutcome::Ok(m) => m,
-        other => panic!("pl011-composed-zephyr must bridge cleanly: {other:?}"),
+        other => panic!("pl011-composed (zephyr binding) must bridge cleanly: {other:?}"),
     };
     let identity = pipeline::bind_l2_platform(&mut model, fixture).expect("L2 bind + validate");
     assert_eq!(
@@ -189,12 +193,12 @@ fn pl011_composed_zephyr_six_stage_oracle() {
     assert_recognition_facts(&model);
 }
 
-/// The five-construct recognition facts on the bound model (T01 acceptance —
-/// the sibling deltas vs `pl011-composed`: Devicetree match, no `on_deinit`,
-/// the DUT base).
+/// The five-construct recognition facts on the bound model (the converged
+/// fixture under the zephyr binding: D09 match set, shared `on_deinit`, the
+/// DUT base).
 fn assert_recognition_facts(model: &RegseqModel) {
-    // -- device-lifecycle: one recognized driver, Devicetree-matched, with
-    //    on_init overridden and ONLY on_init (no on_deinit: D01/D06).
+    // -- device-lifecycle: one recognized driver carrying the CONVERGED D09
+    //    match set, with on_init AND on_deinit overridden (shared text).
     assert_eq!(
         model.device_lifecycle.drivers.len(),
         1,
@@ -203,23 +207,23 @@ fn assert_recognition_facts(model: &RegseqModel) {
     let driver = model.device_lifecycle.drivers.values().next().unwrap();
     assert_eq!(
         driver.descriptor.match_set.len(),
-        1,
-        "exactly one match entry (the DUT compatible)"
+        3,
+        "the converged match set (amba, amba, dt — D09)"
     );
-    match &driver.descriptor.match_set[0] {
+    match &driver.descriptor.match_set[2] {
         MatchEntry::Devicetree { compatible } => {
             assert_eq!(
                 model.strings.resolve(*compatible),
                 "regseq,pl011",
-                "the D04 reserved compatible string"
+                "the D04 reserved compatible string, last (D09)"
             );
         }
-        other => panic!("expected a devicetree match entry, got {other:?}"),
+        other => panic!("expected the devicetree entry last (D09), got {other:?}"),
     }
     assert!(driver.ops.on_init.is_some(), "on_init overridden");
     assert!(
-        driver.ops.on_deinit.is_none(),
-        "NO on_deinit authored (D01: the zephyr ledger emit-rejects it, B-6/D06)"
+        driver.ops.on_deinit.is_some(),
+        "on_deinit authored as plain shared text (the converged spec)"
     );
     assert!(
         driver.ops.on_surprise_remove.is_none()
@@ -258,13 +262,9 @@ fn assert_recognition_facts(model: &RegseqModel) {
     );
 
     // -- register-access + diagnostics-logging + RegseqError: the domain-attr
-    //    tables must carry all five MMIO op kinds, the three AUTHORED log
-    //    levels, and the RegseqError framework-type marker. Warn is absent by
-    //    construction: the linux fixture's only `warn!` site lives in the
-    //    `on_deinit` this sibling drops (D01), and the shared `on_init` body
-    //    cannot gain one without breaking the C02 identity remainder. (D09's
-    //    "all four levels live" is the prj.conf VISIBILITY pin, not a claim
-    //    about authored sites.)
+    //    tables must carry all five MMIO op kinds, all FOUR log levels (the
+    //    `warn!` site lives in the now-shared `on_deinit`), and the
+    //    RegseqError framework-type marker.
     let mut mmio_ops = std::collections::BTreeSet::new();
     let mut log_levels = std::collections::BTreeSet::new();
     let mut regseq_error_marked = false;
@@ -296,7 +296,12 @@ fn assert_recognition_facts(model: &RegseqModel) {
             "register-access op {op:?} recognized"
         );
     }
-    for level in [LogLevel::Debug, LogLevel::Info, LogLevel::Error] {
+    for level in [
+        LogLevel::Debug,
+        LogLevel::Info,
+        LogLevel::Warn,
+        LogLevel::Error,
+    ] {
         assert!(
             log_levels.contains(&(level.clone() as u8)),
             "log level {level:?} recognized"

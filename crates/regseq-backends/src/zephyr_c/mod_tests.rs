@@ -450,29 +450,79 @@ fn amba_only_match_set_is_rejected_naming_the_fix() {
 }
 
 #[test]
-fn mixed_match_set_defers_to_the_convergence_unit() {
-    let mut m = model();
-    let mut match_set = dt_match_for(&mut m, "regseq,pl011");
-    match_set.push(MatchEntry::Amba {
-        id: 0x0004_1011,
-        mask: 0x000f_ffff,
-    });
-    driver_into(
-        &mut m,
-        Some(BusType::Amba),
-        match_set,
-        LifecycleOps::default(),
-        Default::default(),
+fn mixed_match_set_is_audited_at_the_dt_compat_surface() {
+    // C06/C03+A1 (spec-convergence-pl011): foreign entries alongside the
+    // native Devicetree entry EMIT — each audited with an
+    // RSEQ-IGNORED-MATCH block adjacent to the consumed match surface
+    // (`#define DT_DRV_COMPAT`; zephyr has no match table), carried in the
+    // report and the summary line, all from one MatchAudit value (D01).
+    // The former unratified-rule rejection is lifted by that unit.
+    let mut m = emitting_model(&["HardwareError", "DeviceBusy"]);
+    {
+        let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+        driver.descriptor.match_set.insert(
+            0,
+            MatchEntry::Amba {
+                id: 0x0004_1011,
+                mask: 0x000f_ffff,
+            },
+        );
+    }
+    let emit = emit_zephyr_c(&m).expect("mixed set must emit (C06)");
+    let tu = &emit.tu;
+    // (i) the C block, adjacent to (immediately preceding) the compat pin.
+    let block = tu
+        .find("/* RSEQ-IGNORED-MATCH: amba id=0x00041011 mask=0x000fffff")
+        .unwrap_or_else(|| panic!("audit block present:\n{tu}"));
+    let pin = tu.find("#define DT_DRV_COMPAT").expect("compat pin");
+    assert!(block < pin, "audit block adjacent to the DT_DRV_COMPAT pin (A1)");
+    assert!(
+        tu[block..pin].len() < 400,
+        "the block sits AT the pin, not floated to the header"
     );
+    assert!(tu.contains("not consumed by the ratified static-devicetree registration form"));
+    assert!(tu.contains("consumed natively by linux_c."));
+    // The consumed surface carries no amba rendering (the zephyr analog of
+    // the A2 filtered-table negative: the foreign entry feeds only the audit).
+    assert!(
+        !tu[pin..].contains("0x00041011"),
+        "foreign entry absent from the consumed surface"
+    );
+    // (ii) the report — and the block renders from the SAME value (I03).
+    assert_eq!(emit.conformance.ignored_match_entries.len(), 1);
+    let audit = &emit.conformance.ignored_match_entries[0];
+    assert_eq!(audit.entry, "amba id=0x00041011 mask=0x000fffff");
+    assert_eq!(audit.native_on, &["linux_c"]);
+    assert!(tu.contains(&audit.c_block()), "same-struct render");
+    // (iii) the summary line.
+    assert!(
+        emit.conformance
+            .summary_line()
+            .ends_with("ignored=[amba id=0x00041011 mask=0x000fffff]"),
+        "{}",
+        emit.conformance.summary_line()
+    );
+}
+
+#[test]
+fn deferred_family_entry_alongside_native_is_rejected_loud() {
+    // C06 final-review hardening: the D03(a) license covers RECOGNIZED
+    // foreign entries only — a deferred-family entry (no ratified
+    // registration form on ANY backend) keeps the D.2 fail-loud default
+    // even when the native DT entry exists, never audited-and-ignored.
+    let mut m = emitting_model(&["HardwareError", "DeviceBusy"]);
+    {
+        let hid = m.strings.intern("ACPI1234");
+        let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+        driver.descriptor.match_set.push(MatchEntry::Acpi { hid });
+    }
     let err = emit_zephyr_c(&m).unwrap_err();
     let EmitError::Rejected(s) = err else {
         panic!("expected Rejected, got {err:?}");
     };
-    // The consumption rule is unratified (GRILL D03a): defer loudly, do not
-    // decide.
     assert!(
-        s.contains("unratified") && s.contains("spec-convergence-pl011"),
-        "{s}"
+        s.contains("no ratified registration form") && s.contains("fail-loud"),
+        "the deferred-family rejection names the rule boundary: {s}"
     );
 }
 
@@ -494,28 +544,99 @@ fn multi_compatible_match_set_is_unsupported() {
     ));
 }
 
-#[test]
-fn on_deinit_is_rejected_citing_d06_not_unsupported() {
-    let mut m = minimal_dt_model();
-    let ut = unit_ty(&mut m);
-    let cb = push_intrinsic(&mut m, "dummy", IntrinsicKind::PollUntil, vec![], ut);
-    let on_deinit = push_callback_calling(&mut m, cb, ut);
+// -- the deinit lowering (spec-convergence-pl011 C04/D05): authored
+//    on_deinit lowers a deinit fn + the conditional macro swap; unauthored
+//    leaves the scaffold byte-identical (I05) ------------------------------
+
+/// The emitting model plus a legal `Ok(())` `on_deinit` body (C04).
+fn deinit_model() -> RegseqModel {
+    let mut m = emitting_model(&["HardwareError", "DeviceBusy"]);
+    let driver_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| {
+            matches!(t, Ty::Struct { item, .. } if {
+                m.strings.resolve(m.items[*item].def_path.rendered) == "Minimal"
+            })
+        })
+        .map(|(id, _)| id)
+        .unwrap();
+    let result_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| matches!(t, Ty::Enum { item, .. } if m.items[*item].is_result))
+        .map(|(id, _)| id)
+        .unwrap();
+    let on_deinit = push_ok_callback(&mut m, driver_ty, result_ty, "on_deinit");
     let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
     driver.ops.on_deinit = Some(on_deinit);
-    let err = emit_zephyr_c(&m).unwrap_err();
-    let EmitError::Rejected(s) = err else {
-        panic!("expected Rejected, got {err:?}");
-    };
-    // D06 re-cite: names the v4.4 fork state AND the delivering unit; the
-    // wording is a scheduling statement, not a capability denial.
+    m
+}
+
+#[test]
+fn authored_on_deinit_lowers_the_full_c04_shape() {
+    let emit = emit_zephyr_c(&deinit_model()).expect("authored on_deinit must emit (C04)");
+    let tu = &emit.tu;
+    // The deinit fn, C04 signature, after init and before the instantiation
+    // block.
+    let init = tu.find("static int minimal_init(").expect("init fn");
+    let deinit = tu
+        .find("static int minimal_deinit(const struct device *dev)")
+        .unwrap_or_else(|| panic!("C04 deinit signature:\n{tu}"));
+    let inst_block = tu
+        .find("DEVICE_DT_INST_DEINIT_DEFINE(n, minimal_init, minimal_deinit, NULL,")
+        .unwrap_or_else(|| panic!("the conditional macro swap:\n{tu}"));
+    assert!(init < deinit && deinit < inst_block);
     assert!(
-        s.contains("device_deinit()") && s.contains("spec-convergence-pl011"),
-        "{s}"
+        !tu.contains("DEVICE_DT_INST_DEFINE(n,"),
+        "swapped, not duplicated"
     );
-    assert!(!s.to_lowercase().contains("unsupported"), "{s}");
-    // D14: the scheduling diagnostic is table-cited (rendered from the row
-    // const, never a literal).
-    assert!(s.contains(capability::CAP_ZEPHYR_DT_DEINIT_1.id), "{s}");
+    // The fused adapter inside the deinit fn: same nine-row negated-errno
+    // shape as init, arms in deterministic variant order.
+    let deinit_body = &tu[deinit..inst_block];
+    assert!(deinit_body.contains("if (__tag != 0x2)"), "{deinit_body}");
+    let eio = deinit_body.find("return -EIO;").expect("HardwareError arm");
+    let ebusy = deinit_body.find("return -EBUSY;").expect("DeviceBusy arm");
+    assert!(eio < ebusy, "deterministic variant order (C04)");
+    assert!(deinit_body.contains("default:"), "corrupt-tag defense");
+    assert!(deinit_body.contains("\treturn 0;"), "Ok(()) => return 0");
+    // The explicit no-op postamble callout (the map_region mirror, C04).
+    assert!(
+        deinit_body.contains("deliberate NO-OP"),
+        "the unmap mirror is an explicit callout, not silence: {deinit_body}"
+    );
+    // The TU-header Kconfig pin row naming the silent-drop hazard.
+    assert!(tu.contains("CONFIG_DEVICE_DEINIT_SUPPORT=y"), "{tu}");
+    assert!(tu.contains("device.h:1175-1180"), "{tu}");
+    // Conformance: on_deinit delivered, citing the flipped row (D05).
+    let entry = emit
+        .conformance
+        .delivered_slots
+        .iter()
+        .find(|e| e.slot == "on_deinit")
+        .expect("on_deinit in delivered_slots");
+    assert_eq!(entry.row.as_deref(), Some(capability::CAP_ZEPHYR_DT_DEINIT_1.id));
+    assert!(
+        emit.conformance
+            .summary_line()
+            .contains("on_deinit:CAP-ZEPHYR-DT-DEINIT-1"),
+        "{}",
+        emit.conformance.summary_line()
+    );
+}
+
+#[test]
+fn unauthored_on_deinit_leaves_the_scaffold_byte_identical() {
+    // I05: the conditional swap — without on_deinit no deinit artifact
+    // exists at all (the absentslot/init-fail goldens stay byte-frozen,
+    // proven by their snapshot e2es needing no re-bless).
+    let tu = emit_zephyr_c(&emitting_model(&["HardwareError", "DeviceBusy"]))
+        .expect("must emit")
+        .tu;
+    assert!(tu.contains("DEVICE_DT_INST_DEFINE(n, minimal_init, NULL,"));
+    assert!(!tu.contains("DEINIT"), "no deinit trace in the scaffold");
+    assert!(!tu.contains("minimal_deinit"));
+    assert!(!tu.contains("CONFIG_DEVICE_DEINIT_SUPPORT"));
 }
 
 // -- the ratified OS-absent slot (os-capability-disposition unit): authored
@@ -595,7 +716,7 @@ fn absent_surprise_remove_emits_with_exactly_one_audit_block() {
     assert_eq!(
         emit.conformance.summary_line(),
         "RSEQ-CONFORMANCE [zephyr_c @ v4.4.0 (684c9e8f32e4)] delivered=[on_init] \
-         absent_dispatch=[on_surprise_remove:CAP-ZEPHYR-DT-SURPRISE-1] rejected=[]"
+         absent_dispatch=[on_surprise_remove:CAP-ZEPHYR-DT-SURPRISE-1] rejected=[] ignored=[]"
     );
     assert!(emit.conformance.rejected_slots.is_empty());
 }
@@ -751,7 +872,7 @@ fn no_audit_block_when_no_absent_slot() {
     assert_eq!(
         emit.conformance.summary_line(),
         "RSEQ-CONFORMANCE [zephyr_c @ v4.4.0 (684c9e8f32e4)] delivered=[on_init] \
-         absent_dispatch=[] rejected=[]"
+         absent_dispatch=[] rejected=[] ignored=[]"
     );
 }
 

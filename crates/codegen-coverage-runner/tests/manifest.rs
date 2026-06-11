@@ -8,7 +8,7 @@
 
 extern crate rustc_driver;
 
-use codegen_coverage_runner::manifest::{discover, parse_manifest, Expect, FixtureKind};
+use codegen_coverage_runner::manifest::{self, discover, parse_manifest, Expect, FixtureKind};
 use codegen_coverage_runner::pipeline::Stage;
 
 #[test]
@@ -301,5 +301,84 @@ fn discover_leaves_platform_none_when_absent() {
     assert_eq!(
         fixtures[0].platform, None,
         "a fixture with no sibling platform.toml resolves platform = None (the L2-free baseline)"
+    );
+}
+
+// -- the explicit OsBinding selector (spec-convergence-pl011 C05, plan
+//    decision 1) -------------------------------------------------------------
+
+/// Write the two C05 per-OS platform files into a fixture dir.
+fn write_suffixed_platforms(fixture_dir: &std::path::Path) {
+    for name in ["platform.linux.toml", "platform.zephyr.toml"] {
+        std::fs::write(
+            fixture_dir.join(name),
+            "version = \"1\"\n[mmio.regs]\nbar = 0\n",
+        )
+        .expect("must write per-OS platform file");
+    }
+}
+
+#[test]
+fn with_binding_resolves_the_c05_fixed_names_per_os() {
+    let corpus = TempCorpus::new("osbinding");
+    let fixture_dir = corpus.fixture("converged", false);
+    write_suffixed_platforms(&fixture_dir);
+
+    let fixtures = discover(&corpus.dir).expect("discovery must succeed");
+    let f = &fixtures[0];
+    assert_eq!(f.platform, None, "no legacy platform.toml discovered");
+
+    let linux = f
+        .with_binding(manifest::OsBinding::Linux)
+        .expect("linux binding resolves");
+    assert_eq!(
+        linux.platform.as_deref(),
+        Some(fixture_dir.join("platform.linux.toml").as_path())
+    );
+    assert_eq!(linux.golden_c, fixture_dir.join("golden.c"));
+    assert_eq!(linux.expected_stdout, fixture_dir.join("expected.stdout"));
+
+    let zephyr = f
+        .with_binding(manifest::OsBinding::Zephyr)
+        .expect("zephyr binding resolves");
+    assert_eq!(
+        zephyr.platform.as_deref(),
+        Some(fixture_dir.join("platform.zephyr.toml").as_path())
+    );
+    assert_eq!(zephyr.golden_c, fixture_dir.join("golden.zephyr-oracle.c"));
+    assert_eq!(
+        zephyr.expected_stdout,
+        fixture_dir.join("expected.zephyr.stdout")
+    );
+}
+
+#[test]
+fn with_binding_is_loud_when_the_selected_platform_file_is_missing() {
+    // No silent fallback to the legacy platform.toml (plan decision 1).
+    let corpus = TempCorpus::new("osbinding-missing");
+    corpus.fixture("legacy_only", true);
+    let fixtures = discover(&corpus.dir).expect("discovery must succeed");
+    let err = fixtures[0]
+        .with_binding(manifest::OsBinding::Zephyr)
+        .expect_err("missing platform.zephyr.toml must be loud");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("platform.zephyr.toml") && msg.contains("no fallback"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn discover_rejects_a_fixture_carrying_both_platform_conventions() {
+    // The collapse must not half-apply: legacy platform.toml + a suffixed
+    // file in one fixture is a LOUD loader error, not a preference.
+    let corpus = TempCorpus::new("both-conventions");
+    let fixture_dir = corpus.fixture("half_applied", true);
+    write_suffixed_platforms(&fixture_dir);
+    let err = discover(&corpus.dir).expect_err("dual-convention fixture must fail discovery");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("BOTH") && msg.contains("mutually exclusive"),
+        "{msg}"
     );
 }

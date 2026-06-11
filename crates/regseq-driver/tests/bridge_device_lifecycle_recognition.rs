@@ -409,6 +409,49 @@ fn amba_driver_is_recognized_with_typed_match() {
     );
 }
 
+/// O1 (spec-convergence-pl011 GRILL): ONE `#[rseq::driver]` attr carrying both
+/// `amba = [...]` AND `compatible = [...]` — the converged D09 set, amba rows
+/// first, DT last. The parser walks the keys in authored order and appends
+/// every entry into the one `match_set` Vec, so the mixed attr needs no
+/// production change (S17 verify-only).
+const MIXED_MATCH_SOURCE: &str = r#"
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
+#[rseq::driver(name = "pl011", amba = [{ id = 0x00041011, mask = 0x000fffff }, { id = 0x00abc123, mask = 0x00ffffff }], compatible = ["regseq,pl011"])]
+pub struct Pl011;
+
+pub fn make_pl011() -> Pl011 { loop {} }
+"#;
+
+#[test]
+fn mixed_amba_and_compatible_keys_parse_into_one_ordered_match_set() {
+    let got = with_model("dl_mixed", MIXED_MATCH_SOURCE, |model| {
+        let d = driver_by_name(model, "pl011").expect("pl011 recognized");
+        d.descriptor
+            .match_set
+            .iter()
+            .map(|e| match e {
+                MatchEntry::Amba { id, mask } => format!("amba:{id:#010x}/{mask:#010x}"),
+                MatchEntry::Devicetree { compatible } => {
+                    format!("dt:{}", model.strings.resolve(*compatible))
+                }
+                other => format!("other:{other:?}"),
+            })
+            .collect::<Vec<_>>()
+    })
+    .expect("bridge should succeed");
+    assert_eq!(
+        got,
+        vec![
+            "amba:0x00041011/0x000fffff".to_string(),
+            "amba:0x00abc123/0x00ffffff".to_string(),
+            "dt:regseq,pl011".to_string(),
+        ],
+        "three entries, one match_set, authored order (amba, amba, dt)"
+    );
+}
+
 /// CR-5: each deferred bus family is a hard `BridgeError` (the bridge rejects
 /// the crate, so `with_model` returns `None`), not a silent drop.
 fn unsupported_bus_source(bus: &str) -> String {

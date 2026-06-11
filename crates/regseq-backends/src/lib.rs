@@ -20,13 +20,20 @@
 //! (os-capability-disposition unit): the closed disposition enum, the row
 //! consts the OS backends cite, and the per-target `ConformanceReport`
 //! every OS-backend emit carries.
+//!
+//! The `match_audit` module owns the mixed-match-set audit
+//! (spec-convergence-pl011 D01/D08): the `MatchAudit` struct the report's
+//! `ignored_match_entries` section carries, kept structurally separate from
+//! the capability table (whose domain stays lifecycle slots only).
 
 pub mod capability;
 mod generic_c;
 mod linux_c;
+pub mod match_audit;
 mod zephyr_c;
 
 pub use capability::{ConformanceReport, SlotEntry};
+pub use match_audit::MatchAudit;
 
 pub use linux_c::{emit_linux_c, EmitError as LinuxEmitError, LinuxEmit};
 

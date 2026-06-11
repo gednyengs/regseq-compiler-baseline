@@ -7,5 +7,6 @@
   "absent_dispatch_slots": [
     {"slot": "on_surprise_remove", "row": "CAP-ZEPHYR-DT-SURPRISE-1", "citation": "Zephyr v4.4.0 (684c9e8f32e4) static DT device model, read live in the eval-workspace checkout 2026-06-10 (os-capability-disposition T02): DEVICE_DT_INST_DEFINE (include/zephyr/device.h:283) expands through Z_DEVICE_DEFINE (device.h:1317) to Z_DEVICE_BASE_DEFINE (device.h:1255), a const struct device placed in a link-time iterable section (STRUCT_SECTION_ITERABLE_NAMED_ALTERNATE, device.h:1259) — instances are build-time-fixed; the runtime device API carries init/deinit only (device_init device.h:906, device_deinit device.h:928) and device.h names no hot-remove/unplug dispatch API (named-API absence). No dispatch path exists for surprise removal (B-7; A-12)"}
   ],
-  "rejected_slots": []
+  "rejected_slots": [],
+  "ignored_match_entries": []
 }

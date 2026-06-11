@@ -554,6 +554,10 @@ static void pl011_remove(struct amba_device *adev)
 }
 
 
+/* RSEQ-IGNORED-MATCH: devicetree compatible="regseq,pl011"
+ * foreign transport: not consumed by the ratified amba_driver registration form
+ * (>=1 native entry present); consumed natively by zephyr_c.
+ * [license: spec-convergence-pl011 GRILL D08 (D03(a) rule)] */
 static const struct amba_id pl011_ids[] = {
 	{
 		.id	= 0x00041011,

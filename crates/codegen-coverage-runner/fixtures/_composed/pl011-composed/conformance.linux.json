@@ -6,5 +6,8 @@
     {"slot": "on_deinit", "row": null}
   ],
   "absent_dispatch_slots": [],
-  "rejected_slots": []
+  "rejected_slots": [],
+  "ignored_match_entries": [
+    {"entry": "devicetree compatible=\"regseq,pl011\"", "reason": "foreign transport: not consumed by the ratified amba_driver registration form; >=1 native entry present", "license": "spec-convergence-pl011 GRILL D08 (D03(a) rule)", "native_on": ["zephyr_c"]}
+  ]
 }

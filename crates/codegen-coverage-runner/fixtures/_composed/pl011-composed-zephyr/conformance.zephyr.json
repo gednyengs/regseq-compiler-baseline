@@ -1,9 +1,0 @@
-{
-  "target": "zephyr_c",
-  "os_version_pin": "v4.4.0 (684c9e8f32e4)",
-  "delivered_slots": [
-    {"slot": "on_init", "row": null}
-  ],
-  "absent_dispatch_slots": [],
-  "rejected_slots": []
-}

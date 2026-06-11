@@ -168,10 +168,14 @@ pub fn west_build_with_workspace(
     )
     .map_err(WestError::Io)?;
     // The A-9 logging pins (the generated TU documents them; the gate's
-    // prj.conf asserts them for the build).
+    // prj.conf asserts them for the build) + the teardown pin
+    // (spec-convergence-pl011 C04: CONFIG_DEVICE_DEINIT_SUPPORT defaults OFF
+    // and Z_DEVICE_OPS silently drops deinit_fn without it,
+    // device.h:1175-1180 — the build would pass and device_deinit() would
+    // return -ENOTSUP at runtime).
     std::fs::write(
         app.join("prj.conf"),
-        "CONFIG_LOG=y\nCONFIG_LOG_MODE_DEFERRED=y\nCONFIG_CBPRINTF_COMPLETE=y\nCONFIG_CBPRINTF_FULL_INTEGRAL=y\n",
+        "CONFIG_LOG=y\nCONFIG_LOG_MODE_DEFERRED=y\nCONFIG_CBPRINTF_COMPLETE=y\nCONFIG_CBPRINTF_FULL_INTEGRAL=y\nCONFIG_DEVICE_DEINIT_SUPPORT=y\n",
     )
     .map_err(WestError::Io)?;
     // The DUT overlay: a status-okay node under /soc (the qemu-virt-a53 soc

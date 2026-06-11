@@ -1,5 +1,6 @@
-//! The zephyr_c first-light snapshot gate (backend-zephyr-c unit, M2/C2):
-//! `pl011-composed-zephyr` lowered by `emit_zephyr_c` to the D07 artifact
+//! The zephyr_c snapshot gate (backend-zephyr-c unit M2/C2; converged by
+//! spec-convergence-pl011): the converged `pl011-composed` under the zephyr
+//! binding, lowered by `emit_zephyr_c` to the D07 artifact
 //! pair — `golden.zephyr.c` + `golden.zephyr.binding.yaml` — byte-locked,
 //! plus the L0 structure suite with NAMED assertions (C01.1) so a
 //! regression is diagnosed, not just byte-diffed.
@@ -32,8 +33,11 @@ fn zephyr_pl011_snapshot_and_l0_structure() {
     let fixtures = manifest::discover(&composed_corpus()).expect("discover composed corpus");
     let fixture = fixtures
         .iter()
-        .find(|f| f.manifest.name == "pl011-composed-zephyr")
-        .expect("pl011-composed-zephyr fixture discovered");
+        .find(|f| f.manifest.name == "pl011-composed")
+        .expect("pl011-composed fixture discovered")
+        .with_binding(manifest::OsBinding::Zephyr)
+        .expect("the converged fixture resolves the zephyr binding (C05)");
+    let fixture = &fixture;
 
     if std::env::var_os("BLESS").is_some() {
         let mut model = match try_bridge_fixture_path(&fixture.input) {
@@ -58,7 +62,7 @@ fn zephyr_pl011_snapshot_and_l0_structure() {
     let result = pipeline::run_zephyr_fixture(fixture);
     assert!(
         result.is_green(),
-        "pl011-composed-zephyr must pass bridge -> emit_zephyr_c -> snapshot: {:?}",
+        "pl011-composed (zephyr binding) must pass bridge -> emit_zephyr_c -> snapshot: {:?}",
         result.verdict
     );
 
@@ -77,6 +81,7 @@ fn zephyr_pl011_snapshot_and_l0_structure() {
     let p_config = pos("struct pl011_config {");
     let p_data = pos("struct pl011_data {");
     let p_init = pos("static int pl011_init(const struct device *dev)");
+    let p_deinit = pos("static int pl011_deinit(const struct device *dev)");
     let p_foreach = pos("DT_INST_FOREACH_STATUS_OKAY(RSEQ_INIT)");
     let p_guard = pos("BUILD_ASSERT(DT_NUM_INST_STATUS_OKAY(DT_DRV_COMPAT) == 1");
     assert!(
@@ -84,7 +89,29 @@ fn zephyr_pl011_snapshot_and_l0_structure() {
         "compat pin, then the log-module block, then plain includes (§1)"
     );
     assert!(p_include < p_config && p_config < p_data && p_data < p_init);
-    assert!(p_init < p_foreach && p_foreach < p_guard);
+    assert!(
+        p_init < p_deinit && p_deinit < p_foreach && p_foreach < p_guard,
+        "init fn -> deinit fn -> instantiation (C04)"
+    );
+
+    // -- the converged-fixture deltas (spec-convergence-pl011): the C04
+    //    deinit artifacts + the C03/A1 audit blocks at the consumed surface.
+    let p_deinit_macro =
+        pos("DEVICE_DT_INST_DEINIT_DEFINE(n, pl011_init, pl011_deinit, NULL,");
+    assert!(
+        !tu.contains("DEVICE_DT_INST_DEFINE(n,"),
+        "the macro is SWAPPED, not duplicated (C04)"
+    );
+    assert!(p_deinit < p_deinit_macro);
+    let p_audit1 = pos("/* RSEQ-IGNORED-MATCH: amba id=0x00041011 mask=0x000fffff");
+    let p_audit2 = pos("/* RSEQ-IGNORED-MATCH: amba id=0x00abc123 mask=0x00ffffff");
+    assert!(
+        p_audit1 < p_audit2 && p_audit2 < p_compat,
+        "both foreign amba rows audited adjacent to the DT_DRV_COMPAT pin \
+         (C03 as amended by A1), in match-set order"
+    );
+    pos("not consumed by the ratified static-devicetree registration form");
+    pos("CONFIG_DEVICE_DEINIT_SUPPORT=y");
 
     // -- per-instance state: MMIO macros FIRST members; the spec driver
     //    embedded in data (A-17).
@@ -172,6 +199,7 @@ fn zephyr_pl011_snapshot_and_l0_structure() {
     pos("LOG_INF(\"pl011 baud divisors: %u %u\"");
     pos("LOG_INF(\"pl011 up\");");
     pos("LOG_ERR(\"pl011 tx busy past spin bound %u\"");
+    pos("LOG_WRN(\"pl011 deinit: masking interrupts\");");
     assert!(
         !tu.contains("[DEBUG]") && !tu.contains("[INFO]") && !tu.contains("\\n\""),
         "no [LEVEL] tags, no trailing newlines in LOG_* formats"

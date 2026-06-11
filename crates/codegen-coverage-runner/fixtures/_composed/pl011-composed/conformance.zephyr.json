@@ -1,0 +1,14 @@
+{
+  "target": "zephyr_c",
+  "os_version_pin": "v4.4.0 (684c9e8f32e4)",
+  "delivered_slots": [
+    {"slot": "on_init", "row": null},
+    {"slot": "on_deinit", "row": "CAP-ZEPHYR-DT-DEINIT-1"}
+  ],
+  "absent_dispatch_slots": [],
+  "rejected_slots": [],
+  "ignored_match_entries": [
+    {"entry": "amba id=0x00041011 mask=0x000fffff", "reason": "foreign transport: not consumed by the ratified static-devicetree registration form; >=1 native entry present", "license": "spec-convergence-pl011 GRILL D08 (D03(a) rule)", "native_on": ["linux_c"]},
+    {"entry": "amba id=0x00abc123 mask=0x00ffffff", "reason": "foreign transport: not consumed by the ratified static-devicetree registration form; >=1 native entry present", "license": "spec-convergence-pl011 GRILL D08 (D03(a) rule)", "native_on": ["linux_c"]}
+  ]
+}

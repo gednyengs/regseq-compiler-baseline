@@ -250,6 +250,13 @@ eth_e1000.c:220-221).
    (uart_pl011.c:9). Whether the model should require a companion
    `Devicetree` entry for Zephyr targets (A-13 recommends the diagnostic) is
    a model-surface decision. **Do not invent a periphid table.**
+   **RESOLVED BY RULE (2026-06-10, spec-convergence-pl011 D08/C06):** the
+   D03(a) mixed-match rule is ratified — nativeness is per the backend's
+   RATIFIED registration form (zephyr_c static-DT ⇒ `Devicetree`); foreign
+   entries (e.g. `Amba`) are ignorable WITH a triple-rendered
+   `RSEQ-IGNORED-MATCH` audit when ≥1 native entry exists; an all-foreign
+   set keeps the A-13 reject naming the fix; no periphid table was invented
+   (never-synthesize).
 
 6. **Teardown carrier — `on_deinit` / postamble / orderly teardown.**
    *(device-lifecycle Q1 ≡ RegseqError ZE-OQ2; composition open list.)* The
@@ -260,6 +267,14 @@ eth_e1000.c:220-221).
    blocking question, and the answer differs per release (also C-3). Neither
    vendored reference defines any teardown — no in-repo witness exists. **Do
    not invent the macro spelling.**
+   **DELIVERED (2026-06-10, spec-convergence-pl011 C04; row
+   CAP-ZEPHYR-DT-DEINIT-1 flipped `Delivered` in place per its GRILL D05):**
+   on the v4.4.0 pin the slot is `DEVICE_DT_INST_DEINIT_DEFINE` (the macro
+   spelling read live, not invented — see the §C verification notes below);
+   authored `on_deinit` lowers to `static int <drv>_deinit(const struct
+   device *dev)` through the same pipeline + nine-row negated-errno adapter
+   as init; unauthored leaves the scaffold byte-identical; the `map_region`
+   unmap mirror is an explicit no-op callout (no unmap exists, §5.2).
 
 7. **Surprise-removal representability.** *(device-lifecycle Q2; composition
    open list.)* No hotplug dispatch exists for DT devices; the surprise
@@ -328,6 +343,9 @@ eth_e1000.c:220-221).
    until the pin is confirmed on the chosen release: all 4.x deinit lowering
    stays **fail-loud** (no `on_deinit` emission), identical to the 3.7
    baseline disposition.
+   **RESOLVED on v4.4.0 (2026-06-10, spec-convergence-pl011 — see the
+   verification notes below).** The lowering shipped; the interim fail-loud
+   sentence above is historical.
 
 4. **PM-device trigger semantics at power-off.** *(device-lifecycle Q3;
    composition open list.)* Which action (`PM_DEVICE_ACTION_TURN_OFF` vs
@@ -413,6 +431,34 @@ and smoke app rely on (GRILL D05/D15; the remaining §C items keep their
   `EIO=5`, `ENOMEM=12`, `EBUSY=16`, `ENODEV=19`, `EINVAL=22`,
   `EOPNOTSUPP=95`, `ETIMEDOUT=116`.
 
+### Verification notes — deinit delivery (2026-06-10, spec-convergence-pl011)
+
+Read live from the same **local v4.4.0 checkout** (tag `v4.4.0`, commit
+`684c9e8f32e4`), for the pins the delivered deinit lowering (C04) and the
+eval teardown legs rely on:
+
+- **C-3/B-6/ZE-OQ2 — VERIFIED on v4.4.0.** `DEVICE_DT_DEINIT_DEFINE` is
+  defined at `include/zephyr/device.h:243` and the instance form
+  `DEVICE_DT_INST_DEINIT_DEFINE` at `device.h:272` (the macro is
+  `DEVICE_DT_DEFINE` plus the one `deinit_fn` argument); the runtime API
+  `device_deinit()` is declared at `device.h:928`. Error-channel semantics
+  (`z_impl_device_deinit`, `kernel/device.c:199-218`): `-EPERM` if not
+  initialized; `-ENOTSUP` if no deinit fn or the Kconfig is off; the
+  driver's negative rc is returned **verbatim** with `initialized` left
+  true on failure; on success `initialized` clears, so
+  `device_is_ready()` flips false — the L2 teardown oracle.
+- **The Kconfig silent-drop hazard (load-bearing).** `device_ops.deinit`
+  exists only under `CONFIG_DEVICE_DEINIT_SUPPORT` (`device.h:504-507`,
+  default **off**, `kernel/Kconfig.device:36`), and `Z_DEVICE_OPS` SILENTLY
+  drops `deinit_fn` under `IF_ENABLED` when off (`device.h:1175-1180`): the
+  build passes and `device_deinit()` returns `-ENOTSUP` at runtime. The
+  compiler-staged L1 gate app prj.conf therefore pins
+  `CONFIG_DEVICE_DEINIT_SUPPORT=y` (`zephyr_build.rs`), and the generated
+  TU header documents the row (A-9 pattern); the eval campaign app prj.conf
+  gains the same pin with the L2 teardown leg (spec-convergence-pl011 R07's
+  eval half — until that lands, a campaign image answers `device_deinit()`
+  with `-ENOTSUP`, the designed loud catch).
+
 ---
 
 ## D. Completeness ledger
@@ -425,21 +471,23 @@ specification; all five are specified to the limit of the as-built reference
 + vendored witnesses, with the gaps carried as explicit dispositions rather
 than failures.
 
-**D.2 Input-shape level — the rejection ledger.** The input contract admits
-shapes for which this spec deliberately has **no Zephyr lowering contract**.
-For every such shape the interim normative behavior is **fail-loud rejection
-at emit time — never silent emission, never silent omission** (the
-no-silent-truncation discipline; note this is a deliberate hardening over
-generic_c where generic_c itself carries the shape unvalidated, e.g.
-`ClassTag`):
+**D.2 Input-shape level — the disposition ledger.** The input contract
+admits shapes whose Zephyr disposition this ledger records explicitly. The
+DEFAULT for a shape with **no Zephyr lowering contract** is **fail-loud
+rejection at emit time — never silent emission, never silent omission**
+(the no-silent-truncation discipline; a deliberate hardening over generic_c,
+which carries some shapes unvalidated, e.g. `ClassTag`). Rows marked
+DELIVERED / auditable-non-emission / audited record the ratified departures
+from that default (each citing its licensing unit); fail-loud applies to
+every row that still says reject:
 
 | legal input shape (contract cite) | gap | interim behavior |
 |---|---|---|
 | `write_config` widths 1/2 (word-RMW) and width 8, both ops (`config_access_width` admits {1,2,4,8}, generic_c `body_emit.rs:2399-2414`) | B-3 | reject at emit (bus-observable RMW / two-word split undesigned; width-1/2 **reads** ARE specified, §B.4) |
-| authored `on_deinit` under `TargetOs::Zephyr` | B-6 / C-3 | reject at emit on the 3.7 baseline (no teardown carrier; 4.x fork unconfirmed) |
+| authored `on_deinit` under `TargetOs::Zephyr` | B-6 / C-3 | **DELIVERED by spec-convergence-pl011 (2026-06-10, C04; row CAP-ZEPHYR-DT-DEINIT-1 `Delivered`)**: lowers to the deinit fn + `DEVICE_DT_INST_DEINIT_DEFINE` swap on the v4.4.0 pin; unauthored stays byte-identical |
 | authored `on_surprise_remove` under `TargetOs::Zephyr` | B-7 | **auditable non-emission** per capability row CAP-ZEPHYR-DT-SURPRISE-1 (`AbsentDispatch`, os-capability-disposition rule 2026-06-10): one `RSEQ-ABSENT-SLOT` audit block + conformance-report row + log line, body still fully checked; anything outside the ratified row keeps fail-loud rejection |
 | non-Generic `ClassTag` | B-9 | reject at emit (A-16; silent `NULL` api would hide the declared class) |
-| `MatchEntry::Amba`-only match set | B-5 | reject at emit naming the fix (A-13: add a companion `Devicetree` entry) |
+| `MatchEntry::Amba`-only match set | B-5 | reject at emit naming the fix (A-13: add a companion `Devicetree` entry) — RETAINED as the all-foreign arm of the D03(a) rule (spec-convergence-pl011 D08/C06); a MIXED set (foreign entries alongside ≥1 native `Devicetree` entry) now EMITS with each foreign entry triple-render audited (`RSEQ-IGNORED-MATCH` block at the `DT_DRV_COMPAT` pin + report `ignored_match_entries` + line section), never silently dropped |
 | `UserDataField` kinds beyond the zero-image guarantee | B-8 | reject at emit (only the inherited all-zero-image shapes pass through) |
 | >1 resolved region per driver | B-10 | already rejected (`max_resolved_bindings_per_driver`, `body_emit.rs:5240-5243`) — kept |
 | >1 status-okay DT instance while the TU-static base carrier is in effect | A-2 | rejected at **C compile time** via the emitted `BUILD_ASSERT` guard (per-construct §A.2.2) |
@@ -453,9 +501,9 @@ Per-construct status:
 |---|---|---|
 | register-access | **fully specified** — five ops, map_region (both paths), offset recovery, descriptors | `poll_until` (B-1, pre-existing recognized-not-lowered); width-8 arch pin (C-2); OQ-4 scope close-out (C-8) |
 | bus-resource-management | **specified for the exercised shapes** — selector, four managed ops (claim = called-out elision), config width-4 + width-1/2 reads, carriers; Zephyr-over-PCI resolved affirmatively; sub-word/64-bit config **writes** are D.2 rejections | `BarType::Io` (B-2); config width-8/sub-word RMW (B-3); BRM-001 diagnostic (B-4); `pcie.h` pins incl. `pcie_get_mbar` (C-1) |
-| device-lifecycle | **bring-up half fully specified** (register/match/create/associate/preamble/on_init/init-fail); shutdown = **PM slot mapped, trigger contract unresolved** (C-4/A-18); **teardown half explicitly not lowered on the 3.7 baseline** (a cited property of the device model, not a spec failure) | teardown carrier (B-6), surprise representability (B-7), `MatchEntry::Amba` (B-5), `UserDataField` (B-8), `ClassTag` (B-9), multi-region (B-10) |
+| device-lifecycle | **bring-up half fully specified** (register/match/create/associate/preamble/on_init/init-fail); **teardown half DELIVERED on the v4.4.0 pin** (spec-convergence-pl011 C04: deinit fn + macro swap; B-6 closed); shutdown = **PM slot mapped, trigger contract unresolved** (C-4/A-18) | surprise representability (B-7, resolved-by-row), `MatchEntry::Amba` (B-5, resolved-by-rule D08), `UserDataField` (B-8), `ClassTag` (B-9), multi-region (B-10) |
 | diagnostics-logging | **fully specified** — four levels, template reassembly, numeric + `&str` arguments, TU scaffold | non-static `&str` divergences are ratify-able policy (A-5/A-6), not gaps; Kconfig pins (A-9/C) |
-| RegseqError | **fully specified** — marker, carrier, nine-row table (symbol-identical, negated), adapter fusion, two-channel rule | deinit return channel (B-6/C-3); rc observability (A-11); `uint8_t` clamp verification (C-5) |
+| RegseqError | **fully specified** — marker, carrier, nine-row table (symbol-identical, negated), adapter fusion, two-channel rule | deinit return channel CLOSED (B-6/C-3 delivered: rc returned verbatim, kernel/device.c:199); rc observability (A-11); `uint8_t` clamp verified (C-5) |
 
 **Cross-construct invariants re-verified end-to-end** (the seven rules,
 [integration §6](./zephyr-integration-probe-path.md)): canonical preamble

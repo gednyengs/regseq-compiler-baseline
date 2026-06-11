@@ -5,23 +5,51 @@
 //! `ZephyrEmit`/`LinuxEmit`); the runner owns the serialized shape. The
 //! rendering is byte-deterministic by construction: fixed field order
 //! (target, os_version_pin, delivered_slots, absent_dispatch_slots,
-//! rejected_slots), slots in the struct's declaration order, no wall-clock.
-//! Empty lists render `[]`; a `citation` key appears only on entries that
-//! carry one (the C05 example shape). The committed
-//! `conformance.<os>.json` golden beside each OS-target fixture is this
-//! output verbatim.
+//! rejected_slots, ignored_match_entries), slots in the struct's declaration
+//! order, no wall-clock. Empty lists render `[]`; a `citation` key appears
+//! only on entries that carry one (the C05 example shape); the
+//! `ignored_match_entries` key is serialized UNCONDITIONALLY
+//! (spec-convergence-pl011 C02). The committed `conformance.<os>.json`
+//! golden beside each OS-target fixture is this output verbatim.
 
 use regseq_backends::capability::{ConformanceReport, SlotEntry};
+use regseq_backends::MatchAudit;
 
 /// Render the C05 JSON, byte-stable across runs.
 pub fn render_json(report: &ConformanceReport) -> String {
     format!(
-        "{{\n  \"target\": {},\n  \"os_version_pin\": {},\n{},\n{},\n{}\n}}\n",
+        "{{\n  \"target\": {},\n  \"os_version_pin\": {},\n{},\n{},\n{},\n{}\n}}\n",
         json_str(report.target),
         json_str(report.os_version_pin),
         render_list("delivered_slots", &report.delivered_slots),
         render_list("absent_dispatch_slots", &report.absent_dispatch_slots),
         render_list("rejected_slots", &report.rejected_slots),
+        render_audit_list(&report.ignored_match_entries),
+    )
+}
+
+/// The `ignored_match_entries` section (spec-convergence-pl011 C02):
+/// serialized unconditionally, every field of each [`MatchAudit`] rendered.
+fn render_audit_list(entries: &[MatchAudit]) -> String {
+    if entries.is_empty() {
+        return "  \"ignored_match_entries\": []".to_string();
+    }
+    let items: Vec<String> = entries
+        .iter()
+        .map(|a| {
+            let native_on: Vec<String> = a.native_on.iter().map(|b| json_str(b)).collect();
+            format!(
+                "    {{\"entry\": {}, \"reason\": {}, \"license\": {}, \"native_on\": [{}]}}",
+                json_str(&a.entry),
+                json_str(&a.reason),
+                json_str(a.license),
+                native_on.join(", ")
+            )
+        })
+        .collect();
+    format!(
+        "  \"ignored_match_entries\": [\n{}\n  ]",
+        items.join(",\n")
     )
 }
 
@@ -90,12 +118,14 @@ mod tests {
                 citation: Some("ratified citation \"quoted\"".into()),
             }],
             rejected_slots: vec![],
+            ignored_match_entries: vec![],
         }
     }
 
     /// I05: the renderer is byte-deterministic (render twice, compare) and
     /// the shape matches the C05 example: fixed field order, null rows,
-    /// citation key only where carried, `[]` for empty lists.
+    /// citation key only where carried, `[]` for empty lists (including the
+    /// unconditional `ignored_match_entries` key, spec-convergence-pl011 C02).
     #[test]
     fn render_is_deterministic_and_matches_the_c05_shape() {
         let report = sample();
@@ -104,7 +134,28 @@ mod tests {
         assert_eq!(a, b, "byte-stable across runs");
         assert_eq!(
             a,
-            "{\n  \"target\": \"zephyr_c\",\n  \"os_version_pin\": \"v4.4.0 (684c9e8f32e4)\",\n  \"delivered_slots\": [\n    {\"slot\": \"on_init\", \"row\": null}\n  ],\n  \"absent_dispatch_slots\": [\n    {\"slot\": \"on_surprise_remove\", \"row\": \"CAP-ZEPHYR-DT-SURPRISE-1\", \"citation\": \"ratified citation \\\"quoted\\\"\"}\n  ],\n  \"rejected_slots\": []\n}\n"
+            "{\n  \"target\": \"zephyr_c\",\n  \"os_version_pin\": \"v4.4.0 (684c9e8f32e4)\",\n  \"delivered_slots\": [\n    {\"slot\": \"on_init\", \"row\": null}\n  ],\n  \"absent_dispatch_slots\": [\n    {\"slot\": \"on_surprise_remove\", \"row\": \"CAP-ZEPHYR-DT-SURPRISE-1\", \"citation\": \"ratified citation \\\"quoted\\\"\"}\n  ],\n  \"rejected_slots\": [],\n  \"ignored_match_entries\": []\n}\n"
+        );
+    }
+
+    /// C02 (spec-convergence-pl011): a carried ignored entry serializes all
+    /// four MatchAudit fields, byte-stable.
+    #[test]
+    fn render_serializes_ignored_match_entries() {
+        let mut report = sample();
+        report.ignored_match_entries = vec![MatchAudit {
+            entry: "devicetree compatible=\"regseq,pl011\"".into(),
+            reason: regseq_backends::match_audit::reason_for("amba_driver"),
+            license: regseq_backends::match_audit::MATCH_AUDIT_LICENSE,
+            native_on: &["zephyr_c"],
+        }];
+        let a = render_json(&report);
+        assert_eq!(a, render_json(&report), "byte-stable across runs");
+        assert!(
+            a.contains(
+                "  \"ignored_match_entries\": [\n    {\"entry\": \"devicetree compatible=\\\"regseq,pl011\\\"\", \"reason\": \"foreign transport: not consumed by the ratified amba_driver registration form; >=1 native entry present\", \"license\": \"spec-convergence-pl011 GRILL D08 (D03(a) rule)\", \"native_on\": [\"zephyr_c\"]}\n  ]\n}\n"
+            ),
+            "{a}"
         );
     }
 }

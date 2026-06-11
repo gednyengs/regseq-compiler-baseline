@@ -77,7 +77,9 @@ fn generated_drivers_kbuild_against_the_campaign_tree() {
     // (C01.2). The composed bridge runs in this same process AFTER
     // minimal's — no snapshot comparison happens here, so interner history
     // is irrelevant.
-    let composed = fixture("fixtures/_composed", "pl011-composed");
+    let composed = fixture("fixtures/_composed", "pl011-composed")
+        .with_binding(manifest::OsBinding::Linux)
+        .expect("the converged fixture resolves the linux binding (C05)");
     gate("pl011-composed", &emit(&composed));
 
     // backend-linux-c-e1000 T10: both generated e1000 drivers — the composed

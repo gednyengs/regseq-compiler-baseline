@@ -39,6 +39,17 @@ narrows the rejection space by exactly one mechanism.
 
 "Silently different behavioral envelopes" is forbidden phrasing.
 
+> **Recorded note (2026-06-10, spec-convergence-pl011 GRILL D01/D08 + A6).**
+> The conformance REPORT artifact gained a non-slot section:
+> `ignored_match_entries` enumerates recognized foreign-transport match
+> entries a backend did not consume under the D03(a) mixed-match rule, each
+> carrying the fixed registration-form reason, the GRILL-decision license
+> const, and the consumed-natively backend list. This is an ADDITIONAL
+> enumeration consistent with the thesis's "differences are explicit, cited,
+> and machine-checked — never silent"; the slot-conformance claim above and
+> the capability table's lifecycle-slot domain are unchanged (the audit cites
+> the GRILL decision, never a capability row).
+
 ## The nine amendments (authoritative text, as ratified 2026-06-10)
 
 The texts below are the GRILL C06 record verbatim (`C02`/`C04`/`C05` are
@@ -168,7 +179,7 @@ none for it.
 |---|---|
 | `callback-requirement-marker` | Amendment-5 delivery: the DSL `required`/`best_effort` callback marker (model field + macro + bridge). Until it ships, every authored callback is implicitly `best_effort`. |
 | `backend/zephyr-c-e1000` | Amendment-8 delivery: the eval-side L3 trace-whitelist entries licensing the absent slot's missing oracle markers, each citing CAP-ZEPHYR-DT-SURPRISE-1 + its citation. The unit consumes that row for the one-spec-three-backends E1000 emit (the zephyr PCIe scaffold lifts the `UnsupportedInUnit` gate there). |
-| `spec-convergence-pl011` | Delivers `on_deinit` on Zephyr (row CAP-ZEPHYR-DT-DEINIT-1, `DesignedScheduled` → delivered; the row is re-ratified to `Delivered` with `N+1` if substance changes). |
+| `spec-convergence-pl011` | **DELIVERED (2026-06-10).** `on_deinit` on Zephyr shipped (row CAP-ZEPHYR-DT-DEINIT-1 flipped `DesignedScheduled` → `Delivered` IN PLACE, no `N+1` — the unit delivered exactly what the row scheduled, as pre-registered; citation updated to the live v4.4.0 anchors). |
 
 ## Delivered mechanism — quick index
 

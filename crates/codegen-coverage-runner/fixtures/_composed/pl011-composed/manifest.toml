@@ -1,16 +1,19 @@
 name   = "pl011-composed"
 kind   = "rust"
-# The composed PL011 proof fixture (backend-linux-c unit, GRILL D06/D08 C2):
-# the five refined construct surfaces — register-access, BRM (AMBA),
-# device-lifecycle, diagnostics-logging, RegseqError — in one spec. The
-# `orderly` scenario lowers to register (match=amba:0x41011/0xfffff) → create
-# → associate → resource preamble → bus acquisition over the platform.toml
-# binding (base 0x09000000, size 0x1000; QEMU virt PL011) → `LC call on_init`
-# (the datasheet §3.3.8 bring-up) → `LC call on_deinit` → teardown. Run by the
-# dedicated sole-binary `pl011_composed_e2e` ONLY (clean-process interner
-# isolation, like `_bus`/`_lifecycle`): its blessed `expected.stdout` is the
-# canonical PL011 oracle trace for the L3 trace differential, and its bound
-# model is the linux_c first-light input.
+# THE CONVERGED PL011 proof fixture (spec-convergence-pl011 C05): ONE
+# `input.rs` consumed by BOTH OS backends. The five refined construct
+# surfaces — register-access, BRM (AMBA), device-lifecycle,
+# diagnostics-logging, RegseqError — in one spec, with the D09 converged
+# match set ([amba 0x41011, amba 0xabc123, dt "regseq,pl011"]) and a plain
+# shared `on_deinit`. Per-OS L2 bindings by suffix (platform.linux.toml base
+# 0x09000000 / platform.zephyr.toml base 0x09040000) selected explicitly via
+# the runner's OsBinding; per-OS blessed artifacts by suffix. TWO sole
+# binaries consume it (clean-process interner isolation): `pl011_composed_e2e`
+# (linux binding: golden.c/expected.stdout generic_c oracle pair — the
+# canonical linux L3 trace) and `pl011_composed_zephyr_e2e` (zephyr binding:
+# golden.zephyr-oracle.c/expected.zephyr.stdout — the canonical zephyr L3
+# trace, teardown events included). The OS-backend snapshots ride
+# `linux_pl011_e2e` / `zephyr_pl011_e2e`.
 covers = []
 lifecycle_scenario = "orderly"
 expect = "pass"
