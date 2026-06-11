@@ -947,7 +947,7 @@ impl LowerCx<'_> {
         let recv = args
             .first()
             .ok_or_else(|| EmitError::Unsupported("mmio call with no receiver".into()))?;
-        let (base, offset, width) = self.recover_register(body, recv)?;
+        let (base, offset, runtime, width) = self.recover_register(body, recv)?;
         self.extra_includes.insert("<zephyr/sys/sys_io.h>");
         let (read_fn, write_fn, cast) = match width {
             1 => ("sys_read8", "sys_write8", "uint8_t"),
@@ -965,11 +965,17 @@ impl LowerCx<'_> {
                 )))
             }
         };
-        let addr = if offset == 0 {
+        let mut addr = if offset == 0 {
             base.clone()
         } else {
             format!("{base} + {}", self.offset_token(offset))
         };
+        // Runtime register-array index terms (`base + i*stride` — the
+        // certified reaching-def mechanism shared with the sibling
+        // backend's recovery, F-1).
+        for (idx, stride) in &runtime {
+            addr = format!("{addr} + ({idx}) * {stride}");
+        }
         // Field/FieldValue descriptors: a runtime place renders as member
         // reads; a const-propagated aggregate const-folds to literals.
         let stmt = match op {
@@ -1028,7 +1034,8 @@ impl LowerCx<'_> {
         }
     }
 
-    /// Resolve an mmio receiver to `(base expr, byte offset, access width)`.
+    /// Resolve an mmio receiver to `(base expr, byte offset, runtime
+    /// array-index terms, access width)`.
     ///
     /// The receiver borrows the register wrapper through the chain
     /// `self.<resource>.inner.<reg>` (`Mmio<T>: Deref` inlined by rustc).
@@ -1036,12 +1043,14 @@ impl LowerCx<'_> {
     /// A-10 gate fires here), but the rendered base is the TU-static
     /// `mm_reg_t` symbol (A-2) — the spec-view field is dead weight in the
     /// zero image; the kernel's mapped base flows through
-    /// `DEVICE_MMIO_MAP`/`DEVICE_MMIO_GET` at init.
+    /// `DEVICE_MMIO_MAP`/`DEVICE_MMIO_GET` at init (platform arm) or the
+    /// C01 `device_map` (PCIe arm).
+    #[allow(clippy::type_complexity)]
     fn recover_register(
         &mut self,
         body: &regseq_model::Body,
         recv: &Operand,
-    ) -> Result<(String, u64, u64), EmitError> {
+    ) -> Result<(String, u64, Vec<(String, u64)>, u64), EmitError> {
         let mut src = self.resolve_receiver_src(body, recv, 0)?;
         // Normalize through intermediate borrow temps: while the root local
         // is not the driver borrow, splice in its unique `Ref` definition
@@ -1187,8 +1196,14 @@ impl LowerCx<'_> {
             }
         };
         let base = self.driver.base_symbol.clone();
-        // The block-relative offset (Mmio.inner + register fields).
+        // The block-relative offset (Mmio.inner + register fields), plus the
+        // runtime index terms of register-array accesses (the donor
+        // `mta[m]`/`ra[r].ral` patterns): each `Index` contributes
+        // `(<index local>) * <element stride>` — the offset is recovered as
+        // `base + i*stride`, not a layout constant (the certified
+        // reaching-def mechanism, F-1).
         let mut offset: u64 = 0;
+        let mut runtime: Vec<(String, u64)> = Vec::new();
         for elem in elems {
             match elem {
                 PlaceElem::Field(idx, field_ty) => {
@@ -1211,6 +1226,17 @@ impl LowerCx<'_> {
                     offset += f.offset;
                     ty = f.ty;
                 }
+                PlaceElem::Index(idx_local) => {
+                    let Ty::Array(elem_ty, _) = &self.model.types[ty] else {
+                        return Err(EmitError::Unsupported(
+                            "mmio index projection into a non-array register field".into(),
+                        ));
+                    };
+                    let elem_ty = *elem_ty;
+                    let stride = self.model.size_align_of(elem_ty).size;
+                    runtime.push((local_name(self.model, body, *idx_local), stride));
+                    ty = elem_ty;
+                }
                 other => {
                     return Err(EmitError::Unsupported(format!(
                         "mmio receiver projection {other:?} (first-light subset)"
@@ -1221,7 +1247,7 @@ impl LowerCx<'_> {
         let width = types::layout_of(self.model, ty)
             .map(|l| l.size)
             .ok_or_else(|| EmitError::Unsupported("mmio register wrapper has no layout".into()))?;
-        Ok((base, offset, width))
+        Ok((base, offset, runtime, width))
     }
 
     /// Chase a bare-local receiver to the place it uniquely borrows
