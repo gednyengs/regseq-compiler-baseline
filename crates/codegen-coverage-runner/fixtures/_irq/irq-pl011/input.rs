@@ -23,11 +23,15 @@ const RXIS: u32 = 1 << 4;
 
 // AMBA-matched PL011 with the bus-managed MMIO region joined to
 // `[mmio.regs]` and the interrupt line joined to `[interrupt.uart_irq]`
-// (QEMU virt: SPI 33 → INTID 37).
+// (QEMU virt: SPI 33 → INTID 37). The CONVERGED match set (the
+// spec-convergence D09 order — amba rows first, DT last): the amba row is
+// linux_c's native form; the devicetree entry is zephyr_c's. Each backend
+// consumes its native entries and audits the foreign ones (C06/D08).
 #[rseq::driver(name = "pl011irq", bus = "amba",
     amba = [
     { id = 0x00041011, mask = 0x000fffff },
-    ]
+    ],
+    compatible = ["regseq,pl011irq"]
 )]
 pub struct Pl011Irq {
     #[rseq::mmio(id = "regs")]
