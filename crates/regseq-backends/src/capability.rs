@@ -248,6 +248,245 @@ impl ConformanceReport {
 mod tests {
     use super::*;
 
+    // -- the C08 audit suite: doc-mirror sync (D03) ---------------------------
+
+    /// The doc-mirror spelling of a registration form.
+    fn doc_token_registration(form: RegistrationForm) -> &'static str {
+        match form {
+            RegistrationForm::StaticDevicetree => "static-devicetree",
+            RegistrationForm::PciDynamic => "pci-dynamic",
+        }
+    }
+
+    /// The doc-mirror spelling of a disposition.
+    fn doc_token_disposition(d: Disposition) -> &'static str {
+        match d {
+            Disposition::Delivered => "Delivered",
+            Disposition::AbsentDispatch => "AbsentDispatch",
+            Disposition::DesignedScheduled => "DesignedScheduled",
+            Disposition::NeedsNewSurface => "NeedsNewSurface",
+            Disposition::RejectedUnsupported => "RejectedUnsupported",
+        }
+    }
+
+    /// The canonical mirror line for a row (one row per line, fixed
+    /// columns — kept machine-trivial like the Doc-1 matrix).
+    fn doc_line(row: &CapabilityRow) -> String {
+        format!(
+            "| {} | {} | {} | {} | {} | {} | {} | {} |",
+            row.id,
+            row.target_os.token(),
+            row.os_version_pin,
+            row.bus_family,
+            doc_token_registration(row.registration_form),
+            row.slot.model_name(),
+            doc_token_disposition(row.disposition),
+            row.citation
+        )
+    }
+
+    /// The canonical NEVER_ABSENT mirror line.
+    fn never_absent_line() -> String {
+        format!(
+            "NEVER_ABSENT: {}",
+            NEVER_ABSENT
+                .iter()
+                .map(|s| s.model_name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+
+    /// Code↔doc mirror sync (D03): every code row's (ID, key fields,
+    /// disposition, pin, citation) verbatim in the doc; no doc row without
+    /// a code row; NEVER_ABSENT mirrored. `Err` names the FIRST diverging
+    /// field (the identity.rs `first_divergence` discipline).
+    fn sync_check(doc: &str) -> Result<(), String> {
+        let mut doc_rows: Vec<Vec<String>> = Vec::new();
+        for line in doc.lines() {
+            let line = line.trim();
+            if !line.starts_with('|') {
+                continue;
+            }
+            let cells: Vec<String> = line
+                .trim_matches('|')
+                .split('|')
+                .map(|c| c.trim().to_string())
+                .collect();
+            if cells.first().is_some_and(|c| c.starts_with("CAP-")) {
+                doc_rows.push(cells);
+            }
+        }
+        for row in CAPABILITY_TABLE {
+            let doc_row = doc_rows
+                .iter()
+                .find(|c| c[0] == row.id)
+                .ok_or_else(|| format!("row `{}`: missing from the doc mirror", row.id))?;
+            if doc_row.len() != 8 {
+                return Err(format!(
+                    "row `{}`: doc row has {} cells, expected 8 (id, target os, pin, bus, \
+                     registration, slot, disposition, citation)",
+                    row.id,
+                    doc_row.len()
+                ));
+            }
+            let fields: [(&str, &str, &str); 7] = [
+                ("target_os", row.target_os.token(), &doc_row[1]),
+                ("os_version_pin", row.os_version_pin, &doc_row[2]),
+                ("bus_family", row.bus_family, &doc_row[3]),
+                (
+                    "registration_form",
+                    doc_token_registration(row.registration_form),
+                    &doc_row[4],
+                ),
+                ("slot", row.slot.model_name(), &doc_row[5]),
+                (
+                    "disposition",
+                    doc_token_disposition(row.disposition),
+                    &doc_row[6],
+                ),
+                ("citation", row.citation, &doc_row[7]),
+            ];
+            for (name, code, doc_v) in fields {
+                if code != doc_v {
+                    return Err(format!(
+                        "row `{}`: field `{name}` diverges — code: `{code}` / doc: `{doc_v}`",
+                        row.id
+                    ));
+                }
+            }
+        }
+        for cells in &doc_rows {
+            if !CAPABILITY_TABLE.iter().any(|r| r.id == cells[0]) {
+                return Err(format!(
+                    "doc row `{}` has no code row (the table is append-only through \
+                     ratification, never doc-first)",
+                    cells[0]
+                ));
+            }
+        }
+        let na = never_absent_line();
+        if !doc.contains(&na) {
+            return Err(format!("doc mirror missing the `{na}` line"));
+        }
+        Ok(())
+    }
+
+    /// Every Zephyr AbsentDispatch/DesignedScheduled row whose pin is not
+    /// `pin` — the amendment-9 staleness detector, naming each stale row.
+    fn stale_zephyr_rows<'a>(
+        table: impl Iterator<Item = &'a CapabilityRow>,
+        pin: &str,
+    ) -> Vec<&'a str> {
+        table
+            .filter(|r| {
+                r.target_os == TargetOs::Zephyr
+                    && matches!(
+                        r.disposition,
+                        Disposition::AbsentDispatch | Disposition::DesignedScheduled
+                    )
+                    && r.os_version_pin != pin
+            })
+            .map(|r| r.id)
+            .collect()
+    }
+
+    #[test]
+    fn capability_table_matches_ratified_doc() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/discussions/os-capability-disposition/capability-table.md");
+        let doc = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read the ratified mirror {}: {e}", path.display()));
+        if let Err(msg) = sync_check(&doc) {
+            panic!("capability table / doc mirror out of sync — {msg}");
+        }
+    }
+
+    #[test]
+    fn capability_doc_sync_names_the_first_diverging_field() {
+        // A doc whose surprise row carries a stale pin: the failure must
+        // name `os_version_pin` (the first diverging field), not a generic
+        // mismatch.
+        let tampered = CapabilityRow {
+            os_version_pin: "v4.3.0 (0000000000ab)",
+            ..clone_row(&CAP_ZEPHYR_DT_SURPRISE_1)
+        };
+        let mut doc = String::new();
+        doc.push_str(&doc_line(&tampered));
+        doc.push('\n');
+        for row in &CAPABILITY_TABLE[1..] {
+            doc.push_str(&doc_line(row));
+            doc.push('\n');
+        }
+        doc.push_str(&never_absent_line());
+        doc.push('\n');
+        let err = sync_check(&doc).unwrap_err();
+        assert!(err.contains("field `os_version_pin`"), "{err}");
+        assert!(err.contains("CAP-ZEPHYR-DT-SURPRISE-1"), "{err}");
+
+        // A doc row with no code row fails naming the orphan.
+        let mut doc = full_doc();
+        doc.push_str("| CAP-LINUX-PCI-INIT-9 | linux | v6.6 | pci | pci-dynamic | on_init | Delivered | bogus |\n");
+        let err = sync_check(&doc).unwrap_err();
+        assert!(err.contains("CAP-LINUX-PCI-INIT-9"), "{err}");
+
+        // A missing code row fails naming it.
+        let doc = full_doc().replace(&doc_line(&CAP_ZEPHYR_DT_DEINIT_1), "");
+        let err = sync_check(&doc).unwrap_err();
+        assert!(
+            err.contains("CAP-ZEPHYR-DT-DEINIT-1") && err.contains("missing"),
+            "{err}"
+        );
+    }
+
+    /// A field-for-field copy (CapabilityRow is deliberately not Clone:
+    /// rows exist as ratified consts, never constructed downstream).
+    fn clone_row(r: &CapabilityRow) -> CapabilityRow {
+        CapabilityRow {
+            id: r.id,
+            target_os: r.target_os,
+            os_version_pin: r.os_version_pin,
+            bus_family: r.bus_family,
+            registration_form: r.registration_form,
+            slot: r.slot,
+            disposition: r.disposition,
+            citation: r.citation,
+        }
+    }
+
+    /// The fully-canonical in-memory mirror (rows + NEVER_ABSENT).
+    fn full_doc() -> String {
+        let mut doc = String::new();
+        for row in CAPABILITY_TABLE {
+            doc.push_str(&doc_line(row));
+            doc.push('\n');
+        }
+        doc.push_str(&never_absent_line());
+        doc.push('\n');
+        doc
+    }
+
+    #[test]
+    fn absent_dispatch_rows_match_current_os_pin() {
+        // R08 / amendment 9: a re-pin (ZEPHYR_PIN edit) without per-row
+        // re-review fails NAMING each stale row.
+        let stale = stale_zephyr_rows(CAPABILITY_TABLE.iter().copied(), ZEPHYR_PIN);
+        assert!(
+            stale.is_empty(),
+            "zephyr rows pinned to a superseded version — re-verify each on the current \
+             ZEPHYR_PIN and update its pin+citation (amendment 9): {stale:?}"
+        );
+        // The detector names every stale row (witnessed on a synthetic
+        // stale table).
+        let stale_row = CapabilityRow {
+            os_version_pin: "v4.3.0 (0000000000ab)",
+            ..clone_row(&CAP_ZEPHYR_DT_SURPRISE_1)
+        };
+        let table = [&stale_row, &CAP_ZEPHYR_DT_SHUTDOWN_1];
+        let stale = stale_zephyr_rows(table.into_iter(), ZEPHYR_PIN);
+        assert_eq!(stale, vec!["CAP-ZEPHYR-DT-SURPRISE-1"]);
+    }
+
     /// C02 grammar + D02 key uniqueness, and the ID segments must agree
     /// with the row's own key fields (IDs are self-describing in
     /// diagnostics and C comments, D04).
