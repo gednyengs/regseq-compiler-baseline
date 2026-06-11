@@ -115,9 +115,16 @@ pub const CAP_ZEPHYR_DT_SURPRISE_1: CapabilityRow = CapabilityRow {
     registration_form: RegistrationForm::StaticDevicetree,
     slot: LifecycleSlot::OnSurpriseRemove,
     disposition: Disposition::AbsentDispatch,
-    citation: "Zephyr v4.4.0 (684c9e8f32e4) static DT device model: DEVICE_DT_INST_DEFINE \
-               instances are build-time-fixed; no hot-remove dispatch path exists (B-7; A-12) \
-               [provisional anchors; verify: T02]",
+    citation: "Zephyr v4.4.0 (684c9e8f32e4) static DT device model, read live in the \
+               eval-workspace checkout 2026-06-10 (os-capability-disposition T02): \
+               DEVICE_DT_INST_DEFINE (include/zephyr/device.h:283) expands through \
+               Z_DEVICE_DEFINE (device.h:1317) to Z_DEVICE_BASE_DEFINE (device.h:1255), a \
+               const struct device placed in a link-time iterable section \
+               (STRUCT_SECTION_ITERABLE_NAMED_ALTERNATE, device.h:1259) — instances are \
+               build-time-fixed; the runtime device API carries init/deinit only \
+               (device_init device.h:906, device_deinit device.h:928) and device.h names no \
+               hot-remove/unplug dispatch API (named-API absence). No dispatch path exists \
+               for surprise removal (B-7; A-12)",
 };
 
 /// Zephyr `on_system_shutdown`: witnessed/designed, scheduled (C03 row 2).
@@ -152,12 +159,14 @@ pub const CAP_ZEPHYR_DT_DEINIT_1: CapabilityRow = CapabilityRow {
 pub const CAP_LINUX_PCI_SURPRISE_1: CapabilityRow = CapabilityRow {
     id: "CAP-LINUX-PCI-SURPRISE-1",
     target_os: TargetOs::Linux,
-    os_version_pin: "v6.6 [provisional; verify: T02]",
+    os_version_pin: "v6.6",
     bus_family: "pci",
     registration_form: RegistrationForm::PciDynamic,
     slot: LifecycleSlot::OnSurpriseRemove,
     disposition: Disposition::Delivered,
-    citation: "present-predicate dispatch in `.remove`, e1000-composed/golden.linux.c:370",
+    citation: "present-predicate dispatch (pci_device_is_present) in `.remove`, \
+               e1000-composed/golden.linux.c:370; v6.6 is the linux-backend docs' \
+               verification pin (linux-open-questions.md, git.kernel.org ?h=v6.6 anchors)",
 };
 
 /// Every ratified row, in table order (C03).
