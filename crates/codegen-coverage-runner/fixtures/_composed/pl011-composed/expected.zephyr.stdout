@@ -1,4 +1,4 @@
-LC register pl011 match=dt:regseq,pl011
+LC register pl011 match=amba:0x41011/0xfffff
 BUS register_driver path=amba binding=bound
 LC create
 LC associate
@@ -23,4 +23,8 @@ R32 @0x9040030 = 0x00000301
 [INFO] pl011 up
 LC teardown present=1
 LC call on_deinit
+[WARN] pl011 deinit: masking interrupts
+W32 @0x9040038 = 0x00000000
+W32 @0x9040030 = 0x00000000
+W32 @0x9040044 = 0x000007ff
 LC postamble regs

@@ -266,8 +266,6 @@ struct input_Pl011Composed;
 struct tuple_a8c7f832281a39c5;
 struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486;
 struct input_RegseqError;
-struct rust_slice_input_regseq_log_intrinsics_LogArg;
-struct input_regseq_log_intrinsics_LogArg;
 struct input_Field__12f6da63eb7da4bbe47ece8c97d11228;
 struct input_Field__65daba9b2aba7b1866e3e9b4c1c17494;
 struct core_marker_PhantomData__cb99244166901638c2061e4a3497818;
@@ -464,157 +462,6 @@ _Static_assert(sizeof(struct core_result_Result__a96be460e4ad8f92502af3ac2c2f648
 _Static_assert(_Alignof(struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486) == 1, "core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 align");
 _Static_assert(offsetof(struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486, _0) == 0, "core_result_Result__a96be460e4ad8f92502af3ac2c2f6486._0 offset");
 _Static_assert(offsetof(struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486, _raw) == 0, "core_result_Result__a96be460e4ad8f92502af3ac2c2f6486._raw offset");
-struct rust_slice_input_regseq_log_intrinsics_LogArg {
-    const struct input_regseq_log_intrinsics_LogArg *data;
-    size_t len;
-};
-struct input_regseq_log_intrinsics_LogArg {
-    union {
-    struct {
-    uint8_t tag;
-    unsigned char _pad0[23];
-    } _tag;
-    struct {
-    unsigned char _pad0[1];
-    uint8_t _0;
-    unsigned char _pad1[22];
-    } _v0;
-    struct {
-    unsigned char _pad0[2];
-    uint16_t _0;
-    unsigned char _pad1[20];
-    } _v1;
-    struct {
-    unsigned char _pad0[4];
-    uint32_t _0;
-    unsigned char _pad1[16];
-    } _v2;
-    struct {
-    unsigned char _pad0[8];
-    uint64_t _0;
-    unsigned char _pad1[8];
-    } _v3;
-    struct {
-    unsigned char _pad0[1];
-    int8_t _0;
-    unsigned char _pad1[22];
-    } _v4;
-    struct {
-    unsigned char _pad0[2];
-    int16_t _0;
-    unsigned char _pad1[20];
-    } _v5;
-    struct {
-    unsigned char _pad0[4];
-    int32_t _0;
-    unsigned char _pad1[16];
-    } _v6;
-    struct {
-    unsigned char _pad0[8];
-    int64_t _0;
-    unsigned char _pad1[8];
-    } _v7;
-    struct {
-    unsigned char _pad0[1];
-    _Bool _0;
-    unsigned char _pad1[22];
-    } _v8;
-    struct {
-    unsigned char _pad0[8];
-    struct rust_str _0;
-    } _v9;
-    struct {
-    uint8_t tag;
-    uint8_t _0;
-    unsigned char _pad0[22];
-    } _c0;
-    struct {
-    uint8_t tag;
-    unsigned char _pad0[1];
-    uint16_t _0;
-    unsigned char _pad1[20];
-    } _c1;
-    struct {
-    uint8_t tag;
-    unsigned char _pad0[3];
-    uint32_t _0;
-    unsigned char _pad1[16];
-    } _c2;
-    struct {
-    uint8_t tag;
-    unsigned char _pad0[7];
-    uint64_t _0;
-    unsigned char _pad1[8];
-    } _c3;
-    struct {
-    uint8_t tag;
-    int8_t _0;
-    unsigned char _pad0[22];
-    } _c4;
-    struct {
-    uint8_t tag;
-    unsigned char _pad0[1];
-    int16_t _0;
-    unsigned char _pad1[20];
-    } _c5;
-    struct {
-    uint8_t tag;
-    unsigned char _pad0[3];
-    int32_t _0;
-    unsigned char _pad1[16];
-    } _c6;
-    struct {
-    uint8_t tag;
-    unsigned char _pad0[7];
-    int64_t _0;
-    unsigned char _pad1[8];
-    } _c7;
-    struct {
-    uint8_t tag;
-    _Bool _0;
-    unsigned char _pad0[22];
-    } _c8;
-    struct {
-    uint8_t tag;
-    unsigned char _pad0[7];
-    struct rust_str _0;
-    } _c9;
-    unsigned char _raw[24];
-    } u;
-} __attribute__((aligned(8)));
-_Static_assert(sizeof(struct input_regseq_log_intrinsics_LogArg) == 24, "input_regseq_log_intrinsics_LogArg size");
-_Static_assert(_Alignof(struct input_regseq_log_intrinsics_LogArg) == 8, "input_regseq_log_intrinsics_LogArg align");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._tag.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._tag.tag offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._v0._0) == 1, "input_regseq_log_intrinsics_LogArg.u._v0._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._v1._0) == 2, "input_regseq_log_intrinsics_LogArg.u._v1._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._v2._0) == 4, "input_regseq_log_intrinsics_LogArg.u._v2._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._v3._0) == 8, "input_regseq_log_intrinsics_LogArg.u._v3._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._v4._0) == 1, "input_regseq_log_intrinsics_LogArg.u._v4._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._v5._0) == 2, "input_regseq_log_intrinsics_LogArg.u._v5._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._v6._0) == 4, "input_regseq_log_intrinsics_LogArg.u._v6._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._v7._0) == 8, "input_regseq_log_intrinsics_LogArg.u._v7._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._v8._0) == 1, "input_regseq_log_intrinsics_LogArg.u._v8._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._v9._0) == 8, "input_regseq_log_intrinsics_LogArg.u._v9._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c0.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c0.tag offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c0._0) == 1, "input_regseq_log_intrinsics_LogArg.u._c0._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c1.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c1.tag offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c1._0) == 2, "input_regseq_log_intrinsics_LogArg.u._c1._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c2.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c2.tag offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c2._0) == 4, "input_regseq_log_intrinsics_LogArg.u._c2._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c3.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c3.tag offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c3._0) == 8, "input_regseq_log_intrinsics_LogArg.u._c3._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c4.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c4.tag offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c4._0) == 1, "input_regseq_log_intrinsics_LogArg.u._c4._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c5.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c5.tag offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c5._0) == 2, "input_regseq_log_intrinsics_LogArg.u._c5._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c6.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c6.tag offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c6._0) == 4, "input_regseq_log_intrinsics_LogArg.u._c6._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c7.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c7.tag offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c7._0) == 8, "input_regseq_log_intrinsics_LogArg.u._c7._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c8.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c8.tag offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c8._0) == 1, "input_regseq_log_intrinsics_LogArg.u._c8._0 offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c9.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c9.tag offset");
-_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c9._0) == 8, "input_regseq_log_intrinsics_LogArg.u._c9._0 offset");
 struct input_Field__12f6da63eb7da4bbe47ece8c97d11228 {
     uint32_t mask;
     uint32_t shift;
@@ -719,8 +566,8 @@ void input__impl_12__disable_uart(struct input_Pl011Composed *);
 void input__impl_12__mask_all_interrupts(struct input_Pl011Composed *);
 struct tuple_a8c7f832281a39c5 input__impl_12__set_baud_rate(struct input_Pl011Composed *);
 _Bool input__impl_12__wait_tx_idle(const struct input_Pl011Composed *);
+struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 input__impl_13__on_deinit(struct input_Pl011Composed *);
 struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 input__impl_13__on_init(struct input_Pl011Composed *);
-__attribute__((noinline)) void input_regseq_log_intrinsics_log_warn(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
 struct input_FieldValue__12f6da63eb7da4bbe47ece8c97d11228 input_field_val__192b981e79185e5cfc4e4e7cb3debe62(struct input_Field__12f6da63eb7da4bbe47ece8c97d11228, uint32_t);
 struct input_FieldValue__65daba9b2aba7b1866e3e9b4c1c17494 input_field_val__9a9d8cfaa0cf152914f8e40836b690c7(struct input_Field__65daba9b2aba7b1866e3e9b4c1c17494, uint32_t);
 extern const uint8_t input__regseq_synth__const_memory_static_134577ba6481ce8d78381364c5694e85[35];
@@ -729,6 +576,7 @@ extern const uint8_t input__regseq_synth__const_memory_static_b45482224b439a3d54
 extern const uint8_t input__regseq_synth__const_memory_static_c76f9251ccd091730c6d8aaa761ae26a[17];
 extern const uint8_t input__regseq_synth__const_memory_static_d38b60cb79f88189da875e97be3a8174[8];
 extern const uint8_t input__regseq_synth__const_memory_static_da6af18769e677572bf657f9e3b7a6c3[32];
+extern const uint8_t input__regseq_synth__const_memory_static_e1aaf7dd94e89625e6d165890cbb0468[32];
 
 /* ---------------------------------------------------------------------------
  * Bank 5 (section 15): function bodies + static initializers.
@@ -1052,6 +900,31 @@ _Bool input__impl_12__wait_tx_idle(const struct input_Pl011Composed *_1) {
         return _0;
     }
 }
+struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 input__impl_13__on_deinit(struct input_Pl011Composed *_1) {
+    struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 _0;
+    struct input_Pl011Composed *_7;
+    struct input_Pl011Composed *_9;
+    struct input_Pl011Composed *_11;
+    bb_0: {
+        fwrite("[WARN] pl011 deinit: masking interrupts\n", 1, 40, stdout); goto bb_1;
+    }
+    bb_1: {
+        _7 = &((*_1));
+        input__impl_12__mask_all_interrupts(_7); goto bb_2;
+    }
+    bb_2: {
+        _9 = &((*_1));
+        input__impl_12__disable_uart(_9); goto bb_3;
+    }
+    bb_3: {
+        _11 = &((*_1));
+        input__impl_12__clear_all_interrupts(_11); goto bb_4;
+    }
+    bb_4: {
+        memcpy((unsigned char *)&(_0) + 0, &(uint8_t){((uint8_t)(2U))}, sizeof(uint8_t));
+        return _0;
+    }
+}
 struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 input__impl_13__on_init(struct input_Pl011Composed *_1) {
     struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 _0;
     struct input_Pl011Composed *_7;
@@ -1215,11 +1088,6 @@ struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 input__impl_13__on_i
         return _0;
     }
 }
-__attribute__((noinline)) void input_regseq_log_intrinsics_log_warn(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
-    bb_0: {
-        return;
-    }
-}
 struct input_FieldValue__12f6da63eb7da4bbe47ece8c97d11228 input_field_val__192b981e79185e5cfc4e4e7cb3debe62(struct input_Field__12f6da63eb7da4bbe47ece8c97d11228 _1, uint32_t _2) {
     struct input_FieldValue__12f6da63eb7da4bbe47ece8c97d11228 _0;
     uint32_t _3;
@@ -1260,6 +1128,7 @@ const uint8_t input__regseq_synth__const_memory_static_b45482224b439a3d548c65378
 const uint8_t input__regseq_synth__const_memory_static_c76f9251ccd091730c6d8aaa761ae26a[17] = { ((uint8_t)(112U)), ((uint8_t)(108U)), ((uint8_t)(48U)), ((uint8_t)(49U)), ((uint8_t)(49U)), ((uint8_t)(32U)), ((uint8_t)(112U)), ((uint8_t)(114U)), ((uint8_t)(111U)), ((uint8_t)(98U)), ((uint8_t)(101U)), ((uint8_t)(32U)), ((uint8_t)(115U)), ((uint8_t)(116U)), ((uint8_t)(97U)), ((uint8_t)(114U)), ((uint8_t)(116U)) };
 const uint8_t input__regseq_synth__const_memory_static_d38b60cb79f88189da875e97be3a8174[8] = { ((uint8_t)(112U)), ((uint8_t)(108U)), ((uint8_t)(48U)), ((uint8_t)(49U)), ((uint8_t)(49U)), ((uint8_t)(32U)), ((uint8_t)(117U)), ((uint8_t)(112U)) };
 const uint8_t input__regseq_synth__const_memory_static_da6af18769e677572bf657f9e3b7a6c3[32] = { ((uint8_t)(112U)), ((uint8_t)(108U)), ((uint8_t)(48U)), ((uint8_t)(49U)), ((uint8_t)(49U)), ((uint8_t)(32U)), ((uint8_t)(116U)), ((uint8_t)(120U)), ((uint8_t)(32U)), ((uint8_t)(98U)), ((uint8_t)(117U)), ((uint8_t)(115U)), ((uint8_t)(121U)), ((uint8_t)(32U)), ((uint8_t)(112U)), ((uint8_t)(97U)), ((uint8_t)(115U)), ((uint8_t)(116U)), ((uint8_t)(32U)), ((uint8_t)(115U)), ((uint8_t)(112U)), ((uint8_t)(105U)), ((uint8_t)(110U)), ((uint8_t)(32U)), ((uint8_t)(98U)), ((uint8_t)(111U)), ((uint8_t)(117U)), ((uint8_t)(110U)), ((uint8_t)(100U)), ((uint8_t)(32U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
+const uint8_t input__regseq_synth__const_memory_static_e1aaf7dd94e89625e6d165890cbb0468[32] = { ((uint8_t)(112U)), ((uint8_t)(108U)), ((uint8_t)(48U)), ((uint8_t)(49U)), ((uint8_t)(49U)), ((uint8_t)(32U)), ((uint8_t)(100U)), ((uint8_t)(101U)), ((uint8_t)(105U)), ((uint8_t)(110U)), ((uint8_t)(105U)), ((uint8_t)(116U)), ((uint8_t)(58U)), ((uint8_t)(32U)), ((uint8_t)(109U)), ((uint8_t)(97U)), ((uint8_t)(115U)), ((uint8_t)(107U)), ((uint8_t)(105U)), ((uint8_t)(110U)), ((uint8_t)(103U)), ((uint8_t)(32U)), ((uint8_t)(105U)), ((uint8_t)(110U)), ((uint8_t)(116U)), ((uint8_t)(101U)), ((uint8_t)(114U)), ((uint8_t)(114U)), ((uint8_t)(117U)), ((uint8_t)(112U)), ((uint8_t)(116U)), ((uint8_t)(115U)) };
 struct __rseq_lc_0_pl011_target {
     void *__rseq_dev;
     struct input_Pl011Composed inner;
@@ -1267,7 +1136,7 @@ struct __rseq_lc_0_pl011_target {
 };
 
 static void __rseq_lc_0_pl011_orderly(void) {
-    regseq_lc_register("pl011", "dt:regseq,pl011");
+    regseq_lc_register("pl011", "amba:0x41011/0xfffff");
     regseq_bus_register_driver("amba", "bound");
     regseq_lc_create();
     regseq_lc_associate();
@@ -1280,6 +1149,7 @@ static void __rseq_lc_0_pl011_orderly(void) {
     input__impl_13__on_init(&inst.inner);
     regseq_lc_teardown(1);
     regseq_lc_call("on_deinit");
+    input__impl_13__on_deinit(&inst.inner);
     regseq_lc_postamble("regs", 0);
 }
 

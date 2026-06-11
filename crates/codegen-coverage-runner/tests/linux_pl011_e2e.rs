@@ -31,7 +31,10 @@ fn linux_pl011_snapshot_and_l0_structure() {
     let fixture = fixtures
         .iter()
         .find(|f| f.manifest.name == "pl011-composed")
-        .expect("pl011-composed fixture discovered");
+        .expect("pl011-composed fixture discovered")
+        .with_binding(manifest::OsBinding::Linux)
+        .expect("the converged fixture resolves the linux binding (C05)");
+    let fixture = &fixture;
 
     if std::env::var_os("BLESS").is_some() {
         let mut model = match try_bridge_fixture_path(&fixture.input) {

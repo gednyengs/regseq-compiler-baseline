@@ -9,8 +9,21 @@
  * Logging Kconfig pins (A-9, documented not asserted): CONFIG_LOG=y,
  * deferred mode, CONFIG_CBPRINTF_COMPLETE, CONFIG_CBPRINTF_FULL_INTEGRAL
  * (for %lld/%llu).
+ *
+ * Teardown Kconfig pin (A-9, documented not asserted):
+ * CONFIG_DEVICE_DEINIT_SUPPORT=y — Z_DEVICE_OPS silently DROPS deinit_fn
+ * under IF_ENABLED when off (device.h:1175-1180); the build passes and
+ * device_deinit() returns -ENOTSUP.
  */
 
+/* RSEQ-IGNORED-MATCH: amba id=0x00041011 mask=0x000fffff
+ * foreign transport: not consumed by the ratified static-devicetree registration form
+ * (>=1 native entry present); consumed natively by linux_c.
+ * [license: spec-convergence-pl011 GRILL D08 (D03(a) rule)] */
+/* RSEQ-IGNORED-MATCH: amba id=0x00abc123 mask=0x00ffffff
+ * foreign transport: not consumed by the ratified static-devicetree registration form
+ * (>=1 native entry present); consumed natively by linux_c.
+ * [license: spec-convergence-pl011 GRILL D08 (D03(a) rule)] */
 #define DT_DRV_COMPAT regseq_pl011
 
 #define LOG_MODULE_NAME pl011
@@ -101,10 +114,12 @@ struct pl011_data {
  * realization, paired with the single-instance BUILD_ASSERT below) */
 static mm_reg_t pl011_mmio_base;
 
-static struct Result pl011_on_init(struct Pl011Composed * _1);
-static struct FieldValue pl011_add(struct FieldValue _1, struct FieldValue _2);
+static struct Result pl011_on_deinit(struct Pl011Composed * _1);
 static void pl011_clear_all_interrupts(struct Pl011Composed * _1);
+static void pl011_disable_uart(struct Pl011Composed * _1);
+static struct FieldValue pl011_add(struct FieldValue _1, struct FieldValue _2);
 static void pl011_mask_all_interrupts(struct Pl011Composed * _1);
+static struct Result pl011_on_init(struct Pl011Composed * _1);
 static struct FieldValue_2 pl011_add_2(struct FieldValue_2 _1, struct FieldValue_2 _2);
 static struct rseq_tuple_uint32_t_uint32_t pl011_set_baud_rate(struct Pl011Composed * _1);
 static struct FieldValue_3 pl011_field_val(struct Field _1, uint32_t _2);
@@ -112,7 +127,95 @@ static struct FieldValue_3 pl011_new(uint32_t _1, uint32_t _2);
 static struct FieldValue_4 pl011_field_val_2(struct Field_2 _1, uint32_t _2);
 static struct FieldValue_4 pl011_new_2(uint32_t _1, uint32_t _2);
 static bool pl011_wait_tx_idle(struct Pl011Composed * _1);
-static void pl011_disable_uart(struct Pl011Composed * _1);
+
+static struct Result pl011_on_deinit(struct Pl011Composed * _1)
+{
+	struct Result _0;
+	struct Pl011Composed * _7;
+	struct Pl011Composed * _9;
+	struct Pl011Composed * _11;
+
+	LOG_WRN("pl011 deinit: masking interrupts");
+	goto bb_1;
+bb_1:
+	_7 = &(*_1);
+	pl011_mask_all_interrupts(_7);
+	goto bb_2;
+bb_2:
+	_9 = &(*_1);
+	pl011_disable_uart(_9);
+	goto bb_3;
+bb_3:
+	_11 = &(*_1);
+	pl011_clear_all_interrupts(_11);
+	goto bb_4;
+bb_4:
+	memset(&_0, 0, sizeof(_0));
+	_0._raw[0] = 0x2;
+	return _0;
+}
+
+static void pl011_clear_all_interrupts(struct Pl011Composed * _1)
+{
+
+	goto bb_1;
+bb_1:
+	sys_write32((uint32_t)(0x7ffu), pl011_mmio_base + PL011_ICR);
+	goto bb_2;
+bb_2:
+	return;
+}
+
+static void pl011_disable_uart(struct Pl011Composed * _1)
+{
+	struct FieldValue _5;
+	struct FieldValue _6;
+
+	goto bb_1;
+bb_1:
+	_5 = pl011_add((struct FieldValue){ .mask = 0x1, .value = 0x0 }, (struct FieldValue){ .mask = 0x100, .value = 0x0 });
+	goto bb_2;
+bb_2:
+	_6 = pl011_add(_5, (struct FieldValue){ .mask = 0x200, .value = 0x0 });
+	goto bb_3;
+bb_3:
+	sys_write32((uint32_t)(((_6).value) & ((_6).mask)), pl011_mmio_base + PL011_CR);
+	goto bb_4;
+bb_4:
+	return;
+}
+
+static struct FieldValue pl011_add(struct FieldValue _1, struct FieldValue _2)
+{
+	struct FieldValue _0;
+	uint32_t _3;
+	uint32_t _4;
+	uint32_t _5;
+	uint32_t _6;
+	uint32_t _7;
+	uint32_t _8;
+
+	_3 = _1.mask;
+	_4 = _2.mask;
+	_5 = _3 | _4;
+	_6 = _1.value;
+	_7 = _2.value;
+	_8 = _6 | _7;
+	_0.mask = _5;
+	_0.value = _8;
+	return _0;
+}
+
+static void pl011_mask_all_interrupts(struct Pl011Composed * _1)
+{
+
+	goto bb_1;
+bb_1:
+	sys_write32((uint32_t)(0x0u), pl011_mmio_base + PL011_IMSC);
+	goto bb_2;
+bb_2:
+	return;
+}
 
 static struct Result pl011_on_init(struct Pl011Composed * _1)
 {
@@ -253,49 +356,6 @@ bb_31:
 	goto bb_32;
 bb_32:
 	return _0;
-}
-
-static struct FieldValue pl011_add(struct FieldValue _1, struct FieldValue _2)
-{
-	struct FieldValue _0;
-	uint32_t _3;
-	uint32_t _4;
-	uint32_t _5;
-	uint32_t _6;
-	uint32_t _7;
-	uint32_t _8;
-
-	_3 = _1.mask;
-	_4 = _2.mask;
-	_5 = _3 | _4;
-	_6 = _1.value;
-	_7 = _2.value;
-	_8 = _6 | _7;
-	_0.mask = _5;
-	_0.value = _8;
-	return _0;
-}
-
-static void pl011_clear_all_interrupts(struct Pl011Composed * _1)
-{
-
-	goto bb_1;
-bb_1:
-	sys_write32((uint32_t)(0x7ffu), pl011_mmio_base + PL011_ICR);
-	goto bb_2;
-bb_2:
-	return;
-}
-
-static void pl011_mask_all_interrupts(struct Pl011Composed * _1)
-{
-
-	goto bb_1;
-bb_1:
-	sys_write32((uint32_t)(0x0u), pl011_mmio_base + PL011_IMSC);
-	goto bb_2;
-bb_2:
-	return;
 }
 
 static struct FieldValue_2 pl011_add_2(struct FieldValue_2 _1, struct FieldValue_2 _2)
@@ -476,25 +536,6 @@ bb_8:
 	return _0;
 }
 
-static void pl011_disable_uart(struct Pl011Composed * _1)
-{
-	struct FieldValue _5;
-	struct FieldValue _6;
-
-	goto bb_1;
-bb_1:
-	_5 = pl011_add((struct FieldValue){ .mask = 0x1, .value = 0x0 }, (struct FieldValue){ .mask = 0x100, .value = 0x0 });
-	goto bb_2;
-bb_2:
-	_6 = pl011_add(_5, (struct FieldValue){ .mask = 0x200, .value = 0x0 });
-	goto bb_3;
-bb_3:
-	sys_write32((uint32_t)(((_6).value) & ((_6).mask)), pl011_mmio_base + PL011_CR);
-	goto bb_4;
-bb_4:
-	return;
-}
-
 /* the one runtime dispatch hub (scaffold §3) */
 static int pl011_init(const struct device *dev)
 {
@@ -528,13 +569,43 @@ static int pl011_init(const struct device *dev)
 	return 0;
 }
 
+/* the teardown dispatch hub (spec-convergence-pl011 C04) */
+static int pl011_deinit(const struct device *dev)
+{
+	struct pl011_data *data = dev->data;
+
+	/* authored on_deinit over the embedded spec driver; the authored
+	 * RegseqError crosses the negated-errno adapter exactly as in init
+	 * (kernel/device.c:199: the rc is returned verbatim; `initialized`
+	 * stays true on failure, clears on success) */
+	{
+		struct Result __r = pl011_on_deinit(&data->inner);
+		uint8_t __tag = __r._raw[0];
+		if (__tag != 0x2) {
+		uint8_t __err = __r._raw[0];
+			switch (__err) {
+			case 0x0:
+				return -EIO;
+			case 0x1:
+				return -EBUSY;
+			default:
+				return -EIO;
+			}
+		}
+	}
+	/* postamble (integration §5.2): map_region's unmap mirror is a
+	 * deliberate NO-OP — no DEVICE_MMIO unmap exists on Zephyr; nothing
+	 * is invented (C04) */
+	return 0;
+}
+
 /* build-time register/match/create/associate (scaffold §2) */
 #define RSEQ_INIT(n)\
 	static struct pl011_data pl011_data_##n;\
 	static const struct pl011_config pl011_config_##n = {\
 		DEVICE_MMIO_ROM_INIT(DT_DRV_INST(n)),\
 	};\
-	DEVICE_DT_INST_DEFINE(n, pl011_init, NULL,\
+	DEVICE_DT_INST_DEINIT_DEFINE(n, pl011_init, pl011_deinit, NULL,\
 		&pl011_data_##n, &pl011_config_##n,\
 		POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,\
 		NULL /* api: ClassTag::Generic only (A-16) */);

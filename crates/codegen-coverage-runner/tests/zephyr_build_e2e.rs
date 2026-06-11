@@ -2,7 +2,8 @@
 //! T11; GRILL C03/D08, C01.2).
 //!
 //! Stages the committed `golden.zephyr.c` + `golden.zephyr.binding.yaml` of
-//! `pl011-composed-zephyr` as a hermetic app and builds it via west for
+//! the converged `pl011-composed` (spec-convergence-pl011 C05) as a hermetic
+//! app and builds it via west for
 //! `qemu_cortex_a53` under the `RSEQ_ZEPHYR_WORKSPACE` contract. Gating
 //! acceptance is over the composed TU ONLY — the init-fail variant's image
 //! build belongs to T16 (C4), no early probe (plan review round-1 fix).
@@ -47,8 +48,8 @@ fn zephyr_build_gate_over_the_composed_goldens() {
     let fixtures = manifest::discover(&composed_corpus()).expect("discover composed corpus");
     let fixture = fixtures
         .iter()
-        .find(|f| f.manifest.name == "pl011-composed-zephyr")
-        .expect("pl011-composed-zephyr fixture discovered");
+        .find(|f| f.manifest.name == "pl011-composed")
+        .expect("pl011-composed fixture discovered");
 
     let tu = std::fs::read_to_string(pipeline::zephyr_golden_path(fixture))
         .expect("read the committed golden.zephyr.c");

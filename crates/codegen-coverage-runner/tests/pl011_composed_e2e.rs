@@ -50,13 +50,16 @@ fn pl011_composed_six_stage_oracle() {
     let fixture = fixtures
         .iter()
         .find(|f| f.manifest.name == "pl011-composed")
-        .expect("pl011-composed fixture discovered");
+        .expect("pl011-composed fixture discovered")
+        .with_binding(manifest::OsBinding::Linux)
+        .expect("the converged fixture resolves the linux binding (C05)");
+    let fixture = &fixture;
 
-    // The fixture MUST carry its sibling platform.toml: per the ratified A-10
-    // policy the L2 literals are the resolution trigger.
+    // The bound fixture MUST carry its per-OS platform file: per the ratified
+    // A-10 policy the L2 literals are the resolution trigger.
     assert!(
         fixture.platform.is_some(),
-        "pl011-composed must discover a sibling platform.toml (A-10 trigger)"
+        "pl011-composed must resolve platform.linux.toml (A-10 trigger, C05)"
     );
 
     if std::env::var_os("BLESS").is_some() {
@@ -80,8 +83,8 @@ fn pl011_composed_six_stage_oracle() {
         .expect("emit must succeed");
         let run = toolchain::compile_and_run(&emit.tu, &emit.shim, cc())
             .expect("compile + run must succeed");
-        std::fs::write(dir.join("golden.c"), &emit.tu).expect("write golden.c");
-        std::fs::write(dir.join("expected.stdout"), &run.stdout).expect("write expected.stdout");
+        std::fs::write(&fixture.golden_c, &emit.tu).expect("write golden.c");
+        std::fs::write(&fixture.expected_stdout, &run.stdout).expect("write expected.stdout");
         return;
     }
 
@@ -168,9 +171,12 @@ fn assert_recognition_facts(model: &RegseqModel) {
         "exactly one recognized driver"
     );
     let driver = model.device_lifecycle.drivers.values().next().unwrap();
+    // The D09 converged order: amba rows first (the real PL011 periphid +
+    // the campaign's reserved test periphid), the zephyr DT entry last.
+    assert_eq!(driver.descriptor.match_set.len(), 3, "converged match set");
     assert_eq!(
-        driver.descriptor.match_set,
-        vec![
+        driver.descriptor.match_set[..2],
+        [
             MatchEntry::Amba {
                 id: 0x0004_1011,
                 mask: 0x000f_ffff
@@ -180,8 +186,14 @@ fn assert_recognition_facts(model: &RegseqModel) {
                 mask: 0x00ff_ffff
             },
         ],
-        "the real PL011 periphid + the campaign's reserved test periphid"
+        "amba rows first (D09: the linux generic_c oracle keys on .first())"
     );
+    match &driver.descriptor.match_set[2] {
+        MatchEntry::Devicetree { compatible } => {
+            assert_eq!(model.strings.resolve(*compatible), "regseq,pl011");
+        }
+        other => panic!("expected the DT entry last (D09), got {other:?}"),
+    }
     assert!(
         driver.ops.on_init.is_some() && driver.ops.on_deinit.is_some(),
         "on_init + on_deinit overridden"
