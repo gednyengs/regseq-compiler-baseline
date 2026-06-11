@@ -76,8 +76,9 @@ fn linux_e1000_snapshot_and_l0_structure() {
     };
 
     // -- the conformance JSON (amendment 6): the e1000 surprise delivery
-    //    cites its ratified row — the SAME row ID the zephyr artifacts cite
-    //    for the same slot's absence (I03 across OSes).
+    //    cites its ratified row — the same SLOT the zephyr artifacts cite
+    //    absent, each tied to its own OS-specific ratified row (I03: every
+    //    artifact renders its row ID from the one table const).
     let conf = std::fs::read_to_string(pipeline::linux_conformance_path(fixture))
         .expect("read conformance.linux.json");
     assert!(
