@@ -1,0 +1,9 @@
+name   = "irq-unknown-field-reject"
+kind   = "rust"
+# C06: isr(field) naming a non-Interrupt/unknown field.
+covers = ["IRQ-11"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "IRQ-ERR-UNKNOWN-FIELD"

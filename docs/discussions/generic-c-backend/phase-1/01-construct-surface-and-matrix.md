@@ -550,6 +550,9 @@ sole-binary e2es (`tests/irq_pl011_e2e.rs`, `tests/irq_initfail_e2e.rs`,
 | IRQ-8 | init-fail unwind | on `on_init` Err: NO `IRQ enable` anywhere; the reverse unwind includes `IRQ unregister` after the rollback callback | deferred | GRILL R16/R05/D02 | **IRQ-INITFAIL**: witnessed by `irq-initfail` |
 | IRQ-9 | missing `[interrupt.<id>]` reject | bind-stage IRQ-L2-003 for a non-Option `Interrupt` without its platform section | deferred | GRILL C03/D06 | **IRQ-L2-REJECT**: witnessed by `irq-missing-section-reject` |
 | IRQ-10 | binding-facts trace | `IRQ binding line=… trigger_type=… trigger_polarity=… shared=… priority=…` verbatim; no flag semantics | deferred | GRILL D10/R12 | **IRQ-BINDING-TRACE**: validation/trace inputs only |
+| IRQ-11 | frontend C06 reject family | acquire-stage `IRQ-ERR-*` rejection: missing-id, bare-ambiguous, duplicate/missing handler, unknown field, signature, array-bind-no-index, excluded-primitive (trait ISR), driver-callable line control | deferred | GRILL C06/D08/D13/I02 | **IRQ-C06-NEGATIVES**: one reject fixture per check, `fires it and only it` via stage+diagnostic |
+| IRQ-12 | Option/array lowering reached | emit-stage `EmitError` — the form is recognized whole, the lowering loudly deferred (never partial) | deferred | GRILL D06/R02/I05 | **IRQ-FORM-EMIT-REJECT**: witnessed by `irq-option-lowering-reject` |
+| IRQ-13 | reachable `DeferWork` | emit-stage `EmitError` naming `deferred-work-item-scheduling` (fail-loud on Unknown too) | deferred | GRILL R09/D04/I05 | **IRQ-DEFERWORK-REJECT**: witnessed by `irq-deferwork-reject` |
 
 ---
 

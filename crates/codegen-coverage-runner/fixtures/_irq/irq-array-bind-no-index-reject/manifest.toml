@@ -1,0 +1,9 @@
+name   = "irq-array-bind-no-index-reject"
+kind   = "rust"
+# C06: an array-bound handler lacking index: usize.
+covers = ["IRQ-11"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "IRQ-ERR-ARRAY-BIND-NO-INDEX"

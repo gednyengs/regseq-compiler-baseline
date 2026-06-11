@@ -1,9 +1,12 @@
-//! The device-interrupt L2 NEGATIVE gate (construct #6, the T04 reject
-//! witness): the `irq-missing-section-reject` fixture is GREEN as a reject —
-//! the pipeline fails at `Stage::Bind` with IRQ-L2-003 (a non-Option
-//! `Interrupt` whose platform file lacks `[interrupt.<id>]`, C03), per the
-//! fixture's `[expected]` declaration. No emit is reached, so this is robust
-//! to interner history; it is nonetheless its OWN binary (it bridges).
+//! The device-interrupt NEGATIVE corpus gate (construct #6, T04 + T08): every
+//! `expect = "reject"` fixture under `fixtures/_irq/` is GREEN as a reject —
+//! the pipeline fails at exactly the fixture's `[expected].stage` with its
+//! `[expected].diagnostic` substring, covering the full C06 frontend family
+//! (acquire-stage `IRQ-ERR-*`), the bind-stage `IRQ-L2-003`
+//! missing-section check, and the two emit-stage I05 guards (Option/array
+//! lowering reached; reachable `DeferWork` naming
+//! deferred-work-item-scheduling). No emit output is byte-snapshotted, so a
+//! shared process is fine; it is nonetheless its OWN binary (it bridges).
 
 #![feature(rustc_private)]
 
@@ -11,9 +14,11 @@ extern crate rustc_driver;
 
 use std::path::{Path, PathBuf};
 
-use codegen_coverage_runner::{manifest, pipeline};
+use codegen_coverage_runner::manifest::{self, Expect};
+use codegen_coverage_runner::pipeline;
 
-/// The host `cc`, matching the runner's default (never invoked — we fail at Bind).
+/// The host `cc`, matching the runner's default (never invoked — rejects
+/// fail before stage 4).
 fn cc() -> &'static Path {
     Path::new("cc")
 }
@@ -23,20 +28,36 @@ fn irq_corpus() -> PathBuf {
 }
 
 #[test]
-fn missing_interrupt_section_rejects_at_bind_with_irq_l2_003() {
+fn every_irq_reject_fixture_rejects_exactly_as_declared() {
     let fixtures = manifest::discover(&irq_corpus()).expect("discover irq corpus");
-    let fixture = fixtures
+    let rejects: Vec<_> = fixtures
         .iter()
-        .find(|f| f.manifest.name == "irq-missing-section-reject")
-        .expect("irq-missing-section-reject fixture discovered")
-        .with_binding(manifest::OsBinding::Linux)
-        .expect("the reject fixture resolves the linux binding");
-
-    let result = pipeline::run_fixture(&fixture, cc());
+        .filter(|f| matches!(f.manifest.expect, Expect::Reject))
+        .collect();
     assert!(
-        result.is_green(),
-        "the reject fixture must be GREEN (bind-stage IRQ-L2-003 per its \
-         [expected] declaration): {:?}",
-        result.verdict
+        rejects.len() >= 11,
+        "expected the full T04+T08 reject corpus (>= 11), found {}",
+        rejects.len()
     );
+    for fixture in rejects {
+        // A reject fixture carrying a per-OS platform file binds it (the
+        // bind-stage checks need the join); a frontend/emit reject without
+        // one runs unbound.
+        let bound;
+        let fixture = if fixture.dir.join("platform.linux.toml").exists() {
+            bound = fixture
+                .with_binding(manifest::OsBinding::Linux)
+                .expect("reject fixture resolves its linux binding");
+            &bound
+        } else {
+            fixture
+        };
+        let result = pipeline::run_fixture(fixture, cc());
+        assert!(
+            result.is_green(),
+            "reject fixture {:?} must fail exactly as declared: {:?}",
+            fixture.manifest.name,
+            result.verdict
+        );
+    }
 }

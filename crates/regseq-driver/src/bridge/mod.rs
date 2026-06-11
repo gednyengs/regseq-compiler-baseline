@@ -764,6 +764,44 @@ pub enum InterruptDiagnostic {
         /// What is wrong with the signature.
         detail: String,
     },
+    /// `IRQ-ERR-ARRAY-BIND-NO-INDEX`: a handler bound to an `[Interrupt; N]`
+    /// resource without the `index: usize` parameter (C06).
+    #[error(
+        "IRQ-ERR-ARRAY-BIND-NO-INDEX: #[rseq::isr] method `{method}` binds array \
+         interrupt resource `{resource}` but lacks the `index: usize` parameter \
+         (the array-bind form is `fn(&mut self, index: usize) -> IrqResult`)"
+    )]
+    ArrayBindNoIndex {
+        /// The handler method name.
+        method: String,
+        /// The array resource's field name.
+        resource: String,
+    },
+    /// `IRQ-ERR-EXCLUDED-PRIMITIVE`: an excluded-set reintroduction (C06) —
+    /// a trait-provided ISR binding (the witnessed exclusion; the
+    /// sync-with-handler exclusion becomes representable only when the
+    /// Synchronization construct lands), or an `#[rseq::isr]` anchored
+    /// outside an inherent `#[rseq::driver]` impl.
+    #[error("IRQ-ERR-EXCLUDED-PRIMITIVE: #[rseq::isr] on `{method}`: {detail}")]
+    ExcludedPrimitive {
+        /// The offending method name.
+        method: String,
+        /// Which exclusion was reintroduced.
+        detail: String,
+    },
+    /// `IRQ-ERR-DRIVER-CALLABLE-LINE-CONTROL`: the `Interrupt` resource shell
+    /// grew driver-callable methods (C06/I02) — line control
+    /// (register/enable/disable/deregister) is compiler-managed lifecycle
+    /// placement, never an author call.
+    #[error(
+        "IRQ-ERR-DRIVER-CALLABLE-LINE-CONTROL: the `Interrupt` resource shell declares \
+         a driver-callable method `{method}` — interrupt line control is \
+         compiler-managed (I02); the shell must stay methodless"
+    )]
+    DriverCallableLineControl {
+        /// The offending method name.
+        method: String,
+    },
 }
 
 /// Format-template parser rejection family per spec.md section 26.7

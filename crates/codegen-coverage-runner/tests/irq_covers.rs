@@ -34,15 +34,15 @@ fn irq_fixtures_cover_every_irq_matrix_row() {
         .filter(|id| id.starts_with("IRQ-"))
         .collect();
     assert!(
-        irq_rows.len() >= 10,
-        "expected >= 10 IRQ-* matrix rows (IRQ-1..IRQ-10), found {}",
+        irq_rows.len() >= 13,
+        "expected >= 13 IRQ-* matrix rows (IRQ-1..IRQ-13), found {}",
         irq_rows.len()
     );
 
     let fixtures = manifest::discover(&irq_corpus()).expect("discover the irq corpus");
     assert!(
-        fixtures.len() >= 3,
-        "expected the three irq fixtures, found {}",
+        fixtures.len() >= 14,
+        "expected the full irq corpus (3 pass/reject originals + 11 T08 rejects), found {}",
         fixtures.len()
     );
 

@@ -541,6 +541,100 @@ pub fn make() -> SharedRecv { loop {} }
     assert!(err.contains("IRQ-ERR-ISR-SIGNATURE"), "got: {err}");
 }
 
+#[test]
+fn array_resource_with_non_indexed_handler_is_rejected() {
+    let driver = r#"
+#[rseq::driver(name = "arrnoidx", compatible = ["acme,arrnoidx"])]
+pub struct ArrNoIdx {
+    #[rseq::interrupt(id = "lines")]
+    pub lines: [Interrupt; 2],
+}
+
+impl ArrNoIdx {
+    #[rseq::isr(field = "lines")]
+    pub fn handle(&mut self) -> IrqResult { IrqResult::Handled }
+}
+
+pub fn make() -> ArrNoIdx { loop {} }
+"#;
+    let err = with_model("irq_arr_noidx", &source(driver), |_| ()).expect_err("must reject");
+    assert!(err.contains("IRQ-ERR-ARRAY-BIND-NO-INDEX"), "got: {err}");
+}
+
+#[test]
+fn index_param_on_single_resource_is_rejected() {
+    let driver = r#"
+#[rseq::driver(name = "idxsingle", compatible = ["acme,idxsingle"])]
+pub struct IdxSingle {
+    #[rseq::interrupt(id = "a")]
+    pub a: Interrupt,
+}
+
+impl IdxSingle {
+    #[rseq::isr]
+    pub fn handle(&mut self, index: usize) -> IrqResult {
+        let _ = index;
+        IrqResult::Handled
+    }
+}
+
+pub fn make() -> IdxSingle { loop {} }
+"#;
+    let err = with_model("irq_idx_single", &source(driver), |_| ()).expect_err("must reject");
+    assert!(err.contains("IRQ-ERR-ISR-SIGNATURE"), "got: {err}");
+}
+
+#[test]
+fn trait_provided_isr_is_excluded() {
+    let driver = r#"
+#[rseq::driver(name = "traitisr", compatible = ["acme,traitisr"])]
+pub struct TraitIsr {
+    #[rseq::interrupt(id = "a")]
+    pub a: Interrupt,
+}
+
+pub trait IrqOps {
+    fn handle(&mut self) -> IrqResult;
+}
+
+impl IrqOps for TraitIsr {
+    #[rseq::isr]
+    fn handle(&mut self) -> IrqResult { IrqResult::Handled }
+}
+
+pub fn make() -> TraitIsr { loop {} }
+"#;
+    let err = with_model("irq_trait_isr", &source(driver), |_| ()).expect_err("must reject");
+    assert!(err.contains("IRQ-ERR-EXCLUDED-PRIMITIVE"), "got: {err}");
+}
+
+#[test]
+fn line_control_methods_on_interrupt_shell_are_rejected() {
+    let driver = r#"
+impl Interrupt {
+    pub fn enable_line(&mut self) {}
+}
+
+#[rseq::driver(name = "linectl", compatible = ["acme,linectl"])]
+pub struct LineCtl {
+    #[rseq::interrupt(id = "a")]
+    pub a: Interrupt,
+}
+
+impl LineCtl {
+    #[rseq::isr]
+    pub fn handle(&mut self) -> IrqResult { IrqResult::Handled }
+}
+
+pub fn make() -> LineCtl { loop {} }
+"#;
+    let err = with_model("irq_line_ctl", &source(driver), |_| ()).expect_err("must reject");
+    assert!(
+        err.contains("IRQ-ERR-DRIVER-CALLABLE-LINE-CONTROL"),
+        "got: {err}"
+    );
+}
+
 // --- Drivers without interrupts stay untouched ---------------------------------
 
 #[test]

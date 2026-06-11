@@ -1,0 +1,9 @@
+name   = "irq-result-return-reject"
+kind   = "rust"
+# C04: a handler returning Result instead of IrqResult.
+covers = ["IRQ-11"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "IRQ-ERR-ISR-SIGNATURE"

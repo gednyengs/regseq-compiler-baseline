@@ -76,13 +76,21 @@ pub(crate) fn resolve_isrs(cx: &mut BridgeCtxt<'_>) -> Result<Vec<PendingIsrAttr
         })
         .collect();
 
+    // C06/I02: the Interrupt shell must stay methodless — a driver-callable
+    // line-control reintroduction is a frontend error.
+    check_line_control_reintroduction(tcx)?;
+
     let mut pending = Vec::new();
-    for site in isr_sites(tcx) {
+    for site in isr_sites(tcx)? {
         let Some(&driver_item) = driver_items.get(&site.self_adt) else {
-            // An ISR on a non-driver impl is outside the recognized surface
-            // this slice; the trait-ISR / excluded-primitive rejection is the
-            // T08 IRQ-ERR-EXCLUDED-PRIMITIVE check.
-            continue;
+            return Err(BridgeError::InterruptValidation(
+                InterruptDiagnostic::ExcludedPrimitive {
+                    method: tcx.item_name(site.method).as_str().to_string(),
+                    detail: "bound to a type that is not a recognized #[rseq::driver] \
+                             struct (an ISR is an inherent driver method)"
+                        .to_string(),
+                },
+            ));
         };
         let driver_name = {
             let name_id = cx.model.device_lifecycle.drivers[&driver_item]
@@ -134,6 +142,35 @@ pub(crate) fn resolve_isrs(cx: &mut BridgeCtxt<'_>) -> Result<Vec<PendingIsrAttr
                 0
             }
         };
+
+        // C06 form↔signature coherence: an array resource demands the
+        // array-bind signature (IRQ-ERR-ARRAY-BIND-NO-INDEX); the index
+        // parameter is only valid on an array binding (C04).
+        match resources[resource_idx].1 {
+            InterruptForm::Array { .. } if !array_bind => {
+                return Err(BridgeError::InterruptValidation(
+                    InterruptDiagnostic::ArrayBindNoIndex {
+                        method: method_name,
+                        resource: cx
+                            .model
+                            .strings
+                            .resolve(resources[resource_idx].0)
+                            .to_string(),
+                    },
+                ));
+            }
+            InterruptForm::Single | InterruptForm::Optional if array_bind => {
+                return Err(BridgeError::InterruptValidation(
+                    InterruptDiagnostic::IsrSignature {
+                        method: method_name,
+                        detail: "the `index: usize` parameter is only valid for an \
+                                 `[Interrupt; N]` array binding (C04)"
+                            .to_string(),
+                    },
+                ));
+            }
+            _ => {}
+        }
 
         // Force-materialize the handler (inherent, non-generic) so the
         // Phase-5 drain gives it a body, exactly like the lifecycle
@@ -199,28 +236,65 @@ pub(crate) fn resolve_isrs(cx: &mut BridgeCtxt<'_>) -> Result<Vec<PendingIsrAttr
     Ok(pending)
 }
 
-/// Walk the crate for `#[rseq::isr]` inherent methods: each site's method
-/// def-id, its impl's Self ADT, and the parsed attribute form.
-fn isr_sites(tcx: TyCtxt<'_>) -> Vec<IsrSite> {
+/// Walk the crate for `#[rseq::isr]` sites: each valid site's method def-id,
+/// its inherent impl's Self ADT, and the parsed attribute form. An ISR
+/// anchored anywhere else — a trait method declaration, a trait impl
+/// (provided-ISR is in the taxonomy's excluded set), or a free function — is
+/// the `IRQ-ERR-EXCLUDED-PRIMITIVE` frontend error (C06; never silently
+/// skipped, I05).
+fn isr_sites(tcx: TyCtxt<'_>) -> Result<Vec<IsrSite>, BridgeError> {
     let path = [RustcSymbol::intern("rseq"), RustcSymbol::intern("isr")];
+    let excluded = |def_id: DefId, detail: &str| -> BridgeError {
+        BridgeError::InterruptValidation(InterruptDiagnostic::ExcludedPrimitive {
+            method: tcx.item_name(def_id).as_str().to_string(),
+            detail: detail.to_string(),
+        })
+    };
     let mut sites = Vec::new();
     for local_def_id in tcx.hir_crate_items(()).definitions() {
         let def_id = local_def_id.to_def_id();
-        if !matches!(tcx.def_kind(def_id), DefKind::AssocFn) {
+        let is_fn_like = matches!(tcx.def_kind(def_id), DefKind::AssocFn | DefKind::Fn);
+        if !is_fn_like {
             continue;
         }
         let Some(attr) = tcx.get_attrs_by_path(def_id, &path).next() else {
             continue;
         };
+        if matches!(tcx.def_kind(def_id), DefKind::Fn) {
+            return Err(excluded(
+                def_id,
+                "a free function cannot be an ISR (an ISR is an inherent driver method)",
+            ));
+        }
         let impl_def_id = tcx.parent(def_id);
-        // Inherent impls only this slice; a trait-provided ISR is the T08
-        // excluded-primitive rejection.
-        if !matches!(tcx.def_kind(impl_def_id), DefKind::Impl { of_trait: false }) {
-            continue;
+        match tcx.def_kind(impl_def_id) {
+            DefKind::Impl { of_trait: false } => {}
+            DefKind::Impl { of_trait: true } => {
+                return Err(excluded(
+                    def_id,
+                    "a trait-provided ISR binding is excluded (taxonomy excluded set); \
+                     bind an inherent driver method",
+                ))
+            }
+            DefKind::Trait => {
+                return Err(excluded(
+                    def_id,
+                    "a trait method declaration cannot be an ISR (taxonomy excluded set)",
+                ))
+            }
+            _ => {
+                return Err(excluded(
+                    def_id,
+                    "an ISR must be an inherent method on a #[rseq::driver] struct",
+                ))
+            }
         }
         let self_ty = tcx.type_of(impl_def_id).instantiate_identity();
         let Some(adt) = self_ty.ty_adt_def() else {
-            continue;
+            return Err(excluded(
+                def_id,
+                "an ISR must be an inherent method on a #[rseq::driver] struct",
+            ));
         };
         sites.push(IsrSite {
             method: def_id,
@@ -231,7 +305,40 @@ fn isr_sites(tcx: TyCtxt<'_>) -> Vec<IsrSite> {
     // `definitions()` order is deterministic per compilation; sort by def
     // index for belt-and-braces determinism of diagnostic order.
     sites.sort_by_key(|s| (s.method.krate.as_u32(), s.method.index.as_u32()));
-    sites
+    Ok(sites)
+}
+
+/// C06/I02: reject a driver-callable line-control reintroduction — ANY
+/// method declared in an inherent impl on the `Interrupt` resource shell
+/// (name-anchored, like every recognition key). The shell is methodless by
+/// contract: register/enable/disable/deregister are compiler-managed
+/// lifecycle placement, never author calls.
+fn check_line_control_reintroduction(tcx: TyCtxt<'_>) -> Result<(), BridgeError> {
+    for local_def_id in tcx.hir_crate_items(()).definitions() {
+        let impl_def_id = local_def_id.to_def_id();
+        if !matches!(tcx.def_kind(impl_def_id), DefKind::Impl { of_trait: false }) {
+            continue;
+        }
+        let self_ty = tcx.type_of(impl_def_id).instantiate_identity();
+        let Some(adt) = self_ty.ty_adt_def() else {
+            continue;
+        };
+        if tcx.item_name(adt.did()).as_str() != "Interrupt" {
+            continue;
+        }
+        if let Some(method) = tcx
+            .associated_items(impl_def_id)
+            .in_definition_order()
+            .find(|item| item.is_fn())
+        {
+            return Err(BridgeError::InterruptValidation(
+                InterruptDiagnostic::DriverCallableLineControl {
+                    method: method.name().as_str().to_string(),
+                },
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Parse `#[rseq::isr]` / `#[rseq::isr(field = "…")]` into the optional

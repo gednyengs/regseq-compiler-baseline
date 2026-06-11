@@ -1,0 +1,9 @@
+name   = "irq-option-lowering-reject"
+kind   = "rust"
+# D06/R02: the Option form is recognized whole but emit-stage rejected this slice.
+covers = ["IRQ-12"]
+expect = "reject"
+
+[expected]
+stage = "emit"
+diagnostic = "Option<Interrupt>"

@@ -18,7 +18,7 @@
 //! advisory) — the tenant stays target-neutral.
 
 use regseq_config::{InterruptBindingSpec, PlatformBindings};
-use regseq_model::{InterruptForm, RegseqModel, TriggerPolarity, TriggerType};
+use regseq_model::{ArmReachability, InterruptForm, RegseqModel, TriggerPolarity, TriggerType};
 
 /// `[interrupt.<id>]` surface diagnostics (construct #6). The `IRQ-L2-*`
 /// family is harness-named (the C03 contract names the checks, not the IDs),
@@ -180,6 +180,47 @@ fn typed_binding(
     })
 }
 
+/// The R11 shared-line discipline WARNING (C06 warning row, the frontend
+/// half): one `IRQ-WARN-SHARED-NOTHANDLED` line per `shared = true` resource
+/// whose handler's `IrqResult::NotHandled` arm is not PROVEN reachable.
+///
+/// The direction is the ratified floor: **warn-on-unknown** — the warning
+/// fires unless reachability is PROVEN (a syntactically present but
+/// unreachable/unprovable arm still warns; the analysis may over-warn, never
+/// under-warn). `shared` is the single-source L2 board fact (I08), so this
+/// runs after the join; non-fatal — the production caller routes the strings
+/// to the compiler's warning channel (`validate` itself stays side-effect-free
+/// and error-only per the tenant contract).
+pub fn shared_discipline_warnings(model: &RegseqModel) -> Vec<String> {
+    let mut warnings = Vec::new();
+    for tables in model.interrupt.drivers.values() {
+        for (idx, resource) in tables.resources.iter().enumerate() {
+            if !resource.binding.shared {
+                continue;
+            }
+            let Some(handler) = tables
+                .handlers
+                .iter()
+                .find(|h| h.resource as usize == idx)
+            else {
+                continue;
+            };
+            if handler.arms.not_handled != ArmReachability::ProvenReachable {
+                warnings.push(format!(
+                    "IRQ-WARN-SHARED-NOTHANDLED: interrupt resource `{}` is shared \
+                     (the board fact) but handler `{}` has no PROVEN-reachable \
+                     IrqResult::NotHandled return — a shared-line handler must be \
+                     able to disclaim a foreign interrupt (warn-on-unknown: an \
+                     unprovable conditional arm reads Unknown and still warns)",
+                    model.strings.resolve(resource.name),
+                    model.strings.resolve(handler.method_name),
+                ));
+            }
+        }
+    }
+    warnings
+}
+
 /// Section-presence validation (C03): every non-`Optional` resource must have
 /// joined a section; `Option<Interrupt>` absence is supported (D06).
 fn validate_interrupt_surface(model: &RegseqModel) -> Result<(), InterruptL2Error> {
@@ -316,6 +357,64 @@ mod tests {
         // matching the [mmio.<id>] discipline.
         InterruptBinder.bind(&mut model, &b).expect("bind");
         InterruptBinder.validate(&model).expect("validate");
+    }
+
+    // --- R11 shared-line discipline warning (warn-on-unknown floor) ---
+
+    fn model_with_shared_handler(
+        shared: bool,
+        not_handled: ArmReachability,
+    ) -> RegseqModel {
+        let mut model = model_with_resource("nic_irq", InterruptForm::Single);
+        let method = model.strings.intern("handle_irq");
+        let tables = model
+            .interrupt
+            .drivers
+            .get_mut(&ItemId::from_u32(0))
+            .unwrap();
+        tables.resources[0].binding.shared = shared;
+        tables.resources[0].binding.resolved = true;
+        tables.handlers.push(regseq_model::IsrHandler {
+            method_name: method,
+            resource: 0,
+            array_bind: false,
+            body: None,
+            arms: regseq_model::IrqArmReachability {
+                handled: ArmReachability::Unknown,
+                not_handled,
+                defer_work: ArmReachability::ProvenUnreachable,
+            },
+        });
+        model
+    }
+
+    #[test]
+    fn shared_with_unknown_nothandled_warns() {
+        let model = model_with_shared_handler(true, ArmReachability::Unknown);
+        let warnings = shared_discipline_warnings(&model);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("IRQ-WARN-SHARED-NOTHANDLED"), "{}", warnings[0]);
+    }
+
+    #[test]
+    fn shared_with_unreachable_nothandled_still_warns() {
+        // The PLAN's pinned direction: a syntactically present but
+        // PROVEN-UNREACHABLE NotHandled arm must still warn (the warning is
+        // reachability-based, never syntactic presence).
+        let model = model_with_shared_handler(true, ArmReachability::ProvenUnreachable);
+        assert_eq!(shared_discipline_warnings(&model).len(), 1);
+    }
+
+    #[test]
+    fn shared_with_proven_reachable_nothandled_does_not_warn() {
+        let model = model_with_shared_handler(true, ArmReachability::ProvenReachable);
+        assert!(shared_discipline_warnings(&model).is_empty());
+    }
+
+    #[test]
+    fn unshared_line_never_warns() {
+        let model = model_with_shared_handler(false, ArmReachability::Unknown);
+        assert!(shared_discipline_warnings(&model).is_empty());
     }
 
     #[test]

@@ -1,0 +1,9 @@
+name   = "irq-trait-isr-reject"
+kind   = "rust"
+# C06: a trait-provided ISR binding (excluded set).
+covers = ["IRQ-11"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "IRQ-ERR-EXCLUDED-PRIMITIVE"

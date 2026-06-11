@@ -1,0 +1,9 @@
+name   = "irq-missing-handler-reject"
+kind   = "rust"
+# C06: a non-optional Interrupt with zero handlers (D13).
+covers = ["IRQ-11"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "IRQ-ERR-MISSING-HANDLER"

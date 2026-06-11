@@ -1,0 +1,9 @@
+name   = "irq-deferwork-reject"
+kind   = "rust"
+# R09/D04: a reachable DeferWork return is emit-rejected naming the missing construct.
+covers = ["IRQ-13"]
+expect = "reject"
+
+[expected]
+stage = "emit"
+diagnostic = "deferred-work-item-scheduling"

@@ -1,0 +1,9 @@
+name   = "irq-bare-ambiguous-reject"
+kind   = "rust"
+# C06: a bare ISR on a driver with two Interrupt resources.
+covers = ["IRQ-11"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "IRQ-ERR-BARE-ISR-AMBIGUOUS"

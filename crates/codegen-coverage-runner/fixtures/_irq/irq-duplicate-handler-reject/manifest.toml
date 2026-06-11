@@ -1,0 +1,9 @@
+name   = "irq-duplicate-handler-reject"
+kind   = "rust"
+# C06: two handlers bound to one resource (exactly-one, D13).
+covers = ["IRQ-11"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "IRQ-ERR-DUPLICATE-HANDLER"
