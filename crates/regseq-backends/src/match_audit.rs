@@ -78,6 +78,25 @@ impl MatchAudit {
             self.license
         )
     }
+
+    /// The binding-yaml comment block (backend-zephyr-c-e1000 R05: the
+    /// third render of the Pci-row audit on the zephyr PCIe form) — the
+    /// SAME struct fields and clause split as [`MatchAudit::c_block`], in
+    /// yaml comment syntax, so cross-artifact consistency stays literal.
+    pub fn yaml_block(&self) -> String {
+        let (head, tail) = self
+            .reason
+            .split_once("; ")
+            .expect("fixed reason form (reason_for) always carries the two clauses");
+        format!(
+            "# RSEQ-IGNORED-MATCH: {}\n# {}\n# ({}); consumed natively by {}.\n# [license: {}]\n",
+            self.entry,
+            head,
+            tail,
+            self.native_on.join(", "),
+            self.license
+        )
+    }
 }
 
 /// The fixed C02 reason form. Registration-form framing ONLY (D08): the
@@ -177,6 +196,18 @@ mod tests {
              * foreign transport: not consumed by the ratified amba_driver registration form\n \
              * (>=1 native entry present); consumed natively by zephyr_c.\n \
              * [license: spec-convergence-pl011 GRILL D08 (D03(a) rule)] */"
+        );
+    }
+
+    #[test]
+    fn yaml_block_grammar_is_verbatim_from_the_same_struct() {
+        let (_, audit) = dt_audit();
+        assert_eq!(
+            audit.yaml_block(),
+            "# RSEQ-IGNORED-MATCH: devicetree compatible=\"regseq,pl011\"\n\
+             # foreign transport: not consumed by the ratified amba_driver registration form\n\
+             # (>=1 native entry present); consumed natively by zephyr_c.\n\
+             # [license: spec-convergence-pl011 GRILL D08 (D03(a) rule)]\n"
         );
     }
 

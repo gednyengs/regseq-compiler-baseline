@@ -31,10 +31,13 @@ fn e1000_initfail_snapshot_and_structure() {
     let fixture = fixtures
         .iter()
         .find(|f| f.manifest.name == "e1000-initfail")
-        .expect("e1000-initfail fixture discovered");
+        .expect("e1000-initfail fixture discovered")
+        .with_binding(manifest::OsBinding::Linux)
+        .expect("the converged fixture resolves the linux binding (C05)");
+    let fixture = &fixture;
     assert!(
         fixture.platform.is_some(),
-        "e1000-initfail must discover a sibling platform.toml (A-10 trigger)"
+        "e1000-initfail must resolve platform.linux.toml (A-10 trigger, C05)"
     );
 
     if std::env::var_os("BLESS").is_some() {
@@ -114,16 +117,23 @@ fn e1000_initfail_snapshot_and_structure() {
         "distinct driver/module name so both generated modules can coexist"
     );
     assert_eq!(driver.descriptor.bus_type, Some(BusType::Pci));
+    // The CONVERGED match set (backend-zephyr-c-e1000 D01): the Pci row
+    // first, the zephyr DT entry LAST.
+    assert_eq!(driver.descriptor.match_set.len(), 2, "Pci, DT");
     assert_eq!(
-        driver.descriptor.match_set,
-        vec![MatchEntry::Pci {
+        driver.descriptor.match_set[0],
+        MatchEntry::Pci {
             vendor: 0x8086,
             device: 0x100e,
             subsystem: None,
             class: None,
-        }],
+        },
         "the campaign 82540EM id"
     );
+    let MatchEntry::Devicetree { compatible } = &driver.descriptor.match_set[1] else {
+        panic!("the converged DT entry is appended LAST (D01)");
+    };
+    assert_eq!(model.strings.resolve(*compatible), "regseq,e1000fail");
     assert!(
         driver.ops.on_init.is_some(),
         "on_init overridden (the authored-Err site)"

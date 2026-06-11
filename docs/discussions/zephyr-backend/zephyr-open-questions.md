@@ -68,6 +68,18 @@ eth_e1000.c:220-221).
    ratification, and the single recorded deviation**; the platform path stays
    strictly canonical (preambles → map — per-construct §A.2.2 notes pl011's
    literal map-first layout as witness-only, not adopted).
+   **RATIFIED (2026-06-11, backend-zephyr-c-e1000 D02/C01):** the reference
+   order (probe → enable → map) is adopted as THE single recorded per-OS
+   preamble deviation, rendered explicitly — an `RSEQ-DEVIATION` audit
+   comment at the hoisted-probe emit site carrying the
+   `backend-zephyr-c-e1000 GRILL D02` license (witness eth_e1000.c:219-224:
+   BAR sizing with memory decode off) — never silent. `enable_device` is
+   op-per-op gated: this fixture authors no `set_bus_master`, so only the
+   MEM gate fires (`pcie_set_cmd(bdf, PCIE_CONF_CMDSTAT_MEM, true)`); the
+   separable-calls + single-call-fusion-peephole policy stands ratified but
+   unexercised. The platform/Amba path stays strictly canonical
+   (byte-frozen, proven by the pl011 zephyr snapshots needing zero
+   re-bless).
 
 4. **Offset-0x00 `read_config` — framework cache vs always-read.** *(BRM
    O4.)* The host PCI-ID-caching rule (`prelude.rs:260-288`) is structurally
@@ -75,6 +87,15 @@ eth_e1000.c:220-221).
    **Recommend serving offset-0x00 reads from `dev->pcie->id` (zero bus
    traffic — matches the as-built host caching semantics); all other offsets
    issue a real `pcie_conf_read`.**
+   **RATIFIED with containing-word scope (2026-06-11, backend-zephyr-c-e1000
+   D06/C03):** any config READ whose containing word is word 0 — byte
+   offsets 0x00–0x03, covering both `vendor@0x00` AND `device@0x02` — is
+   served from `__rseq_pcie->id` with §B.4 shift/mask extraction and zero
+   bus traffic (a literal offset-0x00-only cache would diverge from the
+   host rule for the device-id half); all other offsets issue one live
+   `pcie_conf_read`. The D05 RMW's internal read is always live, never the
+   cache. The L3 containment expectation carries the consequence: NO config
+   bus traffic for word-0 reads.
 
 5. **Non-static `&str` log arguments under deferred mode.** *(diag-log
    LOG-O1; composition open list.)* A Rust fat pointer is not NUL-terminated;
@@ -157,6 +178,15 @@ eth_e1000.c:220-221).
     burden. **Recommend a `BackendOptions` knob with a documented default
     (`POST_KERNEL` + the kernel default device priority), revisited when the
     Device Class construct lands** (the class is what couples the level).
+    **Evidence note (2026-06-11, backend-zephyr-c-e1000 D07): the hardcode
+    holds unchanged on the PCIe arm.** The PCIe bus scan is
+    `SYS_INIT(pcie_init, PRE_KERNEL_1|_2, …)` (v4.4.0
+    `drivers/pcie/host/pcie.c:547-552`), so BDF enumeration strictly
+    precedes any POST_KERNEL device init — no ordering pressure exists. The
+    vendored e1000 itself is POST_KERNEL (hardcoded in
+    `ETH_NET_DEVICE_DT_INST_DEFINE`, ethernet.h:1131-1148); a priority-60
+    mirror was rejected as class coupling (the deferred Device Class
+    construct's territory).
 
 16. **Class-neutral scaffold build-now.** *(device-lifecycle Q8a; composition
     open list — framework-class wrappers; Codex review issue 6.)* **Recommend
@@ -169,6 +199,19 @@ eth_e1000.c:220-221).
     eth_e1000.c:267-285, :337-344) to the Device Class construct — with the
     scope pin stated explicitly: **`on_init`'s contract spans only the
     device-init phase**.
+    **DISPOSITION EVOLVED (2026-06-11, backend-zephyr-c-e1000 D14/C06): the
+    non-Generic-tag REJECT is replaced by audited class-neutral emission.**
+    A declared non-Generic class now emits the SAME NULL-api scaffold as
+    `ClassTag::Generic` PLUS an `RSEQ-DEFERRED-CLASS` audit comment
+    immediately above the instantiation define (naming the declared class,
+    B-9, and the `backend-zephyr-c-e1000 GRILL D14` license) and an
+    OPTIONAL skip-serialized conformance-report note — answering this
+    item's anti-silent-truncation rationale the same way D03(a) lifted the
+    all-foreign match rejection: the declared class is AUDITED, never
+    silent, never a wall against the born-converged fixture. Class API
+    delivery itself (macro family + vtable + second-phase init) stays the
+    Device Class construct's (B-9). The `ClassTag::Generic` emission path
+    is byte-frozen (C06 item 3).
 
 17. **Config(ROM)/data(RAM) field split refinement.** *(device-lifecycle
     Q8b.)* The model's `DriverHandle` doesn't distinguish immutable-per-
@@ -240,6 +283,19 @@ eth_e1000.c:220-221).
    side require a containing-word RMW that is **observable on the bus** —
    needs an explicit decision before silent emission (parity with the Linux
    width-8 gap). **Undesigned.**
+   **PARTIALLY LIFTED (2026-06-11, backend-zephyr-c-e1000 D05/C02 — this is
+   the explicit decision the entry asked for):** width-1/2 config WRITES
+   are DELIVERED via the ratified containing-word RMW
+   (`pcie_conf_read(word)` → lane merge → `pcie_conf_write(word)`),
+   audit-commented at the emit site (`RSEQ-RMW`, citing the
+   `backend-zephyr-c-e1000 GRILL D05` license) and recorded as
+   bus-observable: one extra word read; adjacent bytes rewritten with
+   read-back values — benign per PCI config semantics (QEMU's
+   `e1000_write_config` reacts only to PCI_COMMAND, hw/net/e1000.c:1624).
+   The RMW's internal read is always the LIVE word, never the A-4 word-0
+   cache. **Width-8 (both ops, the two-word split), 64-bit, misaligned
+   accesses of ANY width (`off % width != 0` — sub-word AND dword), and
+   non-constant offsets KEEP the D.2 fail-loud rejection.**
 
 4. **Non-PCI config access (BRM-001).** The rejection diagnostic is deferred
    upstream (bus-resource-management-surface-convergence.md:209-211); Zephyr
@@ -299,7 +355,10 @@ eth_e1000.c:220-221).
    (`device_lifecycle.rs:53-54, :134-150`). On Zephyr the class *visibly*
    selects the macro family + API vtable (uart_pl011.c:534-542 vs
    eth_e1000.c:337-344) — exactly the deferred Device Class construct's
-   territory (D06/D09). Build-now disposition is A-16.
+   territory (D06/D09). Build-now disposition is A-16 — **as evolved by
+   backend-zephyr-c-e1000 D14 (2026-06-11): the reject is replaced by
+   audited class-neutral emission (see the A-16 evolution record + the D.2
+   row); the construct gap itself stands.**
 
 10. **>1 resolved region per driver.** Rejected today
     (`max_resolved_bindings_per_driver`, `body_emit.rs:5240-5243`); aligns
@@ -327,6 +386,8 @@ eth_e1000.c:220-221).
    fetch-unverified; `pcie_get_mbar` is exercised by no vendored driver —
    the e1000 calls `pcie_probe_mbar(bdf, 0, …)`, eth_e1000.c:219, where the
    two coincide because BAR0 is its first memory BAR).
+   **CLOSED — VERIFIED on v4.4.0 (2026-06-11, backend-zephyr-c-e1000 D04;
+   see the verification notes below).**
 
 2. **`sys_read64`/`sys_write64` arch-conditionality.** *(register-access
    OQ-2.)* Width-8 accessors exist in `sys_io.h` but availability is
@@ -459,6 +520,35 @@ eval teardown legs rely on:
   eval half — until that lands, a campaign image answers `device_deinit()`
   with `-ENOTSUP`, the designed loud catch).
 
+### Verification notes — the C-1 `pcie.h` pins (2026-06-11, backend-zephyr-c-e1000 D04)
+
+Read live from the same **local v4.4.0 checkout** (tag `v4.4.0`, commit
+`684c9e8f32e4`), closing the C-1 fetch-unverified flag for the five pins the
+PCIe lowering consumes (the T04/C-9 pattern):
+
+- **`pcie_conf_read` — VERIFIED.** `uint32_t pcie_conf_read(pcie_bdf_t bdf,
+  unsigned int reg)` at `include/zephyr/drivers/pcie/pcie.h:176`; `reg` is
+  documented as "the configuration word index (not address)" — the 32-bit
+  word-index claim the §B.4 marshalling rests on holds.
+- **`pcie_conf_write` — VERIFIED.** `void pcie_conf_write(pcie_bdf_t bdf,
+  unsigned int reg, uint32_t data)` at `pcie.h:187`, same word-index
+  semantics, no status return (nothing to discard — unlike the Linux
+  accessors' `(void)` convention).
+- **`pcie_get_mbar` — VERIFIED, the BAR-NUMBER form.** `bool
+  pcie_get_mbar(pcie_bdf_t bdf, unsigned int bar_index, struct pcie_bar
+  *mbar)` at `pcie.h:237`: `bar_index` is the BAR register number. This is
+  the form `effective_bar` (the platform-toml `bar` value) feeds.
+- **`pcie_probe_mbar` — VERIFIED DISTINCT, the memory-BAR ORDINAL form.**
+  `pcie.h:254` ("index 0 = lowest-numbered memory BAR"); the implementation
+  paths are distinct (`drivers/pcie/host/pcie.c:254-266`, separate
+  get_bar/probe_bar walks). The vendored e1000's `probe_mbar(bdf, 0, …)`
+  coincides with BAR number 0 only because BAR0 is its first memory BAR —
+  the emitter uses `pcie_get_mbar`, never the ordinal form (D04).
+- **`pcie_set_cmd` — VERIFIED.** `void pcie_set_cmd(pcie_bdf_t bdf,
+  uint32_t bits, bool on)` at `pcie.h:293` — the op-per-op enable gate
+  (`PCIE_CONF_CMDSTAT_MEM`; `_MASTER` only when `set_bus_master` is
+  authored, A-3 record).
+
 ---
 
 ## D. Completeness ledger
@@ -483,10 +573,10 @@ every row that still says reject:
 
 | legal input shape (contract cite) | gap | interim behavior |
 |---|---|---|
-| `write_config` widths 1/2 (word-RMW) and width 8, both ops (`config_access_width` admits {1,2,4,8}, generic_c `body_emit.rs:2399-2414`) | B-3 | reject at emit (bus-observable RMW / two-word split undesigned; width-1/2 **reads** ARE specified, §B.4) |
+| `write_config` widths 1/2 (word-RMW) and width 8, both ops (`config_access_width` admits {1,2,4,8}, generic_c `body_emit.rs:2399-2414`) | B-3 | **PARTIALLY LIFTED by backend-zephyr-c-e1000 (2026-06-11, D05/C02):** width-1/2 WRITES are DELIVERED via the audited containing-word RMW (`RSEQ-RMW` block at the emit site, bus-observable: one extra word read, adjacent bytes rewritten with read-back values); width-8 both ops (two-word split), 64-bit, misaligned accesses of ANY width (`off % width != 0`), and non-constant offsets KEEP the fail-loud rejection; width-1/2 **reads** were already specified (§B.4) and are delivered with the D06 containing-word-0 cache |
 | authored `on_deinit` under `TargetOs::Zephyr` | B-6 / C-3 | **DELIVERED by spec-convergence-pl011 (2026-06-10, C04; row CAP-ZEPHYR-DT-DEINIT-1 `Delivered`)**: lowers to the deinit fn + `DEVICE_DT_INST_DEINIT_DEFINE` swap on the v4.4.0 pin; unauthored stays byte-identical |
 | authored `on_surprise_remove` under `TargetOs::Zephyr` | B-7 | **auditable non-emission** per capability row CAP-ZEPHYR-DT-SURPRISE-1 (`AbsentDispatch`, os-capability-disposition rule 2026-06-10): one `RSEQ-ABSENT-SLOT` audit block + conformance-report row + log line, body still fully checked; anything outside the ratified row keeps fail-loud rejection |
-| non-Generic `ClassTag` | B-9 | reject at emit (A-16; silent `NULL` api would hide the declared class) |
+| non-Generic `ClassTag` | B-9 | **AUDITED CLASS-NEUTRAL EMISSION (backend-zephyr-c-e1000 2026-06-11, D14/C06 — the A-16 reject replaced):** the same NULL-api scaffold as `ClassTag::Generic` PLUS the `RSEQ-DEFERRED-CLASS` audit comment above the instantiation define + the optional skip-serialized conformance note; never silent, never rejected; class API DELIVERY stays the Device Class construct's (B-9); the Generic path is byte-frozen |
 | `MatchEntry::Amba`-only match set | B-5 | reject at emit naming the fix (A-13: add a companion `Devicetree` entry) — RETAINED as the all-foreign arm of the D03(a) rule (spec-convergence-pl011 D08/C06); a MIXED set (foreign entries alongside ≥1 native `Devicetree` entry) now EMITS with each foreign entry triple-render audited (`RSEQ-IGNORED-MATCH` block at the `DT_DRV_COMPAT` pin + report `ignored_match_entries` + line section), never silently dropped |
 | `UserDataField` kinds beyond the zero-image guarantee | B-8 | reject at emit (only the inherited all-zero-image shapes pass through) |
 | >1 resolved region per driver | B-10 | already rejected (`max_resolved_bindings_per_driver`, `body_emit.rs:5240-5243`) — kept |
@@ -500,7 +590,7 @@ Per-construct status:
 | construct | status | residual gaps (all flagged above) |
 |---|---|---|
 | register-access | **fully specified** — five ops, map_region (both paths), offset recovery, descriptors | `poll_until` (B-1, pre-existing recognized-not-lowered); width-8 arch pin (C-2); OQ-4 scope close-out (C-8) |
-| bus-resource-management | **specified for the exercised shapes** — selector, four managed ops (claim = called-out elision), config width-4 + width-1/2 reads, carriers; Zephyr-over-PCI resolved affirmatively; sub-word/64-bit config **writes** are D.2 rejections | `BarType::Io` (B-2); config width-8/sub-word RMW (B-3); BRM-001 diagnostic (B-4); `pcie.h` pins incl. `pcie_get_mbar` (C-1) |
+| bus-resource-management | **specified for the exercised shapes AND DELIVERED on the PCIe arm** (backend-zephyr-c-e1000 2026-06-11) — selector, four managed ops (claim = called-out elision; the D02 probe→enable→map deviation audit-rendered), config width-4 both directions + width-1/2 reads (D06 word-0 cache) + width-1/2 writes (D05 RMW), carriers (`__rseq_pcie` TU-static, D12); Zephyr-over-PCI resolved affirmatively and EMITTING; width-8/64-bit/misaligned config ops are D.2 rejections | `BarType::Io` (B-2); config width-8 remainder (B-3); BRM-001 diagnostic (B-4); ~~`pcie.h` pins (C-1)~~ — C-1 CLOSED, verified on v4.4.0 |
 | device-lifecycle | **bring-up half fully specified** (register/match/create/associate/preamble/on_init/init-fail); **teardown half DELIVERED on the v4.4.0 pin** (spec-convergence-pl011 C04: deinit fn + macro swap; B-6 closed); shutdown = **PM slot mapped, trigger contract unresolved** (C-4/A-18) | surprise representability (B-7, resolved-by-row), `MatchEntry::Amba` (B-5, resolved-by-rule D08), `UserDataField` (B-8), `ClassTag` (B-9), multi-region (B-10) |
 | diagnostics-logging | **fully specified** — four levels, template reassembly, numeric + `&str` arguments, TU scaffold | non-static `&str` divergences are ratify-able policy (A-5/A-6), not gaps; Kconfig pins (A-9/C) |
 | RegseqError | **fully specified** — marker, carrier, nine-row table (symbol-identical, negated), adapter fusion, two-channel rule | deinit return channel CLOSED (B-6/C-3 delivered: rc returned verbatim, kernel/device.c:199); rc observability (A-11); `uint8_t` clamp verified (C-5) |

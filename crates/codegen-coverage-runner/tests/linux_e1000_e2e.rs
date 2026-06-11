@@ -42,7 +42,10 @@ fn linux_e1000_snapshot_and_l0_structure() {
     let fixture = fixtures
         .iter()
         .find(|f| f.manifest.name == "e1000-composed")
-        .expect("e1000-composed fixture discovered");
+        .expect("e1000-composed fixture discovered")
+        .with_binding(manifest::OsBinding::Linux)
+        .expect("the converged fixture resolves the linux binding (C05)");
+    let fixture = &fixture;
 
     if std::env::var_os("BLESS").is_some() {
         let mut model = match try_bridge_fixture_path(&fixture.input) {
@@ -85,6 +88,19 @@ fn linux_e1000_snapshot_and_l0_structure() {
     assert!(
         conf.contains("{\"slot\": \"on_surprise_remove\", \"row\": \"CAP-LINUX-PCI-SURPRISE-1\"}"),
         "{conf}"
+    );
+    // The converged DT entry (backend-zephyr-c-e1000 D01/C04): audited-
+    // ignored on linux — ONE ignored row in the json and ONE
+    // RSEQ-IGNORED-MATCH block in the TU (the licensed audit lines, I02).
+    assert!(
+        conf.contains("\"entry\": \"devicetree compatible=\\\"regseq,e1000\\\"\""),
+        "{conf}"
+    );
+    assert_eq!(
+        tu.matches("/* RSEQ-IGNORED-MATCH: devicetree compatible=\"regseq,e1000\"")
+            .count(),
+        1,
+        "exactly one DT audit block in the TU"
     );
 
     // -- the PCI scaffold shape: probe ladder in canonical order with the
@@ -261,7 +277,9 @@ fn linux_e1000_snapshot_and_l0_structure() {
         !table_body.contains("0x00041011"),
         "the foreign entry is absent from the emitted table (A2)"
     );
-    assert_eq!(emit.conformance.ignored_match_entries.len(), 1);
+    // Two ignored rows now: the fixture's converged DT entry + the pushed
+    // amba entry (backend-zephyr-c-e1000 D01 added the former).
+    assert_eq!(emit.conformance.ignored_match_entries.len(), 2);
 
     // -- non-PCI config rejection: the SAME bodies under an AMBA descriptor
     //    hit the C01 legality (a) diagnostic at the eclipsed config sites.

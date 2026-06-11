@@ -137,10 +137,16 @@ const _: () = assert!(core::mem::offset_of!(e1000::Regs, status) == 0x00008);
 /// returns the authored Err deterministically in both worlds.
 const IMPOSSIBLE_STATUS: u32 = 0xDEAD_BEEF;
 
+// The CONVERGED match set (backend-zephyr-c-e1000 D01: the Pci row first,
+// DT last): `regseq,e1000fail` mirrors the module name so both DUTs stay
+// bindable side by side; each backend consumes its native entry and audits
+// the foreign one (D03(a)).
 #[rseq::device_class(network)]
 #[rseq::driver(name = "e1000fail", bus = "pci", pci = [
     { vendor = 0x8086, device = 0x100e },
-])]
+    ],
+    compatible = ["regseq,e1000fail"]
+)]
 pub struct E1000InitFail {
     #[rseq::mmio(id = "regs", bar = 0)]
     regs: Mmio<e1000::Regs>,
