@@ -418,17 +418,22 @@ impl VariantSet {
 /// Compute the handler's `IrqResult` arm-reachability facts from its
 /// materialized body.
 ///
-/// Proof depth (design-intended; the contract floor is warn-on-unknown):
+/// Proof depth (the contract floor is warn-on-unknown — the analysis may
+/// over-warn, NEVER under-warn, so `ProvenReachable` demands an actual
+/// proof, not CFG-path existence; Codex M1 review MUST-FIX):
 ///
-///   * **ProvenReachable** — a construction of the arm's variant flows into
-///     the return place in a basic block that is CFG-reachable from entry and
-///     CFG-reaches a `Return`, in the OPTIMIZED MIR (rustc has already pruned
-///     constant-false branches, so this is post-dead-code liveness — the
-///     distinction the R11 contract draws against syntactic presence).
-///     Path-predicate satisfiability beyond CFG shape is out of scope.
+///   * **ProvenReachable** — the return place's may-value set is bounded and
+///     is EXACTLY this arm's variant, and a CFG-live `Return` exists: every
+///     terminating execution returns this arm. A construction that is merely
+///     on a CFG path (whose branch predicates might be runtime-infeasible)
+///     is NOT proof — a conditional arm stays `Unknown`, so the R11 warning
+///     over-warns rather than ever being wrongly suppressed.
 ///   * **ProvenUnreachable** — the return place's may-value set is bounded
 ///     (no unanalyzed source feeds it, transitively) and excludes the
-///     variant: no execution can return that arm.
+///     variant: no execution can return that arm. This direction is
+///     load-bearing for R09 (a wrong `ProvenUnreachable` would admit a
+///     `DeferWork`-returning handler), so the set is a may-over-approximation
+///     (dead-block constructions still inflate it).
 ///   * **Unknown** — everything else. Consumers treat it conservatively
 ///     (R11 warns; the R09 `DeferWork` guard rejects).
 fn compute_arm_reachability(model: &RegseqModel, body: &Body) -> IrqArmReachability {
@@ -478,16 +483,8 @@ fn compute_arm_reachability(model: &RegseqModel, body: &Body) -> IrqArmReachabil
     let n_locals = body.local_decls.len();
     let mut sets: Vec<VariantSet> = vec![VariantSet::default(); n_locals];
     let mut edges: Vec<(usize, usize)> = Vec::new(); // (from, to)
-    // Direct construction sites: (block, variant) writing the return place.
-    let mut ret_constructions: Vec<(BlockId, RetSource)> = Vec::new();
 
-    enum RetSource {
-        Variant(u32),
-        FromLocal(LocalId),
-    }
-
-    for (block_idx, block) in body.basic_blocks.iter().enumerate() {
-        let block_id = BlockId::from_u32(block_idx as u32);
+    for block in body.basic_blocks.iter() {
         for stmt in block.statements.iter() {
             match &stmt.kind {
                 StatementKind::Assign(place, rvalue) => {
@@ -506,12 +503,7 @@ fn compute_arm_reachability(model: &RegseqModel, body: &Body) -> IrqArmReachabil
                         Rvalue::Use(Operand::Constant(cid)) => {
                             match model.consts.resolve(*cid) {
                                 Const::EnumValue { variant_idx, .. } => {
-                                    let v = variant_idx.as_u32();
-                                    sets[local.index()].add_variant(v);
-                                    if local == LocalId::RETURN_PLACE {
-                                        ret_constructions
-                                            .push((block_id, RetSource::Variant(v)));
-                                    }
+                                    sets[local.index()].add_variant(variant_idx.as_u32());
                                 }
                                 _ => sets[local.index()].top = true,
                             }
@@ -519,20 +511,12 @@ fn compute_arm_reachability(model: &RegseqModel, body: &Body) -> IrqArmReachabil
                         // A fieldless variant construction survives as an
                         // `Aggregate` at the bridge's mir-opt level.
                         Rvalue::Aggregate(regseq_model::AggregateKind::Enum(_, variant_idx), _) => {
-                            let v = variant_idx.as_u32();
-                            sets[local.index()].add_variant(v);
-                            if local == LocalId::RETURN_PLACE {
-                                ret_constructions.push((block_id, RetSource::Variant(v)));
-                            }
+                            sets[local.index()].add_variant(variant_idx.as_u32());
                         }
                         Rvalue::Use(Operand::Copy(src)) | Rvalue::Use(Operand::Move(src)) => {
                             match bare_local(src) {
                                 Some(src_local) if is_irq_local(src_local) => {
                                     edges.push((src_local.index(), local.index()));
-                                    if local == LocalId::RETURN_PLACE {
-                                        ret_constructions
-                                            .push((block_id, RetSource::FromLocal(src_local)));
-                                    }
                                 }
                                 _ => sets[local.index()].top = true,
                             }
@@ -543,11 +527,7 @@ fn compute_arm_reachability(model: &RegseqModel, body: &Body) -> IrqArmReachabil
                 StatementKind::SetDiscriminant(place, variant_idx) => {
                     if let Some(local) = bare_local(place) {
                         if is_irq_local(local) {
-                            let v = variant_idx.as_u32();
-                            sets[local.index()].add_variant(v);
-                            if local == LocalId::RETURN_PLACE {
-                                ret_constructions.push((block_id, RetSource::Variant(v)));
-                            }
+                            sets[local.index()].add_variant(variant_idx.as_u32());
                         }
                     } else if is_irq_local(place.local) {
                         sets[place.local.index()].top = true;
@@ -580,7 +560,8 @@ fn compute_arm_reachability(model: &RegseqModel, body: &Body) -> IrqArmReachabil
         }
     }
 
-    // Block liveness: forward-reachable from entry AND reaching a Return.
+    // A CFG-live `Return` (forward-reachable from entry): the precondition
+    // for the every-terminating-execution proof below.
     let n_blocks = body.basic_blocks.len();
     let mut fwd = vec![false; n_blocks];
     let mut stack = vec![BlockId::START_BLOCK];
@@ -594,40 +575,19 @@ fn compute_arm_reachability(model: &RegseqModel, body: &Body) -> IrqArmReachabil
             }
         }
     }
-    let mut reverse_edges: Vec<Vec<usize>> = vec![Vec::new(); n_blocks];
-    let mut bwd = vec![false; n_blocks];
-    let mut stack: Vec<usize> = Vec::new();
-    for (idx, block) in body.basic_blocks.iter().enumerate() {
-        for succ in block.terminator.successors() {
-            reverse_edges[succ.index()].push(idx);
-        }
-        if matches!(block.terminator.kind, TerminatorKind::Return) {
-            stack.push(idx);
-        }
-    }
-    while let Some(b) = stack.pop() {
-        if std::mem::replace(&mut bwd[b], true) {
-            continue;
-        }
-        for &pred in &reverse_edges[b] {
-            if !bwd[pred] {
-                stack.push(pred);
-            }
-        }
-    }
-    let live = |b: BlockId| fwd[b.index()] && bwd[b.index()];
+    let live_return_exists = body
+        .basic_blocks
+        .iter()
+        .enumerate()
+        .any(|(idx, b)| fwd[idx] && matches!(b.terminator.kind, TerminatorKind::Return));
 
-    // Per-arm verdicts.
+    // Per-arm verdicts: ProvenReachable only on actual proof (the return
+    // place can hold NOTHING but this arm and a live Return exists — every
+    // terminating execution returns it); conditional arms stay Unknown so the
+    // R11 consumer over-warns, never under-warns.
     let ret_set = sets[LocalId::RETURN_PLACE.index()];
     let verdict = |v: u32| -> ArmReachability {
-        let proven_reachable = ret_constructions.iter().any(|(block, source)| {
-            live(*block)
-                && match source {
-                    RetSource::Variant(sv) => *sv == v,
-                    RetSource::FromLocal(l) => sets[l.index()].exactly(v),
-                }
-        });
-        if proven_reachable {
+        if ret_set.exactly(v) && live_return_exists {
             ArmReachability::ProvenReachable
         } else if !ret_set.top && !ret_set.contains(v) {
             ArmReachability::ProvenUnreachable

@@ -269,7 +269,7 @@ fn handler_arms_prove_constant_return_reachability() {
 }
 
 #[test]
-fn handler_arms_branching_body_reaches_both_arms() {
+fn handler_arms_branching_body_stays_unknown_never_proven() {
     let driver = r#"
 #[rseq::driver(name = "uartish", compatible = ["acme,uartish"])]
 pub struct Uartish {
@@ -294,9 +294,15 @@ pub fn make() -> Uartish { loop {} }
         sole_interrupts(model).handlers[0].arms
     })
     .expect("bridge should accept");
-    // Both constant returns sit on live entry->return paths.
-    assert_eq!(arms.handled, ArmReachability::ProvenReachable);
-    assert_eq!(arms.not_handled, ArmReachability::ProvenReachable);
+    // CONDITIONAL returns are NOT proof (Codex M1 MUST-FIX): a CFG path's
+    // branch predicate may be runtime-infeasible, and claiming
+    // ProvenReachable would let the R11 shared-line warning be wrongly
+    // SUPPRESSED (under-warn). Both conditional arms stay Unknown — the
+    // warn-on-unknown floor over-warns instead. The never-constructed
+    // DeferWork stays provably unreachable (the bounded may-set excludes it
+    // — the R09-load-bearing direction).
+    assert_eq!(arms.handled, ArmReachability::Unknown);
+    assert_eq!(arms.not_handled, ArmReachability::Unknown);
     assert_eq!(arms.defer_work, ArmReachability::ProvenUnreachable);
 }
 
