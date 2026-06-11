@@ -17,6 +17,7 @@ use regseq_model::{
 };
 
 use super::{emit_zephyr_c, EmitError};
+use crate::capability;
 
 // -- model-construction helpers ----------------------------------------------
 
@@ -512,21 +513,176 @@ fn on_deinit_is_rejected_citing_d06_not_unsupported() {
         "{s}"
     );
     assert!(!s.to_lowercase().contains("unsupported"), "{s}");
+    // D14: the scheduling diagnostic is table-cited (rendered from the row
+    // const, never a literal).
+    assert!(s.contains(capability::CAP_ZEPHYR_DT_DEINIT_1.id), "{s}");
+}
+
+// -- the ratified OS-absent slot (os-capability-disposition unit): authored
+//    on_surprise_remove under a ratified AbsentDispatch row emits, audited;
+//    the body is still fully checked (D06/D10, C04/C05) ----------------------
+
+/// The emitting model plus a legal `Ok(())` `on_surprise_remove` body.
+fn absent_slot_model() -> RegseqModel {
+    let mut m = emitting_model(&["HardwareError", "DeviceBusy"]);
+    let driver_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| {
+            matches!(t, Ty::Struct { item, .. } if {
+                m.strings.resolve(m.items[*item].def_path.rendered) == "Minimal"
+            })
+        })
+        .map(|(id, _)| id)
+        .unwrap();
+    let result_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| matches!(t, Ty::Enum { item, .. } if m.items[*item].is_result))
+        .map(|(id, _)| id)
+        .unwrap();
+    let on_sr = push_ok_callback(&mut m, driver_ty, result_ty, "on_surprise_remove");
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_surprise_remove = Some(on_sr);
+    m
 }
 
 #[test]
-fn on_surprise_remove_is_rejected_citing_b7() {
+fn absent_surprise_remove_emits_with_exactly_one_audit_block() {
+    let emit = emit_zephyr_c(&absent_slot_model()).expect("the absent slot must emit");
+    let tu = &emit.tu;
+    // Exactly one C04 block, grammar verbatim, citing the ratified row.
+    assert_eq!(tu.matches("RSEQ-ABSENT-SLOT:").count(), 1, "{tu}");
+    let row = &capability::CAP_ZEPHYR_DT_SURPRISE_1;
+    assert!(
+        tu.contains("/* RSEQ-ABSENT-SLOT: on_surprise_remove"),
+        "{tu}"
+    );
+    assert!(
+        tu.contains(&format!("* disposition: AbsentDispatch row: {}", row.id)),
+        "{tu}"
+    );
+    // The [ratified: ...] payload is non-empty by construction (the row
+    // citation, verbatim from the const).
+    assert!(tu.contains("[ratified: Zephyr v4.4.0"), "{tu}");
+    assert!(
+        tu.contains("body checked, not delivered: dispatch cannot occur on this target."),
+        "{tu}"
+    );
+    // Non-emission: no callback symbol, no call site.
+    assert!(!tu.contains("minimal_on_surprise_remove"), "{tu}");
+    // The report row cites the SAME const the block renders from (I03):
+    // block row ID == report row ID.
+    assert_eq!(
+        emit.conformance.absent_dispatch_slots,
+        vec![crate::capability::SlotEntry {
+            slot: "on_surprise_remove".into(),
+            row: Some(row.id.into()),
+            citation: Some(row.citation.into()),
+        }]
+    );
+    assert!(
+        tu.contains(&format!(
+            "row: {}",
+            emit.conformance.absent_dispatch_slots[0]
+                .row
+                .as_deref()
+                .unwrap()
+        )),
+        "{tu}"
+    );
+    // The R05 summary line, plan-fixed wording, from the same struct.
+    assert_eq!(
+        emit.conformance.summary_line(),
+        "RSEQ-CONFORMANCE [zephyr_c @ v4.4.0 (684c9e8f32e4)] delivered=[on_init] \
+         absent_dispatch=[on_surprise_remove:CAP-ZEPHYR-DT-SURPRISE-1] rejected=[]"
+    );
+    assert!(emit.conformance.rejected_slots.is_empty());
+}
+
+#[test]
+fn absent_lowering_has_no_observable_effect_beyond_the_audit_block() {
+    // D06: the discarded lowering must not perturb the TU — the absent-slot
+    // emit equals the no-surprise emit plus EXACTLY the audit block.
+    let with_absent = emit_zephyr_c(&absent_slot_model()).expect("must emit");
+    let without =
+        emit_zephyr_c(&emitting_model(&["HardwareError", "DeviceBusy"])).expect("must emit");
+    let block = format!("{}\n", capability::CAP_ZEPHYR_DT_SURPRISE_1.audit_block());
+    assert_eq!(with_absent.tu.replace(&block, ""), without.tu);
+    assert_eq!(with_absent.binding_yaml, without.binding_yaml);
+}
+
+#[test]
+fn absent_surprise_remove_body_is_still_checked_scan() {
+    // The D12 frame scan runs over the absent closure: a poll_until body
+    // under the absent slot is the D.2 EmitError, never silent emission
+    // (closes the old mod_tests:518 hole).
     let mut m = minimal_dt_model();
     let ut = unit_ty(&mut m);
-    let cb = push_intrinsic(&mut m, "dummy", IntrinsicKind::PollUntil, vec![], ut);
-    let on_sr = push_callback_calling(&mut m, cb, ut);
+    let poll = push_intrinsic(&mut m, "poll_until", IntrinsicKind::PollUntil, vec![], ut);
+    let on_sr = push_callback_calling(&mut m, poll, ut);
     let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
     driver.ops.on_surprise_remove = Some(on_sr);
     let err = emit_zephyr_c(&m).unwrap_err();
     let EmitError::Rejected(s) = err else {
         panic!("expected Rejected, got {err:?}");
     };
-    assert!(s.contains("B-7"), "{s}");
+    assert!(s.contains("B-1"), "{s}");
+}
+
+#[test]
+fn absent_surprise_remove_runs_full_lowering_not_just_the_scan() {
+    // D06's mechanism guarantee: the absent body runs the COMPLETE pipeline
+    // (fn_head/emit_fn), so a construct only the lowering rejects — a
+    // foreign bodyless callee, invisible to the frame scan — still fails.
+    let mut m = minimal_dt_model();
+    let ut = unit_ty(&mut m);
+    let fn_item = item(&mut m, ItemKind::Function, "foreign_helper");
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output: ut,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let emission = m.strings.intern("foreign_helper");
+    let foreign = m.instances.push(Instance {
+        item: fn_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body: None,
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+    let on_sr = push_callback_calling(&mut m, foreign, ut);
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_surprise_remove = Some(on_sr);
+    let err = emit_zephyr_c(&m).unwrap_err();
+    let EmitError::Unsupported(s) = err else {
+        panic!("expected Unsupported, got {err:?}");
+    };
+    assert!(s.contains("foreign (bodyless) function"), "{s}");
+}
+
+#[test]
+fn no_audit_block_when_no_absent_slot() {
+    let emit = emit_zephyr_c(&emitting_model(&["HardwareError", "DeviceBusy"])).expect("must emit");
+    assert!(!emit.tu.contains("RSEQ-ABSENT-SLOT"), "{}", emit.tu);
+    assert!(emit.conformance.absent_dispatch_slots.is_empty());
+    // Delivered slots in LifecycleOps declaration order, row None (no
+    // ratified row exists for the zephyr bring-up slots).
+    assert_eq!(emit.conformance.delivered_slots.len(), 1);
+    assert_eq!(emit.conformance.delivered_slots[0].slot, "on_init");
+    assert_eq!(emit.conformance.delivered_slots[0].row, None);
+    assert_eq!(
+        emit.conformance.summary_line(),
+        "RSEQ-CONFORMANCE [zephyr_c @ v4.4.0 (684c9e8f32e4)] delivered=[on_init] \
+         absent_dispatch=[] rejected=[]"
+    );
 }
 
 #[test]
@@ -545,6 +701,8 @@ fn on_system_shutdown_is_designed_and_scheduled_per_a18() {
     // "unsupported".
     assert!(s.contains("designed and scheduled per A-18"), "{s}");
     assert!(!s.to_lowercase().contains("unsupported"), "{s}");
+    // D14: table-cited (rendered from the row const, never a literal).
+    assert!(s.contains(capability::CAP_ZEPHYR_DT_SHUTDOWN_1.id), "{s}");
 }
 
 #[test]

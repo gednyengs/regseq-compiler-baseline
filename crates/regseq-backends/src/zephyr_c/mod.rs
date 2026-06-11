@@ -32,10 +32,11 @@ mod mod_tests;
 
 use regseq_model::{
     AttrData, BusType, ClassTag, ConfigOp, EnumShape, InstanceId, InstanceKind, InstanceRef,
-    IntrinsicKind, LayoutKind, MatchEntry, RegseqModel, TagEncoding, TerminatorKind, Ty, TyId,
-    UserDataKind,
+    IntrinsicKind, LayoutKind, MatchEntry, RegseqModel, TagEncoding, TargetOs, TerminatorKind, Ty,
+    TyId, UserDataKind,
 };
 
+use crate::capability;
 use naming::{c_ident, compat_token};
 use types::TypeNames;
 
@@ -52,6 +53,11 @@ pub struct ZephyrEmit {
     pub binding_yaml: String,
     /// The sanitized driver name the artifacts are keyed by (A-14).
     pub driver_name: String,
+    /// The per-target conformance report (amendment 6, C05): delivered /
+    /// absent-dispatch / rejected slots with their ratified row IDs.
+    /// `rejected_slots` is structurally empty — a rejection returns `Err`
+    /// before this struct exists (I07).
+    pub conformance: capability::ConformanceReport,
 }
 
 /// zephyr_c emission errors. Every failure path is a loud, named diagnostic
@@ -220,33 +226,63 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
     }
     let compatible = dt_compatibles[0];
 
-    // Lifecycle ops: the bring-up half is this unit's scope (D12).
+    // Lifecycle ops: the bring-up half is this unit's scope (D12). The two
+    // scheduling rejections are table-cited (D14: the diagnostics GAIN their
+    // ratified row IDs, rendered from the row consts, never literals).
     if driver.ops.on_deinit.is_some() {
-        return Err(EmitError::Rejected(
+        return Err(EmitError::Rejected(format!(
             "authored `on_deinit` under TargetOs::Zephyr: the teardown slot exists on v4.4 \
              (`device_deinit()`, v4.2.0+) but is unverified/undesigned (D.2/B-6, C-3, D06) — \
-             delivered by spec-convergence-pl011"
-                .into(),
-        ));
+             delivered by spec-convergence-pl011 [capability row {}]",
+            capability::CAP_ZEPHYR_DT_DEINIT_1.id
+        )));
     }
-    if driver.ops.on_surprise_remove.is_some() {
-        return Err(EmitError::Rejected(
-            "authored `on_surprise_remove` under TargetOs::Zephyr: no hotplug dispatch exists \
-             for DT devices — the surprise scenario may not be representable on this target \
-             (D.2/B-7; A-12 recommends exactly this diagnostic)"
-                .into(),
-        ));
-    }
+    // `on_surprise_remove`: the one ratified OS-absent slot. The capability
+    // table decides — an `AbsentDispatch` row licenses auditable non-emission
+    // (lowered in full into a throwaway context below, audit block in place);
+    // anything else keeps the D.2 fail-loud default (I01).
+    let absent_surprise: Option<&'static capability::CapabilityRow> =
+        if driver.ops.on_surprise_remove.is_some() {
+            let bus_family = match &driver.descriptor.bus_type {
+                Some(BusType::Platform) => "platform",
+                Some(BusType::Amba) => "amba",
+                // PCIe and exotic buses were rejected above; a DT-registered
+                // driver with no selector queries the wildcard.
+                _ => "any",
+            };
+            match capability::lookup(
+                TargetOs::Zephyr,
+                capability::ZEPHYR_PIN,
+                bus_family,
+                capability::RegistrationForm::StaticDevicetree,
+                capability::LifecycleSlot::OnSurpriseRemove,
+            ) {
+                Some(row) if row.disposition == capability::Disposition::AbsentDispatch => {
+                    Some(row)
+                }
+                _ => {
+                    return Err(EmitError::Rejected(
+                        "authored `on_surprise_remove` under TargetOs::Zephyr: no hotplug \
+                         dispatch exists for DT devices — the surprise scenario may not be \
+                         representable on this target (D.2/B-7; A-12 recommends exactly this \
+                         diagnostic)"
+                            .into(),
+                    ))
+                }
+            }
+        } else {
+            None
+        };
     if driver.ops.on_system_shutdown.is_some() {
         // NOT a capability gap: the PM-device slot is witnessed and the
         // dispatch wrapper is designed (scaffold §4); its emission is
         // scheduled behind the C-4 trigger-contract pin per A-18.
-        return Err(EmitError::Rejected(
+        return Err(EmitError::Rejected(format!(
             "authored `on_system_shutdown`: the PM-device action wrapper is designed and \
              scheduled per A-18 (slot witnessed, scaffold §4; trigger contract pending the \
-             C-4 pin) — not emitted by this unit"
-                .into(),
-        ));
+             C-4 pin) — not emitted by this unit [capability row {}]",
+            capability::CAP_ZEPHYR_DT_SHUTDOWN_1.id
+        )));
     }
 
     // Resource regions: the TU-static base carrier admits exactly one
@@ -424,6 +460,81 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         bodies.push('\n');
     }
 
+    // -- the ratified OS-absent slot (amendments 4/7; D06/D10): the absent
+    //    callback's body runs the COMPLETE body-lowering pipeline — its own
+    //    closure (the emitter roots only on_init/on_init_failure above), the
+    //    D12 frame scan, fn_head/emit_fn — in a THROWAWAY LowerCx, and the
+    //    output is discarded. The throwaway context is load-bearing: a shared
+    //    one would let the discarded lowering perturb includes/log-module/
+    //    width8/symbols of the TU (D06: no observable effect beyond the
+    //    audit block). Exactly one C04 block is emitted where the callback's
+    //    lowered definition would have sat in the bodies bank.
+    let mut absent_entries: Vec<capability::SlotEntry> = Vec::new();
+    if let Some(row) = absent_surprise {
+        let r = driver
+            .ops
+            .on_surprise_remove
+            .expect("absent_surprise implies the slot is authored");
+        let id = resolve_instance_ref(model, r).ok_or_else(|| {
+            EmitError::Driver(
+                "callback `on_surprise_remove` does not resolve to an instance".into(),
+            )
+        })?;
+        let absent_closure = reachable_closure(model, std::iter::once(id));
+        // Any construct the delivered path rejects still yields the D.2
+        // EmitError — the scan first, then full lowering (never scan-only).
+        scan_closure_ops(model, &absent_closure)?;
+        let mut tcx = body::LowerCx {
+            model,
+            names: TypeNames::new(),
+            fn_symbols: std::collections::BTreeMap::new(),
+            extra_includes: std::collections::BTreeSet::new(),
+            driver: body::DriverFacts {
+                driver_ty,
+                resources: cx.driver.resources.clone(),
+                reg_macros: cx.driver.reg_macros.clone(),
+                base_symbol: cx.driver.base_symbol.clone(),
+            },
+            width8_used: false,
+            uses_log: false,
+            elided_locals: std::collections::BTreeSet::new(),
+        };
+        // Seed fn_symbols for the WHOLE absent closure before fn_head/emit_fn
+        // (fn_head indexes cx.fn_symbols[&instance]).
+        tcx.fn_symbols
+            .insert(id, format!("{drv}_on_surprise_remove"));
+        for cid in &absent_closure {
+            if tcx.fn_symbols.contains_key(cid) {
+                continue;
+            }
+            let leaf =
+                naming::path_leaf(model.strings.resolve(model.instances[*cid].emission_name));
+            let base = format!("{drv}_{}", c_ident(leaf));
+            let mut sym = base.clone();
+            let mut n = 1;
+            while tcx.fn_symbols.values().any(|v| v == &sym) {
+                n += 1;
+                sym = format!("{base}_{n}");
+            }
+            tcx.fn_symbols.insert(*cid, sym);
+        }
+        for cid in &absent_closure {
+            body::fn_head(&mut tcx, *cid).map_err(|e| with_fn_context(e, model, *cid))?;
+        }
+        for cid in &absent_closure {
+            body::emit_fn(&mut tcx, *cid).map_err(|e| with_fn_context(e, model, *cid))?;
+        }
+        bodies.push_str(&row.audit_block());
+        bodies.push('\n');
+        absent_entries.push(capability::SlotEntry {
+            slot: capability::LifecycleSlot::OnSurpriseRemove
+                .model_name()
+                .into(),
+            row: Some(row.id.into()),
+            citation: Some(row.citation.into()),
+        });
+    }
+
     // -- the init function (scaffold §3) + the fused errno adapter ----------
     let find = |name: &str| roots.iter().find(|(n, _)| *n == name).map(|(_, id)| *id);
     let init_fn = emit_init_fn(
@@ -458,10 +569,31 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
     )?;
     let binding_yaml = emit_binding_yaml(model, &drv, compatible, driver);
 
+    // -- the per-target conformance report (amendment 6, C05): slots in
+    //    LifecycleOps declaration order; delivered rows carry a ratified row
+    //    ID only when one exists (none does for the zephyr bring-up slots);
+    //    rejected_slots structurally empty (I07).
+    let delivered_slots = roots
+        .iter()
+        .map(|(name, _)| capability::SlotEntry {
+            slot: (*name).to_string(),
+            row: None,
+            citation: None,
+        })
+        .collect();
+    let conformance = capability::ConformanceReport {
+        target: "zephyr_c",
+        os_version_pin: capability::ZEPHYR_PIN,
+        delivered_slots,
+        absent_dispatch_slots: absent_entries,
+        rejected_slots: Vec::new(),
+    };
+
     Ok(ZephyrEmit {
         tu,
         binding_yaml,
         driver_name: drv,
+        conformance,
     })
 }
 
