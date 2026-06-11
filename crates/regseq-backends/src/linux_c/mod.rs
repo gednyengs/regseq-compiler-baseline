@@ -32,6 +32,8 @@ use regseq_model::{
     MatchEntry, RegseqModel, TerminatorKind, Ty, TyId,
 };
 
+use crate::capability;
+
 use body::LowerCx;
 use naming::c_ident;
 
@@ -45,6 +47,12 @@ pub struct LinuxEmit {
     pub kbuild: String,
     /// The module name the fragment references (`<driver>`, C-sanitized).
     pub module_name: String,
+    /// The per-target conformance report (amendment 6, C05): delivered /
+    /// absent-dispatch / rejected slots with their ratified row IDs.
+    /// linux_c delivers every authored slot it emits; `rejected_slots` is
+    /// structurally empty — a rejection returns `Err` before this struct
+    /// exists (I07).
+    pub conformance: capability::ConformanceReport,
 }
 
 /// linux_c emission errors. Every failure path is a loud, named diagnostic
@@ -383,10 +391,34 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     tu.push('\n');
     tu.push_str(&tail);
 
+    // -- the per-target conformance report (amendment 6, C05): every
+    //    authored slot that emits is delivered, in LifecycleOps declaration
+    //    order (the callbacks-array order above); the PCI surprise slot is
+    //    the one table-ratified delivery (D16(b): row ID iff a ratified row
+    //    exists, rendered from the const — never a literal); rejected_slots
+    //    structurally empty (I07).
+    let delivered_slots = roots
+        .iter()
+        .map(|(name, _)| capability::SlotEntry {
+            slot: (*name).to_string(),
+            row: (bus == ScaffoldBus::Pci && *name == "on_surprise_remove")
+                .then(|| capability::CAP_LINUX_PCI_SURPRISE_1.id.to_string()),
+            citation: None,
+        })
+        .collect();
+    let conformance = capability::ConformanceReport {
+        target: "linux_c",
+        os_version_pin: capability::LINUX_PIN,
+        delivered_slots,
+        absent_dispatch_slots: Vec::new(),
+        rejected_slots: Vec::new(),
+    };
+
     Ok(LinuxEmit {
         kbuild: format!("obj-m += {drv}.o\n"),
         module_name: drv,
         tu,
+        conformance,
     })
 }
 

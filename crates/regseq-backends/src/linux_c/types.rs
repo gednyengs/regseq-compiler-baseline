@@ -12,9 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use regseq_model::{
-    EnumShape, IntKind, Layout, LayoutKind, RegseqModel, Ty, TyId, UintKind,
-};
+use regseq_model::{EnumShape, IntKind, Layout, LayoutKind, RegseqModel, Ty, TyId, UintKind};
 
 use super::naming::{c_ident, path_leaf};
 use super::EmitError;
@@ -39,9 +37,9 @@ impl TypeNames {
             return Ok(name.clone());
         }
         let base = match &model.types[ty] {
-            Ty::Struct { item, .. } | Ty::Enum { item, .. } | Ty::Union { item, .. } => {
-                c_ident(path_leaf(model.strings.resolve(model.items[*item].def_path.rendered)))
-            }
+            Ty::Struct { item, .. } | Ty::Enum { item, .. } | Ty::Union { item, .. } => c_ident(
+                path_leaf(model.strings.resolve(model.items[*item].def_path.rendered)),
+            ),
             Ty::Tuple { fields, .. } => {
                 let mut parts = vec!["rseq_tuple".to_string()];
                 for f in fields {
