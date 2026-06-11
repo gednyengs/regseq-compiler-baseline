@@ -45,5 +45,5 @@ pub use generic_c::{
     emit_generic_c, emit_generic_c_for_entry, emit_generic_c_for_entry_with,
     emit_generic_c_for_entry_with_context, emit_generic_c_with, emit_generic_c_with_context,
     entry_c_symbol, full_helper_prelude, generate_main_c, BackendContext, BackendOptions,
-    EmitError, EntryEmit, EntryShim, EntrySymbol, LifecycleScenario,
+    EmitError, EntryEmit, EntryShim, EntrySymbol, IrqFireStep, LifecycleScenario,
 };

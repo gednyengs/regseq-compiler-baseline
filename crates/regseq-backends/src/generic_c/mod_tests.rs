@@ -3772,15 +3772,26 @@ fn prelude_ordinary_idents_all_defined_in_prelude() {
     // (RD-7) but every reserved name must still be a real helper, so check the
     // full superset (`include_lifecycle = true`) against the superset text.
     let prelude_text = format!(
-        "{}{}{}",
+        "{}{}{}{}",
         prelude::PRELUDE,
         prelude::helper_block(&prelude::HelperUsage::all()),
         prelude::LIFECYCLE_HELPERS,
+        prelude::IRQ_HELPERS,
     );
-    for ident in prelude_ordinary_idents(true) {
+    for ident in prelude_ordinary_idents(true, true) {
+        // Two device-interrupt names share C's ordinary identifier namespace
+        // without being functions: the slot-table static (defined with `[`)
+        // and the slot typedef (defined as `} regseq_irq_slot_t;`). They are
+        // reserved (a collision would still break the TU) and pinned by plain
+        // presence; everything else must be a real helper function.
+        let defined = if ident == "regseq_irq_slot_table" || ident == "regseq_irq_slot_t" {
+            prelude_text.contains(&ident)
+        } else {
+            prelude_text.contains(&format!("{ident}("))
+        };
         assert!(
-            prelude_text.contains(&format!("{ident}(")),
-            "reserved prelude ident `{ident}` is not emitted as a function"
+            defined,
+            "reserved prelude ident `{ident}` is not defined in the prelude"
         );
     }
 }

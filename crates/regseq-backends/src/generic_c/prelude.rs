@@ -147,6 +147,111 @@ __attribute__((unused)) static void regseq_lc_postamble(const char *res, int ski
 }
 "#;
 
+/// Device-interrupt host line model (construct #6, GRILL C05).
+///
+/// Emitted ONLY for a TU with recognized `Interrupt` resources (the caller
+/// gates on `model.interrupt.drivers`), so an interrupt-less TU's `.c` is
+/// byte-unchanged — no golden churn. Each hook prints an `IRQ <event>` line to
+/// stdout: that trace IS the behavioral oracle for the placement contract
+/// (C01 made observable, I07). `regseq_irq_fire` is SYNCHRONOUS (GRILL D07,
+/// superseding the buildout-PLAN "host thread" note): the harness calls it
+/// between scenario steps and it invokes the registered wrapper inline iff
+/// the line is enabled; otherwise it traces the inert form — the O1 spelling
+/// is minted HERE as `IRQ fire line=<n> inert` and goldens assert it
+/// positively. The supplementary `IRQ binding`/`IRQ result`/`IRQ poke` line
+/// spellings are likewise harness-named (O1 latitude); the five-hook family
+/// itself is the C05 contract.
+pub const IRQ_HELPERS: &str = r#"
+/* ---------------------------------------------------------------------------
+ * Device-interrupt host line model (construct #6). Each hook prints an
+ * "IRQ <event>" line to stdout -- this trace IS the behavioral oracle for the
+ * interrupt placement contract (C01). Emitted only for a TU with Interrupt
+ * resources. regseq_irq_fire is SYNCHRONOUS (D07): the harness calls it
+ * between scenario steps; it invokes the registered wrapper inline when the
+ * line is enabled and traces "IRQ fire line=<n> inert" otherwise (O1). */
+#define REGSEQ_IRQ_SLOTS 8u
+typedef struct {
+    uint32_t line;
+    void (*wrapper)(void *);
+    void *ctx;
+    int state; /* 0 = unregistered, 1 = registered (line DISABLED, D02), 2 = enabled */
+} regseq_irq_slot_t;
+static regseq_irq_slot_t regseq_irq_slot_table[REGSEQ_IRQ_SLOTS] __attribute__((unused));
+__attribute__((unused)) static regseq_irq_slot_t *regseq_irq_slot(uint32_t line) {
+    for (uint32_t i = 0; i < REGSEQ_IRQ_SLOTS; i++) {
+        if (regseq_irq_slot_table[i].state != 0 && regseq_irq_slot_table[i].line == line) {
+            return &regseq_irq_slot_table[i];
+        }
+    }
+    return 0;
+}
+__attribute__((unused)) static void regseq_irq_register(uint32_t line, void (*wrapper)(void *), void *ctx) {
+    printf("IRQ register line=%u\n", (unsigned)line);
+    regseq_irq_slot_t *slot = regseq_irq_slot(line);
+    if (!slot) {
+        for (uint32_t i = 0; i < REGSEQ_IRQ_SLOTS; i++) {
+            if (regseq_irq_slot_table[i].state == 0) {
+                slot = &regseq_irq_slot_table[i];
+                break;
+            }
+        }
+    }
+    if (slot) {
+        slot->line = line;
+        slot->wrapper = wrapper;
+        slot->ctx = ctx;
+        slot->state = 1; /* registered with the line DISABLED (D02) */
+    }
+}
+__attribute__((unused)) static void regseq_irq_enable(uint32_t line) {
+    printf("IRQ enable line=%u\n", (unsigned)line);
+    regseq_irq_slot_t *slot = regseq_irq_slot(line);
+    if (slot) slot->state = 2;
+}
+__attribute__((unused)) static void regseq_irq_disable(uint32_t line) {
+    printf("IRQ disable line=%u\n", (unsigned)line);
+    regseq_irq_slot_t *slot = regseq_irq_slot(line);
+    if (slot) slot->state = 1;
+}
+__attribute__((unused)) static void regseq_irq_unregister(uint32_t line) {
+    printf("IRQ unregister line=%u\n", (unsigned)line);
+    regseq_irq_slot_t *slot = regseq_irq_slot(line);
+    if (slot) slot->state = 0;
+}
+__attribute__((unused)) static void regseq_irq_fire(uint32_t line) {
+    regseq_irq_slot_t *slot = regseq_irq_slot(line);
+    if (!slot || slot->state != 2) {
+        printf("IRQ fire line=%u inert\n", (unsigned)line);
+        return;
+    }
+    printf("IRQ fire line=%u\n", (unsigned)line);
+    slot->wrapper(slot->ctx);
+}
+/* The bound handler's dispatch result, traced verbatim (C04). */
+__attribute__((unused)) static void regseq_irq_result(const char *r) {
+    printf("IRQ result=%s\n", r);
+}
+/* The resolved [interrupt.<id>] facts, traced verbatim -- validation/trace
+ * inputs only, never flag semantics (D10/R12). "-" = unspecified trigger;
+ * priority -1 = unspecified. */
+__attribute__((unused)) static void regseq_irq_binding(uint32_t line, const char *trigger_type,
+                                                       const char *trigger_polarity, int shared,
+                                                       long long priority) {
+    printf("IRQ binding line=%u trigger_type=%s trigger_polarity=%s shared=%d priority=%lld\n",
+           (unsigned)line, trigger_type, trigger_polarity, shared, priority);
+}
+/* Harness device-model poke (a scenario step): latch a cause value into the
+ * host regfile so the next fire's ISR observes it. Traced so the golden
+ * records causality; NOT an MMIO access (no R/W line -- the ISR's own reads
+ * trace through the register-access hooks). */
+__attribute__((unused)) static void regseq_irq_dev_poke(uint32_t off, uint32_t val) {
+    printf("IRQ poke @0x%03x = 0x%08x\n", (unsigned)off, (unsigned)val);
+    for (uint32_t i = 0; i < 4u && (off + i) < REGSEQ_REGFILE_BYTES; i++) {
+        regseq_regfile[off + i] = (uint8_t)(val >> (8u * i));
+    }
+}
+"#;
+
 /// Bus-resource-management host bus-model block (construct #3, the keystone).
 ///
 /// Emitted ONLY for a TU that has a resolved bus-resource binding (the caller
