@@ -234,8 +234,9 @@ fn linux_e1000_snapshot_and_l0_structure() {
         .to_string();
     assert!(msg.contains("B-5"), "the >1-region rejection names B-5: {msg}");
 
-    // -- foreign-transport match entry under a PCI driver: stays LOUD naming
-    //    the spec-convergence successor (the T05 polarity pin).
+    // -- foreign-transport match entry under a PCI driver: audited and
+    //    filtered out of the table, never silently dropped (C06/C03/A2 —
+    //    the spec-convergence-pl011 lift replaced the former loud reject).
     let mut foreign = bound_model(fixture);
     {
         let (_, driver) = foreign.device_lifecycle.drivers.iter_mut().next().unwrap();
@@ -244,13 +245,22 @@ fn linux_e1000_snapshot_and_l0_structure() {
             mask: 0x000f_ffff,
         });
     }
-    let msg = regseq_backends::emit_linux_c(&foreign)
-        .expect_err("foreign-transport entry must fail")
-        .to_string();
+    let emit = regseq_backends::emit_linux_c(&foreign).expect("mixed set must emit (C06)");
     assert!(
-        msg.contains("foreign-transport") && msg.contains("spec-convergence"),
-        "the rejection names the successor unit: {msg}"
+        emit.tu
+            .contains("/* RSEQ-IGNORED-MATCH: amba id=0x00041011 mask=0x000fffff"),
+        "the foreign entry is audited in the TU"
     );
+    let table = emit
+        .tu
+        .find("static const struct pci_device_id")
+        .expect("pci table");
+    let table_body = &emit.tu[table..emit.tu.find("{ 0, },").expect("sentinel")];
+    assert!(
+        !table_body.contains("0x00041011"),
+        "the foreign entry is absent from the emitted table (A2)"
+    );
+    assert_eq!(emit.conformance.ignored_match_entries.len(), 1);
 
     // -- non-PCI config rejection: the SAME bodies under an AMBA descriptor
     //    hit the C01 legality (a) diagnostic at the eclipsed config sites.

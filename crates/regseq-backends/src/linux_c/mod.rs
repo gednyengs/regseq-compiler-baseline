@@ -171,36 +171,55 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             ))
         }
     };
-    for entry in &driver.descriptor.match_set {
-        match (bus, entry) {
-            (ScaffoldBus::Amba, MatchEntry::Amba { .. }) => {}
-            (ScaffoldBus::Pci, MatchEntry::Pci { .. }) => {}
-            // The e1000-unit T05 polarity pin: the match-entry lift covers
-            // `Pci` entries under a PCI driver ONLY. A foreign-transport
-            // entry under a PCI driver stays LOUD naming the spec-convergence
-            // successor — the mixed-match-set rule is that unit's design,
-            // never silently dropped (I03; B-6 never-truncate).
-            (ScaffoldBus::Pci, other) => {
-                return Err(EmitError::UnsupportedInUnit {
-                    what: format!(
-                        "foreign-transport match entry {other:?} under a PCI driver \
-                         (mixed match sets, ledger B-6)"
-                    ),
-                    unit: "the spec-convergence mixed-match-set successor unit",
-                })
-            }
-            (ScaffoldBus::Amba, other) => {
-                return Err(EmitError::UnsupportedInUnit {
-                    what: format!("non-AMBA match entry {other:?}"),
-                    unit: "a post-first-light unit",
-                })
-            }
-        }
-    }
     if driver.descriptor.match_set.is_empty() {
         return Err(EmitError::Driver(
             "driver has an empty match set; a kernel id table needs at least one entry".into(),
         ));
+    }
+    // -- the C06 mixed-match rule (spec-convergence-pl011 D08/C06, lifting
+    //    both former per-entry rejects): consume every NATIVE entry (native =
+    //    the scaffold's ratified registration form, NOT the OS — Linux could
+    //    carry an of_match_table, but linux_c's ratified forms are
+    //    amba_driver/pci_driver and never-synthesize binds); ignore each
+    //    recognized FOREIGN entry with a triple-rendered MatchAudit; reject
+    //    an all-foreign set loudly naming the fix (the A-13 analog). The
+    //    filtered native list — not the full match_set — feeds the table
+    //    emitters (A2: their non-native arms are unreachable! by this
+    //    construction).
+    let ratified_form = match bus {
+        ScaffoldBus::Amba => "amba_driver",
+        ScaffoldBus::Pci => "pci_driver",
+    };
+    let mut native_entries: Vec<&MatchEntry> = Vec::new();
+    let mut ignored_audits: Vec<crate::match_audit::MatchAudit> = Vec::new();
+    for entry in &driver.descriptor.match_set {
+        let native = matches!(
+            (bus, entry),
+            (ScaffoldBus::Amba, MatchEntry::Amba { .. })
+                | (ScaffoldBus::Pci, MatchEntry::Pci { .. })
+        );
+        if native {
+            native_entries.push(entry);
+        } else {
+            ignored_audits.push(crate::match_audit::MatchAudit::foreign(
+                model,
+                entry,
+                ratified_form,
+            ));
+        }
+    }
+    if native_entries.is_empty() {
+        return Err(EmitError::Driver(format!(
+            "match set carries no native entries for the ratified {ratified_form} registration \
+             form (all {} recognized entries are foreign-transport); the D03(a) rule licenses \
+             ignoring foreign entries only when >=1 native entry exists — author a native {} \
+             entry for this scaffold",
+            driver.descriptor.match_set.len(),
+            match bus {
+                ScaffoldBus::Amba => "`amba = [{ id, mask }]`",
+                ScaffoldBus::Pci => "`pci = [{ vendor, device }]`",
+            },
+        )));
     }
 
     let drv = c_ident(model.strings.resolve(driver.descriptor.name));
@@ -320,12 +339,22 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
 
     // -- match table + driver struct + module macros ------------------------
     let tail = match bus {
-        ScaffoldBus::Amba => {
-            emit_module_tail(model, &drv, driver, scaffold.shutdown_sym.as_deref())?
-        }
-        ScaffoldBus::Pci => {
-            emit_module_tail_pci(model, &drv, driver, scaffold.shutdown_sym.as_deref())?
-        }
+        ScaffoldBus::Amba => emit_module_tail(
+            model,
+            &drv,
+            driver,
+            &native_entries,
+            &ignored_audits,
+            scaffold.shutdown_sym.as_deref(),
+        )?,
+        ScaffoldBus::Pci => emit_module_tail_pci(
+            model,
+            &drv,
+            driver,
+            &native_entries,
+            &ignored_audits,
+            scaffold.shutdown_sym.as_deref(),
+        )?,
     };
 
     // -- includes (demand-light: the scaffold set; <linux/errno.h> rides the
@@ -412,7 +441,7 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         delivered_slots,
         absent_dispatch_slots: Vec::new(),
         rejected_slots: Vec::new(),
-        ignored_match_entries: Vec::new(),
+        ignored_match_entries: ignored_audits,
     };
 
     Ok(LinuxEmit {
@@ -1112,19 +1141,27 @@ fn emit_type_defs(
 }
 
 /// The match table, driver struct, registration macro, and module metadata
-/// (`linux-scaffold-and-dispatch.md` §1; full match_set, zero-sentinel,
-/// MODULE_DEVICE_TABLE).
+/// (`linux-scaffold-and-dispatch.md` §1; every NATIVE entry, zero-sentinel,
+/// MODULE_DEVICE_TABLE). Takes the C06-filtered native list — foreign
+/// entries feed ONLY the audit blocks rendered adjacent to the table (A2:
+/// they must never reach the `unreachable!` arm below).
 fn emit_module_tail(
     model: &RegseqModel,
     drv: &str,
     driver: &regseq_model::DriverLifecycle,
+    native_entries: &[&MatchEntry],
+    ignored_audits: &[crate::match_audit::MatchAudit],
     shutdown_sym: Option<&str>,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
+    for audit in ignored_audits {
+        out.push_str(&audit.c_block());
+        out.push('\n');
+    }
     out.push_str(&format!("static const struct amba_id {drv}_ids[] = {{\n"));
-    for entry in &driver.descriptor.match_set {
+    for entry in native_entries {
         let MatchEntry::Amba { id, mask } = entry else {
-            unreachable!("non-AMBA entries rejected by the scope gate");
+            unreachable!("the C06 filter passes only Amba entries to the amba table");
         };
         out.push_str(&format!(
             "\t{{\n\t\t.id\t= {id:#010x},\n\t\t.mask\t= {mask:#010x},\n\t}},\n"
@@ -1149,20 +1186,27 @@ fn emit_module_tail(
 }
 
 /// The PCI match table, driver struct, registration macro, and module
-/// metadata (backend-linux-c-e1000 T05: the FULL `match_set`, zero-sentinel,
-/// `MODULE_DEVICE_TABLE(pci, ...)` — B-6 never-truncate; the PCI analogue of
-/// [`emit_module_tail`]).
+/// metadata (backend-linux-c-e1000 T05: every NATIVE entry, zero-sentinel,
+/// `MODULE_DEVICE_TABLE(pci, ...)` — B-6 never-truncate within the native
+/// form; the PCI analogue of [`emit_module_tail`]). Takes the C06-filtered
+/// native list; foreign entries feed ONLY the audit blocks (A2).
 fn emit_module_tail_pci(
     model: &RegseqModel,
     drv: &str,
     driver: &regseq_model::DriverLifecycle,
+    native_entries: &[&MatchEntry],
+    ignored_audits: &[crate::match_audit::MatchAudit],
     shutdown_sym: Option<&str>,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
+    for audit in ignored_audits {
+        out.push_str(&audit.c_block());
+        out.push('\n');
+    }
     out.push_str(&format!(
         "static const struct pci_device_id {drv}_ids[] = {{\n"
     ));
-    for entry in &driver.descriptor.match_set {
+    for entry in native_entries {
         let MatchEntry::Pci {
             vendor,
             device,
@@ -1170,7 +1214,7 @@ fn emit_module_tail_pci(
             class,
         } = entry
         else {
-            unreachable!("foreign-transport entries rejected by the scope gate");
+            unreachable!("the C06 filter passes only Pci entries to the pci table");
         };
         if subsystem.is_some() || class.is_some() {
             // The composed surface carries vendor/device rows only; a
