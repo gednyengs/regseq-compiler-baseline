@@ -203,6 +203,16 @@ fn classify_fields(
     for variant in adt.variants() {
         for field in &variant.fields {
             let field_ty = tcx.type_of(field.did).instantiate_identity();
+            // Device-interrupt fields (construct #6) are compiler-bound
+            // resources owned by `bridge::interrupt` (recognized in its
+            // Phase-4 pass) — route them away from the user-data classifier,
+            // whose D3 would otherwise reject the methodless `Interrupt`
+            // shell. They are not `ResourceField`s either: the interrupt
+            // preamble's position is derived from `model.interrupt`, ordered
+            // after all other resource preambles (D14).
+            if crate::bridge::interrupt::is_interrupt_field(tcx, field_ty) {
+                continue;
+            }
             if is_mmio_resource(tcx, field_ty) {
                 // Recognize the bus-resource-management L1 facts on the shared
                 // `#[rseq::mmio(...)]` field attribute (construct #3, T03): the
