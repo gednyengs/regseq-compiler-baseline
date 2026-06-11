@@ -21,7 +21,7 @@ size = 4096
 [interrupt.uart_irq]
 irq_number = 37
 trigger_type = "level"
-trigger_polarity = "high"
+trigger_polarity = "active_high"
 shared = false
 
 [clock.uart_clk]
