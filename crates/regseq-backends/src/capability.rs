@@ -100,6 +100,12 @@ impl CapabilityRow {
 /// Single authoritative current pin (D12) — the one place a re-pin edits.
 pub const ZEPHYR_PIN: &str = "v4.4.0 (684c9e8f32e4)";
 
+/// The Linux verification pin the linux-backend docs were verified against
+/// (linux-open-questions.md, git.kernel.org `?h=v6.6` anchors). Kept here
+/// for the same one-place-edit reason as [`ZEPHYR_PIN`]; the amendment-9
+/// staleness mechanics are ratified for Zephyr rows only (D12).
+pub const LINUX_PIN: &str = "v6.6";
+
 /// Slots that may NEVER carry Disposition::AbsentDispatch, on any OS (D14:
 /// "probe cannot fail" is almost certainly false once allocation/mapping/
 /// registration are included).
@@ -110,7 +116,11 @@ pub const NEVER_ABSENT: &[LifecycleSlot] = &[LifecycleSlot::OnInit, LifecycleSlo
 pub const CAP_ZEPHYR_DT_SURPRISE_1: CapabilityRow = CapabilityRow {
     id: "CAP-ZEPHYR-DT-SURPRISE-1",
     target_os: TargetOs::Zephyr,
-    os_version_pin: ZEPHYR_PIN,
+    // Deliberate LITERAL, never `ZEPHYR_PIN`: a row records the pin its
+    // claim was RATIFIED against. Referencing the current-pin const would
+    // make every row track a re-pin automatically and the amendment-9
+    // staleness audit could never fire (Codex M2 review finding 1).
+    os_version_pin: "v4.4.0 (684c9e8f32e4)",
     bus_family: "any", // incl. PCIe-over-DT (D02: the FORM carries the claim)
     registration_form: RegistrationForm::StaticDevicetree,
     slot: LifecycleSlot::OnSurpriseRemove,
@@ -131,7 +141,7 @@ pub const CAP_ZEPHYR_DT_SURPRISE_1: CapabilityRow = CapabilityRow {
 pub const CAP_ZEPHYR_DT_SHUTDOWN_1: CapabilityRow = CapabilityRow {
     id: "CAP-ZEPHYR-DT-SHUTDOWN-1",
     target_os: TargetOs::Zephyr,
-    os_version_pin: ZEPHYR_PIN,
+    os_version_pin: "v4.4.0 (684c9e8f32e4)", // ratified literal (see SURPRISE-1)
     bus_family: "any",
     registration_form: RegistrationForm::StaticDevicetree,
     slot: LifecycleSlot::OnSystemShutdown,
@@ -145,7 +155,7 @@ pub const CAP_ZEPHYR_DT_SHUTDOWN_1: CapabilityRow = CapabilityRow {
 pub const CAP_ZEPHYR_DT_DEINIT_1: CapabilityRow = CapabilityRow {
     id: "CAP-ZEPHYR-DT-DEINIT-1",
     target_os: TargetOs::Zephyr,
-    os_version_pin: ZEPHYR_PIN,
+    os_version_pin: "v4.4.0 (684c9e8f32e4)", // ratified literal (see SURPRISE-1)
     bus_family: "any",
     registration_form: RegistrationForm::StaticDevicetree,
     slot: LifecycleSlot::OnDeinit,
@@ -159,7 +169,7 @@ pub const CAP_ZEPHYR_DT_DEINIT_1: CapabilityRow = CapabilityRow {
 pub const CAP_LINUX_PCI_SURPRISE_1: CapabilityRow = CapabilityRow {
     id: "CAP-LINUX-PCI-SURPRISE-1",
     target_os: TargetOs::Linux,
-    os_version_pin: "v6.6",
+    os_version_pin: "v6.6", // ratified literal (see SURPRISE-1)
     bus_family: "pci",
     registration_form: RegistrationForm::PciDynamic,
     slot: LifecycleSlot::OnSurpriseRemove,
