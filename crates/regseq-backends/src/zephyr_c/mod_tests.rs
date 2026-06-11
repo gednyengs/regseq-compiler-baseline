@@ -505,6 +505,28 @@ fn mixed_match_set_is_audited_at_the_dt_compat_surface() {
 }
 
 #[test]
+fn deferred_family_entry_alongside_native_is_rejected_loud() {
+    // C06 final-review hardening: the D03(a) license covers RECOGNIZED
+    // foreign entries only — a deferred-family entry (no ratified
+    // registration form on ANY backend) keeps the D.2 fail-loud default
+    // even when the native DT entry exists, never audited-and-ignored.
+    let mut m = emitting_model(&["HardwareError", "DeviceBusy"]);
+    {
+        let hid = m.strings.intern("ACPI1234");
+        let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+        driver.descriptor.match_set.push(MatchEntry::Acpi { hid });
+    }
+    let err = emit_zephyr_c(&m).unwrap_err();
+    let EmitError::Rejected(s) = err else {
+        panic!("expected Rejected, got {err:?}");
+    };
+    assert!(
+        s.contains("no ratified registration form") && s.contains("fail-loud"),
+        "the deferred-family rejection names the rule boundary: {s}"
+    );
+}
+
+#[test]
 fn multi_compatible_match_set_is_unsupported() {
     let mut m = model();
     let mut match_set = dt_match_for(&mut m, "regseq,pl011");

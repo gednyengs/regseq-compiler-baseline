@@ -91,15 +91,26 @@ pub fn reason_for(ratified_form: &str) -> String {
 
 /// Which backend(s) consume this entry type natively, per the D08 nativeness
 /// table: linux_c's ratified scaffolds consume `Amba`/`Pci`; zephyr_c's
-/// static-DT form consumes `Devicetree`. Deferred-bus entries (acpi/usb/...)
-/// are unreachable here — the bridge rejects them before any backend runs
-/// (CR-5).
+/// static-DT form consumes `Devicetree`. Anything else (the deferred bus
+/// families acpi/usb/i2c/spi) has NO ratified registration form anywhere —
+/// it is NOT a licensed foreign entry and must keep the D.2 fail-loud
+/// default (the bridge already rejects the attr sugar, CR-5; the backends
+/// re-reject the model shape so synthetic models cannot slip through).
 pub fn native_on(entry: &MatchEntry) -> &'static [&'static str] {
     match entry {
         MatchEntry::Amba { .. } | MatchEntry::Pci { .. } => &["linux_c"],
         MatchEntry::Devicetree { .. } => &["zephyr_c"],
         _ => &[],
     }
+}
+
+/// True iff the entry is in the D08 LICENSED foreign/native universe — i.e.
+/// some backend's ratified registration form consumes it. The D03(a) rule
+/// licenses ignoring only RECOGNIZED foreign-transport identity entries;
+/// an entry with no ratified form on ANY backend is outside the rule and
+/// keeps the fail-loud rejection (C06 final-review hardening).
+pub fn has_ratified_form(entry: &MatchEntry) -> bool {
+    !native_on(entry).is_empty()
 }
 
 /// Render a match entry in the fixed C02 spelling.

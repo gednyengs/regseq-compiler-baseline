@@ -193,6 +193,17 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     let mut native_entries: Vec<&MatchEntry> = Vec::new();
     let mut ignored_audits: Vec<crate::match_audit::MatchAudit> = Vec::new();
     for entry in &driver.descriptor.match_set {
+        // The D03(a) license covers RECOGNIZED foreign entries only: an
+        // entry with no ratified registration form on ANY backend (the
+        // deferred acpi/usb/i2c/spi families) keeps the D.2 fail-loud
+        // default — never audited-and-ignored.
+        if !crate::match_audit::has_ratified_form(entry) {
+            return Err(EmitError::Driver(format!(
+                "match entry {entry:?} has no ratified registration form on any backend \
+                 (deferred bus family); the D03(a) rule licenses ignoring recognized \
+                 foreign-transport entries only — fail-loud (D.2 default)"
+            )));
+        }
         let native = matches!(
             (bus, entry),
             (ScaffoldBus::Amba, MatchEntry::Amba { .. })

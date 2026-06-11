@@ -1731,6 +1731,30 @@ fn foreign_amba_entry_under_pci_is_audited_not_tabled() {
 }
 
 #[test]
+fn deferred_family_entry_alongside_native_is_rejected_loud() {
+    // C06 final-review hardening: the D03(a) license covers RECOGNIZED
+    // foreign entries only — a deferred-family entry (no ratified
+    // registration form on ANY backend) keeps the D.2 fail-loud default
+    // even when a native entry exists, never audited-and-ignored.
+    let mut m = minimal_amba_model();
+    {
+        let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+        driver.descriptor.match_set.push(MatchEntry::Usb {
+            vendor: 0x1234,
+            product: 0x5678,
+        });
+    }
+    let err = emit_linux_c(&m).unwrap_err();
+    let EmitError::Driver(msg) = err else {
+        panic!("expected Driver error, got {err:?}");
+    };
+    assert!(
+        msg.contains("no ratified registration form") && msg.contains("fail-loud"),
+        "the deferred-family rejection names the rule boundary: {msg}"
+    );
+}
+
+#[test]
 fn all_foreign_match_set_under_pci_is_rejected_loud() {
     // The PCI-scaffold analog of the A-13 all-foreign reject.
     let mut m = minimal_pci_model();

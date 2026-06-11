@@ -213,14 +213,28 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
     // (spec-convergence-pl011 D08: zephyr_c's ratified static-DT registration
     // form consumes Devicetree entries; recognized foreign entries are
     // ignorable with a triple-rendered audit once >=1 native entry exists —
-    // the former unratified-rule rejection is lifted by that unit).
-    let ignored_audits: Vec<crate::match_audit::MatchAudit> = driver
-        .descriptor
-        .match_set
-        .iter()
-        .filter(|entry| !matches!(entry, MatchEntry::Devicetree { .. }))
-        .map(|entry| crate::match_audit::MatchAudit::foreign(model, entry, "static-devicetree"))
-        .collect();
+    // the former unratified-rule rejection is lifted by that unit). The
+    // license covers RECOGNIZED foreign entries only: an entry with no
+    // ratified registration form on ANY backend (the deferred acpi/usb/
+    // i2c/spi families) keeps the D.2 fail-loud default.
+    let mut ignored_audits: Vec<crate::match_audit::MatchAudit> = Vec::new();
+    for entry in &driver.descriptor.match_set {
+        if matches!(entry, MatchEntry::Devicetree { .. }) {
+            continue;
+        }
+        if !crate::match_audit::has_ratified_form(entry) {
+            return Err(EmitError::Rejected(format!(
+                "match entry {entry:?} has no ratified registration form on any backend \
+                 (deferred bus family); the D03(a) rule licenses ignoring recognized \
+                 foreign-transport entries only — fail-loud (D.2 default)"
+            )));
+        }
+        ignored_audits.push(crate::match_audit::MatchAudit::foreign(
+            model,
+            entry,
+            "static-devicetree",
+        ));
+    }
     if dt_compatibles.len() > 1 {
         return Err(EmitError::Unsupported(
             "multi-compatible match sets (scaffold §1 repeat-blocks idiom) are not exercised \
