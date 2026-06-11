@@ -46,6 +46,11 @@ fn e1000_initfail_snapshot_and_structure() {
         let emit = regseq_backends::emit_linux_c(&model).expect("emit_linux_c must succeed");
         std::fs::write(pipeline::linux_golden_path(fixture), &emit.tu)
             .expect("write golden.linux.c");
+        std::fs::write(
+            pipeline::linux_conformance_path(fixture),
+            codegen_coverage_runner::conformance::render_json(&emit.conformance),
+        )
+        .expect("write conformance.linux.json");
         return;
     }
 

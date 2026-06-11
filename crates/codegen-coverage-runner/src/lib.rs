@@ -23,6 +23,7 @@
 
 extern crate rustc_driver;
 
+pub mod conformance;
 pub mod identity;
 pub mod kbuild;
 pub mod ledger;

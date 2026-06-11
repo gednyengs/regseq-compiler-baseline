@@ -52,6 +52,11 @@ fn linux_e1000_snapshot_and_l0_structure() {
         let emit = regseq_backends::emit_linux_c(&model).expect("emit_linux_c must succeed");
         std::fs::write(pipeline::linux_golden_path(fixture), &emit.tu)
             .expect("write golden.linux.c");
+        std::fs::write(
+            pipeline::linux_conformance_path(fixture),
+            codegen_coverage_runner::conformance::render_json(&emit.conformance),
+        )
+        .expect("write conformance.linux.json");
         return;
     }
 
@@ -69,6 +74,17 @@ fn linux_e1000_snapshot_and_l0_structure() {
         tu.find(needle)
             .unwrap_or_else(|| panic!("TU must contain `{needle}`"))
     };
+
+    // -- the conformance JSON (amendment 6): the e1000 surprise delivery
+    //    cites its ratified row — the same SLOT the zephyr artifacts cite
+    //    absent, each tied to its own OS-specific ratified row (I03: every
+    //    artifact renders its row ID from the one table const).
+    let conf = std::fs::read_to_string(pipeline::linux_conformance_path(fixture))
+        .expect("read conformance.linux.json");
+    assert!(
+        conf.contains("{\"slot\": \"on_surprise_remove\", \"row\": \"CAP-LINUX-PCI-SURPRISE-1\"}"),
+        "{conf}"
+    );
 
     // -- the PCI scaffold shape: probe ladder in canonical order with the
     //    T03-pinned managed preamble (ledger C-7) and the native channel.

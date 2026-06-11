@@ -15,10 +15,18 @@
 //! an idiomatic Zephyr driver TU + generated DT binding yaml. Its
 //! module-local error type is re-exported as `ZephyrEmitError` (same naming
 //! convention as the linux family).
+//!
+//! The `capability` module owns the ratified per-OS capability table
+//! (os-capability-disposition unit): the closed disposition enum, the row
+//! consts the OS backends cite, and the per-target `ConformanceReport`
+//! every OS-backend emit carries.
 
+pub mod capability;
 mod generic_c;
 mod linux_c;
 mod zephyr_c;
+
+pub use capability::{ConformanceReport, SlotEntry};
 
 pub use linux_c::{emit_linux_c, EmitError as LinuxEmitError, LinuxEmit};
 
@@ -27,6 +35,6 @@ pub use zephyr_c::{emit_zephyr_c, EmitError as ZephyrEmitError, ZephyrEmit};
 pub use generic_c::{
     emit_generic_c, emit_generic_c_for_entry, emit_generic_c_for_entry_with,
     emit_generic_c_for_entry_with_context, emit_generic_c_with, emit_generic_c_with_context,
-    entry_c_symbol, full_helper_prelude, generate_main_c, BackendContext, BackendOptions, EmitError,
-    EntryEmit, EntryShim, EntrySymbol, LifecycleScenario,
+    entry_c_symbol, full_helper_prelude, generate_main_c, BackendContext, BackendOptions,
+    EmitError, EntryEmit, EntryShim, EntrySymbol, LifecycleScenario,
 };

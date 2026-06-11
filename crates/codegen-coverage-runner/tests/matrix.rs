@@ -72,8 +72,9 @@ fn committed_matrix_parses_with_device_lifecycle_rows() {
     // device-lifecycle rows landed (no NonLegendStatus / DuplicateId), and the
     // 13 numeric `LC-<n>` rows must be present and `deferred` at authoring time
     // (T22a/T23/T24 flip them to `covered` as their fixtures land).
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../docs/discussions/generic-c-backend/phase-1/01-construct-surface-and-matrix.md");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../docs/discussions/generic-c-backend/phase-1/01-construct-surface-and-matrix.md",
+    );
     let rows = matrix::parse(&path).expect("the committed Doc-1 matrix must parse");
     let lc: std::collections::BTreeSet<&str> = rows
         .iter()
@@ -93,6 +94,27 @@ fn committed_matrix_parses_with_device_lifecycle_rows() {
             r.id
         );
     }
+}
+
+#[test]
+fn committed_matrix_carries_the_os_capability_row_deferred() {
+    // os-capability-disposition T08: the OS-1 absent-slot row is present and
+    // `deferred` (the LC precedent — `_composed` is outside Mode-A discovery,
+    // so `covered` would mint covered_without_green drift; the real gate is
+    // tests/os_capability_covers.rs + the sole-binary absentslot e2e).
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../docs/discussions/generic-c-backend/phase-1/01-construct-surface-and-matrix.md",
+    );
+    let rows = matrix::parse(&path).expect("the committed Doc-1 matrix must parse");
+    let os1 = rows
+        .iter()
+        .find(|r| r.id == "OS-1")
+        .expect("matrix must contain OS-1");
+    assert_eq!(
+        os1.status,
+        Status::Deferred,
+        "OS-1 stays `deferred`; its coverage gate is the dedicated covers test"
+    );
 }
 
 #[test]

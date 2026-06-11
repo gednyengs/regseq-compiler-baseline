@@ -12,6 +12,7 @@ use regseq_model::{
 };
 
 use super::{emit_linux_c, EmitError};
+use crate::capability;
 
 // -- model-construction helpers (local; mirrors the sibling generic_c test
 //    helpers in shape, shares no code per F-1) ------------------------------
@@ -1707,6 +1708,93 @@ fn pci_remove_without_surprise_override_is_plain_orderly() {
         !tu.contains("pci_device_is_present"),
         "no predicate without the override:\n{tu}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// os-capability-disposition T04: the per-target conformance report (C05) —
+// every authored slot delivered in LifecycleOps declaration order; the PCI
+// surprise delivery carries its ratified row ID (D16(b)); rejected empty.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pci_conformance_report_delivers_all_authored_slots_with_the_surprise_row() {
+    let mut m = driver_model(Some(BusType::Pci), pci_match(), LifecycleOps::default());
+    let driver_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| matches!(t, Ty::Struct { .. }))
+        .map(|(id, _)| id)
+        .unwrap();
+    let (result_ty, _) = result_carrier(&mut m, ["HardwareError", "DeviceBusy"]);
+    let cbs: Vec<_> = (0..5)
+        .map(|_| push_ok_on_init(&mut m, driver_ty, result_ty))
+        .collect();
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_init = Some(cbs[0]);
+    driver.ops.on_deinit = Some(cbs[1]);
+    driver.ops.on_surprise_remove = Some(cbs[2]);
+    driver.ops.on_init_failure = Some(cbs[3]);
+    driver.ops.on_system_shutdown = Some(cbs[4]);
+    let emit = emit_linux_c(&m).expect("must emit");
+    let report = &emit.conformance;
+    assert_eq!(report.target, "linux_c");
+    assert_eq!(report.os_version_pin, capability::LINUX_PIN);
+    // Declaration order (the LifecycleOps field order).
+    let slots: Vec<&str> = report
+        .delivered_slots
+        .iter()
+        .map(|e| e.slot.as_str())
+        .collect();
+    assert_eq!(
+        slots,
+        vec![
+            "on_init",
+            "on_deinit",
+            "on_surprise_remove",
+            "on_init_failure",
+            "on_system_shutdown"
+        ]
+    );
+    // D16(b): row ID iff a ratified row exists — only the PCI surprise
+    // delivery is table-ratified.
+    for e in &report.delivered_slots {
+        if e.slot == "on_surprise_remove" {
+            assert_eq!(
+                e.row.as_deref(),
+                Some(capability::CAP_LINUX_PCI_SURPRISE_1.id)
+            );
+        } else {
+            assert_eq!(e.row, None, "slot {}", e.slot);
+        }
+        assert_eq!(e.citation, None, "delivered entries carry no citation");
+    }
+    assert!(report.absent_dispatch_slots.is_empty());
+    assert!(report.rejected_slots.is_empty(), "I07");
+    assert!(
+        report
+            .summary_line()
+            .contains("on_surprise_remove:CAP-LINUX-PCI-SURPRISE-1"),
+        "{}",
+        report.summary_line()
+    );
+}
+
+#[test]
+fn amba_conformance_report_carries_no_row_ids() {
+    // The AMBA arm has no table-ratified deliveries: every delivered entry
+    // is row None; the AMBA surprise rejection itself is untouched (I01,
+    // asserted by amba_surprise_remove_fails_loud above).
+    let emit = emit_linux_c(&model_with_callback("on_init_failure")).expect("must emit");
+    let report = &emit.conformance;
+    assert_eq!(report.target, "linux_c");
+    let slots: Vec<(&str, Option<&str>)> = report
+        .delivered_slots
+        .iter()
+        .map(|e| (e.slot.as_str(), e.row.as_deref()))
+        .collect();
+    assert_eq!(slots, vec![("on_init", None), ("on_init_failure", None)]);
+    assert!(report.absent_dispatch_slots.is_empty());
+    assert!(report.rejected_slots.is_empty());
 }
 
 // ---------------------------------------------------------------------------

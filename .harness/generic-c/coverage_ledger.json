@@ -806,6 +806,84 @@
       "result": "pass"
     },
     {
+      "id": "LC-1",
+      "status": "deferred",
+      "fixtures": [],
+      "result": "n/a"
+    },
+    {
+      "id": "LC-10",
+      "status": "deferred",
+      "fixtures": [],
+      "result": "n/a"
+    },
+    {
+      "id": "LC-11",
+      "status": "deferred",
+      "fixtures": [],
+      "result": "n/a"
+    },
+    {
+      "id": "LC-12",
+      "status": "deferred",
+      "fixtures": [],
+      "result": "n/a"
+    },
+    {
+      "id": "LC-13",
+      "status": "deferred",
+      "fixtures": [],
+      "result": "n/a"
+    },
+    {
+      "id": "LC-2",
+      "status": "deferred",
+      "fixtures": [],
+      "result": "n/a"
+    },
+    {
+      "id": "LC-3",
+      "status": "deferred",
+      "fixtures": [],
+      "result": "n/a"
+    },
+    {
+      "id": "LC-4",
+      "status": "deferred",
+      "fixtures": [],
+      "result": "n/a"
+    },
+    {
+      "id": "LC-5",
+      "status": "deferred",
+      "fixtures": [],
+      "result": "n/a"
+    },
+    {
+      "id": "LC-6",
+      "status": "deferred",
+      "fixtures": [],
+      "result": "n/a"
+    },
+    {
+      "id": "LC-7",
+      "status": "deferred",
+      "fixtures": [],
+      "result": "n/a"
+    },
+    {
+      "id": "LC-8",
+      "status": "deferred",
+      "fixtures": [],
+      "result": "n/a"
+    },
+    {
+      "id": "LC-9",
+      "status": "deferred",
+      "fixtures": [],
+      "result": "n/a"
+    },
+    {
       "id": "LY-1",
       "status": "covered",
       "fixtures": [
@@ -940,6 +1018,12 @@
         "b1_int_scalars"
       ],
       "result": "pass"
+    },
+    {
+      "id": "OS-1",
+      "status": "deferred",
+      "fixtures": [],
+      "result": "n/a"
     },
     {
       "id": "PC-1",

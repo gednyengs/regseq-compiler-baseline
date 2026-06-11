@@ -507,6 +507,23 @@ fixture lands (the status-flip workflow): M0 (`lifecycle-fake`, synthesized
 | LC-12 | `#[rseq::driver]` struct layout under Policy-P | `<driver>_target_t` CONTAINER morph: embed the spec driver as `inner`, wrap with `void* __rseq_dev` (prepended) + `uint32_t __rseq_state` (appended); callbacks run spec-view over `&inst.inner` (CR-7) | deferred | GRILL C05/I06 | **LC-MORPH**: hardest path; composes with register-access Strategy-C (OI-1). As-built (M7-B) uses the container_of embedding (a faithful, less-invasive realization of the two-view rule) rather than a flattened field relocation |
 | LC-13 | Rule-1 scalar user-data field | the zero-allocated struct IS the init (no store); Rule-2 `Option<T:Copy>` = `None` | deferred | GRILL C10/I07 | **LC-USERDATA-ZEROINIT**: non-scalar Rule-1 rejected (D3) |
 
+### OS-capability disposition rows (os-capability-disposition unit)
+
+The ratified OS-absent-slot mechanism: an authored lifecycle callback whose
+dispatch condition structurally cannot occur on a target OS is *auditably
+non-emitted* (a named `RSEQ-ABSENT-SLOT` block in the generated C + a
+conformance-report row citing the ratified capability-table row), never
+silently dropped. Status is `deferred` by the LC precedent: the witness
+fixture lives under `fixtures/_composed/` which is OUTSIDE Mode-A `discover`
+(interner-isolation discipline), so a `covered` status would mint
+`covered_without_green` drift in `ledger::build`; the REAL gate is the
+dedicated covers-aggregation test (`tests/os_capability_covers.rs`) plus the
+fixture's sole-binary e2e (`tests/zephyr_absentslot_e2e.rs`).
+
+| id | construct | C lowering | status | spec ref | notes |
+| -- | --------- | ---------- | ------ | -------- | ----- |
+| OS-1 | OS-absent lifecycle slot (zephyr static-DT `on_surprise_remove`) | zephyr_c: exactly one `RSEQ-ABSENT-SLOT` audit block in place of the callback + a `conformance.zephyr.json` absent_dispatch row, both citing CAP-ZEPHYR-DT-SURPRISE-1; the body still runs the complete lowering pipeline in a throwaway context | deferred | os-capability-disposition GRILL C04/C05/D06 | **OS-ABSENT-SLOT**: witnessed by `pl011-absentslot-zephyr` (sole-binary e2e); `ledger.rs` drift-gate semantics untouched (I08) |
+
 ---
 
 ## Output of this doc — the gap list
