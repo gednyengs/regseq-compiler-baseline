@@ -6,12 +6,15 @@
 //! (the production `regseq-driver` callback formats `{err}` directly).
 
 use crate::bus_resource::BrmError;
+use crate::interrupt::InterruptL2Error;
 
 /// An error surfaced by an [`crate::L2Binder`] tenant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum L2Error {
     /// Bus-resource-management (construct #3) surface diagnostic.
     BusResource(BrmError),
+    /// Device-interrupt (construct #6) surface diagnostic.
+    Interrupt(InterruptL2Error),
 }
 
 impl L2Error {
@@ -19,6 +22,7 @@ impl L2Error {
     pub fn code(&self) -> &'static str {
         match self {
             L2Error::BusResource(e) => e.code(),
+            L2Error::Interrupt(e) => e.code(),
         }
     }
 }
@@ -28,6 +32,7 @@ impl std::fmt::Display for L2Error {
         match self {
             // Delegate verbatim — the inner error owns its wording (zero churn).
             L2Error::BusResource(e) => write!(f, "{e}"),
+            L2Error::Interrupt(e) => write!(f, "{e}"),
         }
     }
 }
@@ -35,6 +40,12 @@ impl std::fmt::Display for L2Error {
 impl From<BrmError> for L2Error {
     fn from(e: BrmError) -> Self {
         L2Error::BusResource(e)
+    }
+}
+
+impl From<InterruptL2Error> for L2Error {
+    fn from(e: InterruptL2Error) -> Self {
+        L2Error::Interrupt(e)
     }
 }
 
