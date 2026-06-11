@@ -222,7 +222,7 @@ pub fn discover(fixtures_dir: &Path) -> Result<Vec<Fixture>, ManifestError> {
             err,
         })?;
         lint_manifest(&manifest, &manifest_path)?;
-        fixtures.push(resolve(manifest, dir));
+        fixtures.push(resolve(manifest, dir)?);
     }
 
     fixtures.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
@@ -277,7 +277,7 @@ fn lint_manifest(manifest: &Manifest, path: &Path) -> Result<(), ManifestError> 
 }
 
 /// Resolve the sibling file paths for a parsed manifest in `dir`.
-fn resolve(manifest: Manifest, dir: PathBuf) -> Fixture {
+fn resolve(manifest: Manifest, dir: PathBuf) -> Result<Fixture, ManifestError> {
     let input = match manifest.kind {
         FixtureKind::Rust => dir.join("input.rs"),
         FixtureKind::Ir => dir.join("model.rs"),
@@ -293,11 +293,30 @@ fn resolve(manifest: Manifest, dir: PathBuf) -> Fixture {
     // The platform file is discovered by presence (unlike the always-joined
     // golden/expected paths): absent = no L2 binding, so every L2-free fixture
     // keeps `None` and the pipeline's bind step is a no-op for it.
-    let platform = {
-        let p = dir.join("platform.toml");
-        p.exists().then_some(p)
-    };
-    Fixture {
+    //
+    // A fixture carrying BOTH the legacy `platform.toml` AND a per-OS
+    // suffixed platform file is a LOUD loader error, not a preference
+    // (spec-convergence-pl011 C05/plan decision 1): the converged-fixture
+    // collapse must not half-apply — exactly one convention per fixture.
+    let legacy = dir.join("platform.toml");
+    let suffixed_present: Vec<&str> = OsBinding::ALL
+        .iter()
+        .map(|b| b.platform_file_name())
+        .filter(|name| dir.join(name).exists())
+        .collect();
+    if legacy.exists() && !suffixed_present.is_empty() {
+        return Err(ManifestError::Invalid {
+            path: dir.join("manifest.toml"),
+            detail: format!(
+                "fixture carries BOTH the legacy `platform.toml` and per-OS \
+                 platform file(s) {suffixed_present:?}; the C05 converged \
+                 layout and the legacy layout are mutually exclusive — delete \
+                 one (spec-convergence-pl011 plan decision 1)"
+            ),
+        });
+    }
+    let platform = legacy.exists().then_some(legacy);
+    Ok(Fixture {
         manifest,
         dir,
         input,
@@ -305,5 +324,67 @@ fn resolve(manifest: Manifest, dir: PathBuf) -> Fixture {
         expected_stdout,
         expected_stderr,
         platform,
+    })
+}
+
+/// The explicit per-OS binding selector for converged composed fixtures
+/// (spec-convergence-pl011 C05, plan decision 1). Each composed sole binary
+/// passes its own variant; selection is never inferred. All file names below
+/// are FIXED by contract C05 — no invention.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OsBinding {
+    Linux,
+    Zephyr,
+}
+
+impl OsBinding {
+    /// Every selectable binding (used by the dual-convention loader lint).
+    pub const ALL: &'static [OsBinding] = &[OsBinding::Linux, OsBinding::Zephyr];
+
+    /// The C05-fixed per-OS platform file name.
+    pub fn platform_file_name(self) -> &'static str {
+        match self {
+            OsBinding::Linux => "platform.linux.toml",
+            OsBinding::Zephyr => "platform.zephyr.toml",
+        }
+    }
+
+    /// The C05-fixed generic_c oracle artifact pair `(golden, stdout)` for
+    /// this binding.
+    pub fn oracle_artifact_names(self) -> (&'static str, &'static str) {
+        match self {
+            OsBinding::Linux => ("golden.c", "expected.stdout"),
+            OsBinding::Zephyr => ("golden.zephyr-oracle.c", "expected.zephyr.stdout"),
+        }
+    }
+}
+
+impl Fixture {
+    /// Re-resolve this fixture's L2 platform file and generic-oracle artifact
+    /// pair for an explicit [`OsBinding`] (C05 stage pipelines). The selected
+    /// per-OS platform file MUST exist — a missing file is a loud error,
+    /// never a silent fallback to the legacy `platform.toml`. BLESS scoping
+    /// is unchanged: the invoking sole binary writes through the returned
+    /// fixture's paths, i.e. its own binding's artifacts only.
+    pub fn with_binding(&self, binding: OsBinding) -> Result<Fixture, ManifestError> {
+        let platform = self.dir.join(binding.platform_file_name());
+        if !platform.exists() {
+            return Err(ManifestError::Invalid {
+                path: self.dir.join("manifest.toml"),
+                detail: format!(
+                    "OsBinding::{binding:?} selected but `{}` is missing in {}; \
+                     the C05 converged layout names per-OS platform files \
+                     explicitly (no fallback to the legacy `platform.toml`)",
+                    binding.platform_file_name(),
+                    self.dir.display(),
+                ),
+            });
+        }
+        let (golden, stdout) = binding.oracle_artifact_names();
+        let mut bound = self.clone();
+        bound.platform = Some(platform);
+        bound.golden_c = self.dir.join(golden);
+        bound.expected_stdout = self.dir.join(stdout);
+        Ok(bound)
     }
 }
