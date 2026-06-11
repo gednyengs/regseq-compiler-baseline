@@ -1,0 +1,14 @@
+name   = "pl011-absentslot-zephyr"
+kind   = "rust"
+# The OS-absent-slot witness fixture (os-capability-disposition T09, GRILL
+# D13): authored `on_surprise_remove` under zephyr static-DT is auditably
+# non-emitted per capability row CAP-ZEPHYR-DT-SURPRISE-1 (AbsentDispatch).
+# Zephyr-only by design — OUTSIDE the C02 identity invariant, NO generic_c
+# oracle bless, NO L3 leg (the initfail-variant precedent). Its sole-binary
+# `zephyr_absentslot_e2e` byte-locks `golden.zephyr.c` +
+# `golden.zephyr.binding.yaml` + `conformance.zephyr.json` and asserts the
+# RSEQ-ABSENT-SLOT block, the R05 summary line, and double-run determinism.
+covers = ["OS-1"]
+lifecycle_scenario = "orderly"
+expect = "pass"
+version = "1"

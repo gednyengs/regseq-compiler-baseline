@@ -1,0 +1,9 @@
+[platform]
+os = "zephyr"
+board = "qemu_cortex_a53"
+arch = "aarch64"
+
+# No [mmio.*] section: the absent-slot witness is a fieldless driver with no
+# bus-managed region (GRILL D13, the initfail-variant precedent) — the only
+# surfaces it exercises are the lifecycle init slot, the OS-absent surprise
+# slot, and diagnostics logging.

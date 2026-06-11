@@ -2,7 +2,7 @@
 
 - **Verdict:** `pass`
 - **Toolchain:** `cc` (cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0)
-- **Matrix rows:** 177
+- **Matrix rows:** 191
 - **Covered rows:** 165 (165 with a green fixture)
 
 ## Rows
@@ -111,6 +111,19 @@
 | IT-7 | Covered | Pass | b1_int_scalars |
 | IT-8 | Covered | Pass | b8_item_kinds |
 | IT-9 | Covered | Pass | b8_item_kinds |
+| LC-1 | Deferred | NotApplicable | - |
+| LC-10 | Deferred | NotApplicable | - |
+| LC-11 | Deferred | NotApplicable | - |
+| LC-12 | Deferred | NotApplicable | - |
+| LC-13 | Deferred | NotApplicable | - |
+| LC-2 | Deferred | NotApplicable | - |
+| LC-3 | Deferred | NotApplicable | - |
+| LC-4 | Deferred | NotApplicable | - |
+| LC-5 | Deferred | NotApplicable | - |
+| LC-6 | Deferred | NotApplicable | - |
+| LC-7 | Deferred | NotApplicable | - |
+| LC-8 | Deferred | NotApplicable | - |
+| LC-9 | Deferred | NotApplicable | - |
 | LY-1 | Covered | Pass | b3_structs |
 | LY-10 | Covered | Pass | b4_enums |
 | LY-11 | Covered | Pass | b4_enums |
@@ -128,6 +141,7 @@
 | OP-1 | Covered | Pass | b1_int_scalars |
 | OP-2 | Covered | Pass | b1_int_scalars |
 | OP-3 | Covered | Pass | b1_int_scalars |
+| OS-1 | Deferred | NotApplicable | - |
 | PC-1 | Covered | Pass | b5_reify_fnptr |
 | PC-2 | Covered | Pass | b5_control_flow |
 | PC-3 | Covered | Pass | b_closure_fnptr |
