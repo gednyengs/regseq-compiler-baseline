@@ -37,10 +37,14 @@ narrows the rejection space by exactly one mechanism.
 > lifecycle slots are delivered, absent by OS dispatch model, or rejected.
 > Differences are explicit, cited, and machine-checked — never silent.
 
-**Forbidden phrasing:** "silently different behavioral envelopes". The whole
-point of the mechanism is that the envelopes differ *loudly*.
+"Silently different behavioral envelopes" is forbidden phrasing.
 
 ## The nine amendments (authoritative text, as ratified 2026-06-10)
+
+The texts below are the GRILL C06 record verbatim (`C02`/`C04`/`C05` are
+that record's contract labels; their concrete shapes are reproduced in the
+as-built mechanics notes that follow). Implementation glosses live ONLY in
+the notes section — never inside the ratified texts.
 
 1. **Closed Capability Table** *(as amended — 5-variant enum)*. D.2 gains a
    companion per-OS capability table. "OS-absent slot" is legal only for rows
@@ -53,15 +57,14 @@ point of the mechanism is that the envelopes differ *loudly*.
    reject-at-emit scheduling diagnostic.
 
 2. **No Free-Form Proofs** *(verbatim + grammar)*. Emitters may cite only
-   table row IDs (grammar `CAP-<OS>-<FORM>-<SLOT>-<N>`), not prose claims.
-   Structurally enforced: the emitter can only push ratified `CapabilityRow`
-   consts.
+   table row IDs (grammar C02), not prose claims. Structurally enforced: the
+   emitter can only push ratified `CapabilityRow` consts.
 
 3. **Version-Bound Citations** *(as amended — citation bar)*. Each
-   `AbsentDispatch` row cites the pinned OS version incl. commit AND ≥1
-   source anchor in the pinned local checkout or vendored reference; doc URLs
-   are optional supplements; the bus/registration form is named by the row
-   key. Empty citations are errors.
+   `AbsentDispatch` row cites the pinned OS version incl. commit AND ≥1 source
+   anchor in the pinned local checkout or vendored reference; doc URLs are
+   optional supplements; the bus/registration form is named by the row key.
+   Empty citations are errors.
 
 4. **Body Still Checked** *(verbatim + mechanism)*. The callback body remains
    part of `RegseqModel`; under `AbsentDispatch` the body runs the complete
@@ -73,47 +76,65 @@ point of the mechanism is that the envelopes differ *loudly*.
 5. **Required Callback Override** *(policy ratified; delivery deferred)*. If
    the DSL marks a callback `required`, `AbsentDispatch` becomes an emit-time
    rejection; default is `best_effort`. DSL delivery (model+macro+bridge) is
-   the named successor unit `callback-requirement-marker`. Until it ships,
-   every authored callback is implicitly `best_effort`.
+   the named successor unit `callback-requirement-marker`.
 
 6. **Conformance Artifact** *(verbatim + schema)*. Every OS-backend build
-   emits a per-target report (the `ConformanceReport` struct on
-   `ZephyrEmit`/`LinuxEmit`, serialized to `conformance.<os>.json`):
-   delivered/absent_dispatch/rejected slots with citation IDs. generic_c
-   (the oracle) is exempt: conformance is measured against it; a self-report
-   is vacuous.
+   emits a per-target report (C05): delivered/absent_dispatch/rejected slots
+   with citation IDs. generic_c (the oracle) is exempt: conformance is
+   measured against it; a self-report is vacuous.
 
 7. **Generated C Audit Block** *(verbatim + grammar)*. Non-emission leaves a
-   named generated comment block with slot, reason, and ratified row ID:
-
-   ```c
-   /* RSEQ-ABSENT-SLOT: <slot_name>
-    * disposition: AbsentDispatch row: <ROW-ID>
-    * [ratified: <row citation, verbatim from the CapabilityRow const>]
-    * body checked, not delivered: dispatch cannot occur on this target. */
-   ```
-
-   Emitted at the position the callback's lowered code would have occupied;
-   exactly one block per absent slot, zero when no slot is absent; the
-   `RSEQ-ABSENT-SLOT:` prefix is stable and greppable.
+   named generated comment block (C04) with slot, reason, and ratified row ID.
 
 8. **Trace Whitelist Coupling** *(verbatim; entries deferred)*. Any oracle
    marker omission uses the same row ID/citation as the artifact and test
-   log. **Binding on `backend/zephyr-c-e1000`**, which lands the entries: a
-   trace-whitelist entry licensing an absent slot's missing oracle markers
-   MUST cite the CAP row ID + row citation — the same ID as the C audit
-   block, conformance report, and test log (the A-20 per-entry ratified
-   citations precedent). No eval-side edits were made by this unit.
+   log. Binding on `backend/zephyr-c-e1000`, which lands the entries.
 
 9. **Evolution Audit** *(verbatim + mechanics)*. On OS-version re-pin, every
    `AbsentDispatch` row is re-reviewed; stale rows fail the capability-table
-   audit. Mechanics: a single `ZEPHYR_PIN` const is the one place a re-pin
-   edits; rows spell the pin their claim was ratified against as a
-   **literal** (never a reference to the const — that would make the audit
-   vacuous); the staleness test compares every Zephyr
-   `AbsentDispatch`/`DesignedScheduled` row's pin and fails naming each
-   stale row; re-review = re-verify on the new pin + update the row's
-   pin/citation (+ the doc mirror via the sync test).
+   audit. Mechanics: single `ZEPHYR_PIN` const; staleness test compares every
+   Zephyr `AbsentDispatch`/`DesignedScheduled` row's pin and fails naming
+   each stale row; re-review = re-verify on the new pin + update row
+   pin/citation (+ doc mirror via the sync test).
+
+## As-built mechanics notes (non-normative; the ratified texts above govern)
+
+- **C02 row-ID grammar** (amendment 2's "grammar C02"):
+  `CAP-<OS>-<FORM>-<SLOT>-<N>` — `<OS>` the upper-case target OS, `<FORM>`
+  the registration-form shorthand (`DT`, `PCI`, …), `<SLOT>` ∈ `{SURPRISE,
+  SHUTDOWN, DEINIT, INIT, INITFAIL}`, `<N>` a positive integer; IDs are
+  append-only and never renamed; a re-ratification that changes substance
+  mints `N+1`.
+- **C04 audit-block grammar** (amendment 7's "(C04)"):
+
+  ```c
+  /* RSEQ-ABSENT-SLOT: <slot_name>
+   * disposition: AbsentDispatch row: <ROW-ID>
+   * [ratified: <row citation, verbatim from the CapabilityRow const>]
+   * body checked, not delivered: dispatch cannot occur on this target. */
+  ```
+
+  Emitted at the position the callback's lowered code would have occupied;
+  exactly one block per absent slot, zero when no slot is absent; the
+  `RSEQ-ABSENT-SLOT:` prefix is stable and greppable; generated from the
+  same `CapabilityRow` const as the report row.
+- **C05 conformance shape** (amendment 6's "(C05)"): the
+  `ConformanceReport` struct on `ZephyrEmit`/`LinuxEmit`, serialized by the
+  coverage runner to a deterministic `conformance.<os>.json` beside the
+  emitted C; the `RSEQ-CONFORMANCE` test-log line derives from the same
+  struct.
+- **Amendment 5, until the successor ships:** every authored callback is
+  implicitly `best_effort` (accepted at ratification).
+- **Amendment 8, the binding rule spelled out:** a trace-whitelist entry
+  licensing an absent slot's missing oracle markers MUST cite the CAP row
+  ID + row citation — the same ID as the C audit block, conformance report,
+  and test log (the A-20 per-entry ratified citations precedent). No
+  eval-side edits were made by this unit.
+- **Amendment 9, as built:** rows spell the pin their claim was ratified
+  against as a **literal** (never a reference to the `ZEPHYR_PIN` const —
+  that would make every row track a re-pin automatically and the staleness
+  audit could never fire; Codex M2 review finding). `ZEPHYR_PIN` remains
+  the single authoritative *current* pin the audit compares against.
 
 ## The generic_c exemption (D09, rationale recorded)
 
