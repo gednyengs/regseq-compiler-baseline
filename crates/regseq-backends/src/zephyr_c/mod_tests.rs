@@ -548,6 +548,97 @@ fn generic_class_tu_carries_no_deferred_class_comment() {
     );
 }
 
+// -- T03 match consumption (backend-zephyr-c-e1000 R05/C04): native DT
+//    entry + Pci rows triple-render-audited; the D10 PCIe binding form ----
+
+#[test]
+fn pcie_mixed_match_triple_renders_each_pci_row() {
+    let mut m = model();
+    let compatible = m.strings.intern("regseq,e1000");
+    let match_set = vec![
+        MatchEntry::Pci {
+            vendor: 0x8086,
+            device: 0x100e,
+            subsystem: None,
+            class: None,
+        },
+        MatchEntry::Pci {
+            vendor: 0x8086,
+            device: 0x100f,
+            subsystem: None,
+            class: None,
+        },
+        MatchEntry::Devicetree { compatible },
+    ];
+    let region = pcie_mmio(&mut m, "regs", Some(0));
+    driver_into(
+        &mut m,
+        Some(BusType::Pci),
+        match_set,
+        LifecycleOps::default(),
+        regseq_model::DriverHandle {
+            resource_fields: vec![region],
+            user_data_fields: vec![],
+        },
+    );
+    let emit = emit_zephyr_c(&m).expect("mixed Pci+DT set must emit (C04)");
+    let tu = &emit.tu;
+    // (i) native consumption: the authored DT entry IS the compat pin (I05:
+    // nothing synthesized).
+    assert!(tu.contains("#define DT_DRV_COMPAT regseq_e1000"), "{tu}");
+    // (ii) one C block per Pci row, adjacent to the pin.
+    let b1 = tu
+        .find("/* RSEQ-IGNORED-MATCH: pci vendor=0x8086 device=0x100e")
+        .unwrap_or_else(|| panic!("100e audit block:\n{tu}"));
+    let b2 = tu
+        .find("/* RSEQ-IGNORED-MATCH: pci vendor=0x8086 device=0x100f")
+        .unwrap_or_else(|| panic!("100f audit block:\n{tu}"));
+    let pin = tu.find("#define DT_DRV_COMPAT").expect("compat pin");
+    assert!(b1 < b2 && b2 < pin, "both blocks at the pin, set order");
+    // (iii) conformance rows + the summary-line section, from the SAME
+    // struct values.
+    assert_eq!(emit.conformance.ignored_match_entries.len(), 2);
+    assert!(
+        emit.conformance.summary_line().contains(
+            "ignored=[pci vendor=0x8086 device=0x100e;pci vendor=0x8086 device=0x100f]"
+        ),
+        "{}",
+        emit.conformance.summary_line()
+    );
+    // (iv) the binding-yaml third render + the D10 PCIe binding form:
+    // pcie-device.yaml include (witnessed intel,e1000.yaml idiom),
+    // vendor-id/device-id required, NO reg requirement.
+    let yaml = &emit.binding_yaml;
+    assert!(
+        yaml.contains("# RSEQ-IGNORED-MATCH: pci vendor=0x8086 device=0x100e"),
+        "{yaml}"
+    );
+    assert!(
+        yaml.contains("# RSEQ-IGNORED-MATCH: pci vendor=0x8086 device=0x100f"),
+        "{yaml}"
+    );
+    assert!(yaml.contains("include: [base.yaml, pcie-device.yaml]"), "{yaml}");
+    assert!(yaml.contains("vendor-id:\n    required: true"), "{yaml}");
+    assert!(yaml.contains("device-id:\n    required: true"), "{yaml}");
+    assert!(!yaml.contains("reg:"), "no reg requirement on the PCIe form:\n{yaml}");
+    // The yaml audit comments sit adjacent to (above) the consumed
+    // `compatible:` surface — the yaml analog of the C-block/pin adjacency.
+    let ya = yaml.find("# RSEQ-IGNORED-MATCH").unwrap();
+    let yc = yaml.find("compatible:").unwrap();
+    assert!(ya < yc, "audit comments above the compatible line:\n{yaml}");
+}
+
+#[test]
+fn platform_binding_yaml_is_byte_frozen() {
+    // The non-PCIe yaml form carries neither the PCIe include nor any
+    // audit section (I08: the pl011 goldens stay green with zero re-bless).
+    let emit = emit_zephyr_c(&minimal_dt_model()).expect("must emit");
+    let yaml = &emit.binding_yaml;
+    assert!(!yaml.contains("pcie-device.yaml"), "{yaml}");
+    assert!(!yaml.contains("RSEQ-IGNORED-MATCH"), "{yaml}");
+    assert!(yaml.contains("include: base.yaml"), "{yaml}");
+}
+
 #[test]
 fn other_class_tag_renders_its_carried_name() {
     let mut m = minimal_dt_model();
