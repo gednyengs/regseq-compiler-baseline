@@ -388,7 +388,17 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
             roots.push((name, id));
         }
     }
-    let closure = reachable_closure(model, roots.iter().map(|(_, id)| *id));
+    // -- device-interrupt facts (construct #6, T11): guards + the handler
+    //    body joins the lowered closure (leaf symbol); the void ISR wrapper
+    //    is scaffold-synthesized before the init fn --------------------------
+    let irq = zephyr_irq_facts(model, driver_item, &driver.ops)?;
+    let closure = reachable_closure(
+        model,
+        roots
+            .iter()
+            .map(|(_, id)| *id)
+            .chain(irq.iter().map(|i| i.handler)),
+    );
 
     // -- frame scan over the closure: op-shape rejections that must fire
     //    regardless of how far the body banks have grown (D12 frame) --------
@@ -588,7 +598,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
 
     // -- the init function (scaffold §3) + the fused errno adapter ----------
     let find = |name: &str| roots.iter().find(|(n, _)| *n == name).map(|(_, id)| *id);
-    let init_fn = emit_init_fn(
+    let mut init_fn = emit_init_fn(
         &mut cx,
         &drv,
         &base_symbol,
@@ -596,12 +606,25 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         pcie_preamble.as_ref(),
         find("on_init"),
         find("on_init_failure"),
+        irq.as_ref(),
     )?;
+    // The void ISR wrapper (construct #6, C04) precedes the init fn that
+    // IRQ_CONNECTs it: recover the device from the build-time-constant
+    // sw_isr_table parameter, run the authored handler over the embedded
+    // spec driver, and DISCARD the IrqResult structurally (R08 zephyr leg:
+    // the sw_isr_table consumer is void — no spurious-return channel
+    // exists). The wrapper acquires NO locks (R18/D11).
+    if let Some(irq) = &irq {
+        let handler_sym = cx.fn_symbols[&irq.handler].clone();
+        init_fn = format!(
+            "/* the bound ISR (construct #6, C04): void dispatch — the IrqResult is\n * structurally discarded (R08: zephyr's sw_isr_table consumer is void);\n * no locks (R18) */\nstatic void rseq_isr_{drv}(const void *arg)\n{{\n\tconst struct device *dev = arg;\n\tstruct {drv}_data *data = dev->data;\n\n\t(void){handler_sym}(&data->inner);\n}}\n\n{init_fn}"
+        );
+    }
     // -- the deinit function (spec-convergence-pl011 C04): authored
     //    `on_deinit` only — unauthored leaves the scaffold byte-identical
     //    (I05: the absentslot/init-fail goldens stay frozen).
     let deinit_fn = find("on_deinit")
-        .map(|id| emit_deinit_fn(&mut cx, &drv, id))
+        .map(|id| emit_deinit_fn(&mut cx, &drv, id, irq.as_ref()))
         .transpose()?;
 
     // -- type definitions, now that every use is known -----------------------
@@ -645,11 +668,28 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
             citation: None,
         })
         .collect();
+    // Device-interrupt deregister slot (construct #6, T12 zephyr leg): the
+    // operation is STRUCTURALLY ABSENT on the static-connect form — the
+    // ratified row carries the connected-but-masked statement in its
+    // citation; non-emission is never silent (I04).
+    let structurally_absent_slots = if irq.is_some() {
+        vec![capability::SlotEntry {
+            slot: capability::CAP_ZEPHYR_STATICIRQ_DEREGISTER_1
+                .slot
+                .model_name()
+                .to_string(),
+            row: Some(capability::CAP_ZEPHYR_STATICIRQ_DEREGISTER_1.id.to_string()),
+            citation: Some(capability::CAP_ZEPHYR_STATICIRQ_DEREGISTER_1.citation.to_string()),
+        }]
+    } else {
+        Vec::new()
+    };
     let conformance = capability::ConformanceReport {
         target: "zephyr_c",
         os_version_pin: capability::ZEPHYR_PIN,
         delivered_slots,
         absent_dispatch_slots: absent_entries,
+        structurally_absent_slots,
         rejected_slots: Vec::new(),
         ignored_match_entries: ignored_audits,
         // The C06 deferred-class note rides the report iff a non-Generic
@@ -715,6 +755,7 @@ fn emit_init_fn(
     pcie: Option<&PciePreamble>,
     on_init: Option<InstanceId>,
     on_init_failure: Option<InstanceId>,
+    irq: Option<&ZephyrIrq>,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
     out.push_str(&format!(
@@ -766,6 +807,31 @@ fn emit_init_fn(
     } else if !uses_data {
         out.push_str("\tARG_UNUSED(dev);\n");
     }
+    // Interrupt preamble (construct #6, D14): the static connect — LAST
+    // among the resource preambles. The sw_isr_table install is BUILD-TIME
+    // (the macro must appear in executed code; its runtime cost is nil);
+    // deliberately WITHOUT the stock immediate irq_enable (D02/R04 — the
+    // enable splits to the post-on_init-Ok point below). On the Err path the
+    // line stays connected-but-masked: no deregister exists on this form
+    // (CAP-ZEPHYR-STATICIRQ-DEREGISTER-1).
+    if let Some(irq) = irq {
+        cx.extra_includes.insert("<zephyr/irq.h>");
+        if let Some(advisory) = irq.advisory_irq_number {
+            out.push_str(&format!(
+                "\t/* [interrupt.{id}] irq_number={advisory} is ADVISORY on zephyr:\n\t * DT_INST_IRQN(0) is authoritative (R10) */\n",
+                id = irq.l2_id,
+            ));
+        }
+        let priority = match irq.priority {
+            // The L2 priority lowers as the IRQ_CONNECT argument ONLY (R12).
+            Some(p) => p.to_string(),
+            // Unspecified: the DT irq cell's priority is authoritative (D10).
+            None => "DT_INST_IRQ(0, priority)".to_string(),
+        };
+        out.push_str(&format!(
+            "\tIRQ_CONNECT(DT_INST_IRQN(0), {priority}, rseq_isr_{drv},\n\t\t    DEVICE_DT_INST_GET(0), 0);\n\n"
+        ));
+    }
     if let Some(init_id) = on_init {
         let sym = cx.fn_symbols[&init_id].clone();
         let failure_hook = on_init_failure.map(|fid| {
@@ -785,6 +851,14 @@ fn emit_init_fn(
         )?;
         out.push_str(&adapter);
     }
+    if irq.is_some() {
+        // The enable point (D02/R05/I01): only after on_init returned Ok —
+        // the adapter above has already returned the negated errno on every
+        // Err path (and an unoverridden on_init cannot fail).
+        out.push_str(
+            "\n\t/* enable the line only after on_init Ok (D02/R05) */\n\tirq_enable(DT_INST_IRQN(0));\n",
+        );
+    }
     out.push_str("\treturn 0;\n}\n");
     Ok(out)
 }
@@ -801,6 +875,7 @@ fn emit_deinit_fn(
     cx: &mut body::LowerCx<'_>,
     drv: &str,
     on_deinit: InstanceId,
+    irq: Option<&ZephyrIrq>,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
     out.push_str(&format!(
@@ -813,11 +888,123 @@ fn emit_deinit_fn(
     );
     let adapter = emit_result_adapter(cx, on_deinit, &format!("{sym}(&data->inner)"), None)?;
     out.push_str(&adapter);
+    if irq.is_some() {
+        // Interrupt teardown (construct #6, D09/R06): disable after the
+        // teardown callback — then the deregister SLOT, where the static
+        // connect renders its ratified audit block INSTEAD of code: exactly
+        // one block, from the same const as the conformance row (I04); the
+        // line is left connected-but-masked.
+        out.push_str(
+            "\t/* interrupt teardown (construct #6): mask the line (D09/R06) */\n\tirq_disable(DT_INST_IRQN(0));\n",
+        );
+        for line in capability::CAP_ZEPHYR_STATICIRQ_DEREGISTER_1
+            .audit_block()
+            .lines()
+        {
+            out.push('\t');
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
     out.push_str(
         "\t/* postamble (integration §5.2): map_region's unmap mirror is a\n\t * deliberate NO-OP — no DEVICE_MMIO unmap exists on Zephyr; nothing\n\t * is invented (C04) */\n",
     );
     out.push_str("\treturn 0;\n}\n");
     Ok(out)
+}
+
+/// The device-interrupt lowering facts for the zephyr scaffold (construct
+/// #6, T11): the lowered handler instance + the L2 facts the `IRQ_CONNECT`
+/// emission consumes.
+struct ZephyrIrq {
+    /// The lowered handler-body instance (joins the closure; leaf symbol).
+    handler: InstanceId,
+    /// The L2 `priority` — lowers as the `IRQ_CONNECT` argument only (R12);
+    /// `None` defers to the DT irq cell (`DT_INST_IRQ(0, priority)`).
+    priority: Option<u32>,
+    /// The L2 `irq_number`, ADVISORY on zephyr (R10): rendered as a comment;
+    /// `DT_INST_IRQN(0)` is authoritative.
+    advisory_irq_number: Option<u32>,
+    /// The L2 join id (the advisory comment names its section).
+    l2_id: String,
+}
+
+/// Build the zephyr device-interrupt facts, firing the emit-stage guards
+/// (I05 — loud, never partial), mirroring the linux/generic legs; plus two
+/// zephyr-specific gates: a shared line cannot be expressed by the static
+/// connect this slice, and an interrupt-bearing driver needs an authored
+/// `on_deinit` (the deinit fn hosts the disable + the deregister-slot audit
+/// block). `Ok(None)` for an interrupt-less driver — zero churn.
+fn zephyr_irq_facts(
+    model: &RegseqModel,
+    driver_item: &regseq_model::ItemId,
+    ops: &regseq_model::LifecycleOps,
+) -> Result<Option<ZephyrIrq>, EmitError> {
+    let Some(interrupts) = model.interrupt.drivers.get(driver_item) else {
+        return Ok(None);
+    };
+    if interrupts.resources.is_empty() {
+        return Ok(None);
+    }
+    if interrupts.resources.len() > 1 {
+        return Err(EmitError::Unsupported(
+            "more than one Interrupt resource per driver (DT_INST_IRQN(0) single-line \
+             slice)"
+                .into(),
+        ));
+    }
+    let resource = &interrupts.resources[0];
+    if !matches!(resource.form, regseq_model::InterruptForm::Single) {
+        return Err(EmitError::Unsupported(
+            "device-interrupt: Option<Interrupt> / [Interrupt; N] lowering is not \
+             implemented this slice (the form is recognized; emit-stage rejection per \
+             GRILL D06/R02)"
+                .into(),
+        ));
+    }
+    if resource.binding.shared {
+        return Err(EmitError::Unsupported(
+            "device-interrupt: a shared line (L2 `shared = true`) cannot be lowered to \
+             the static IRQ_CONNECT registration form (a shared sw_isr_table entry needs \
+             CONFIG_SHARED_INTERRUPTS / the dynamic-connect form — a future unit)"
+                .into(),
+        ));
+    }
+    if ops.on_deinit.is_none() {
+        return Err(EmitError::Unsupported(
+            "device-interrupt: an interrupt-bearing zephyr driver requires an authored \
+             on_deinit this slice (the deinit fn hosts the irq_disable and the \
+             deregister-slot audit block)"
+                .into(),
+        ));
+    }
+    let handler = interrupts
+        .handlers
+        .iter()
+        .find(|h| h.resource == 0)
+        .ok_or_else(|| {
+            EmitError::Driver("a lowered Interrupt resource has no bound handler".into())
+        })?;
+    if handler.arms.defer_work != regseq_model::ArmReachability::ProvenUnreachable {
+        return Err(EmitError::Unsupported(
+            "device-interrupt: the handler's IrqResult::DeferWork arm is not proven \
+             unreachable — deferring work from an ISR requires the \
+             deferred-work-item-scheduling construct (not yet built); rejected at emit \
+             per R09/D04"
+                .into(),
+        ));
+    }
+    let iref = handler
+        .body
+        .ok_or_else(|| EmitError::Driver("handler body InstanceRef missing".into()))?;
+    let handler_id = resolve_instance_ref(model, iref)
+        .ok_or_else(|| EmitError::Driver("handler InstanceRef does not resolve".into()))?;
+    Ok(Some(ZephyrIrq {
+        handler: handler_id,
+        priority: resource.binding.priority,
+        advisory_irq_number: resource.binding.irq_number,
+        l2_id: model.strings.resolve(resource.id).to_string(),
+    }))
 }
 
 /// The RegseqError → negated-errno boundary adapter, fused into the init

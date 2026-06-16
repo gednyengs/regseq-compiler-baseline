@@ -524,6 +524,36 @@ fixture's sole-binary e2e (`tests/zephyr_absentslot_e2e.rs`).
 | -- | --------- | ---------- | ------ | -------- | ----- |
 | OS-1 | OS-absent lifecycle slot (zephyr static-DT `on_surprise_remove`) | zephyr_c: exactly one `RSEQ-ABSENT-SLOT` audit block in place of the callback + a `conformance.zephyr.json` absent_dispatch row, both citing CAP-ZEPHYR-DT-SURPRISE-1; the body still runs the complete lowering pipeline in a throwaway context | deferred | os-capability-disposition GRILL C04/C05/D06 | **OS-ABSENT-SLOT**: witnessed by `pl011-absentslot-zephyr` (sole-binary e2e); `ledger.rs` drift-gate semantics untouched (I08) |
 
+### Device-interrupt rows (device-interrupt-setup-and-handling unit, construct #6)
+
+The compiler-managed interrupt line lifecycle: a typed `Interrupt` field
+(`#[rseq::interrupt(id)]`) + a bound `#[rseq::isr]` handler returning
+`IrqResult`, registered DISABLED in the init preamble (last among resource
+preambles, D14), enabled only after `on_init` Ok (D02), disabled→deregistered
+in the deinit postamble (D09). The generic_c trace is the C01 placement
+grammar made observable (I07); `regseq_irq_fire` is synchronous (D07).
+Status is `deferred` by the LC/OS-1 precedent: the witness fixtures live
+under `fixtures/_irq/` (interner-isolated, outside Mode-A `discover`); the
+REAL gate is the covers-aggregation test (`tests/irq_covers.rs`) plus the
+sole-binary e2es (`tests/irq_pl011_e2e.rs`, `tests/irq_initfail_e2e.rs`,
+`tests/irq_reject_e2e.rs`).
+
+| id | construct | C lowering | status | spec ref | notes |
+| -- | --------- | ---------- | ------ | -------- | ----- |
+| IRQ-1 | registration placement | `IRQ register line=<n>` + `IRQ binding …` after the bus ops + `map_region` keystone, before `LC call on_init`, line DISABLED | deferred | device-interrupt GRILL D02/D14, C01 | **IRQ-PREAMBLE**: last among resource preambles |
+| IRQ-2 | enable gate | `IRQ enable line=<n>` emitted only inside the `on_init`-Ok branch | deferred | GRILL D02/R05/I01 | **IRQ-ENABLE-GATE**: structural in the emitted C |
+| IRQ-3 | fire-before-enable inert | `IRQ fire line=<n> inert` for the pre-init fire (O1 spelling) | deferred | GRILL C05/O1 | **IRQ-INERT-PRE**: positively asserted, never absence |
+| IRQ-4 | masked-fire dispatch | post-enable fire → wrapper → `IRQ result=NotHandled` verbatim | deferred | GRILL C04/R08 | **IRQ-NOTHANDLED**: the handler is total over the quiescent device |
+| IRQ-5 | cause-handled dispatch | `IRQ poke` + fire → `IRQ result=Handled` with the ICR W1C ack in the MMIO trace | deferred | GRILL C04/I03 | **IRQ-HANDLED-ACK**: device-source ops stay Register Access traffic |
+| IRQ-6 | teardown placement | `IRQ disable` → `IRQ unregister` after `LC call on_deinit`, before the resource postambles | deferred | GRILL D09/R06, C01 | **IRQ-TEARDOWN**: reverse of the preamble position |
+| IRQ-7 | post-deinit inert | `IRQ fire line=<n> inert` after teardown (unregistered) | deferred | GRILL C05/O1 | **IRQ-INERT-POST** |
+| IRQ-8 | init-fail unwind | on `on_init` Err: NO `IRQ enable` anywhere; the reverse unwind includes `IRQ unregister` after the rollback callback | deferred | GRILL R16/R05/D02 | **IRQ-INITFAIL**: witnessed by `irq-initfail` |
+| IRQ-9 | missing `[interrupt.<id>]` reject | bind-stage IRQ-L2-003 for a non-Option `Interrupt` without its platform section | deferred | GRILL C03/D06 | **IRQ-L2-REJECT**: witnessed by `irq-missing-section-reject` |
+| IRQ-10 | binding-facts trace | `IRQ binding line=… trigger_type=… trigger_polarity=… shared=… priority=…` verbatim; no flag semantics | deferred | GRILL D10/R12 | **IRQ-BINDING-TRACE**: validation/trace inputs only |
+| IRQ-11 | frontend C06 reject family | acquire-stage `IRQ-ERR-*` rejection: missing-id, bare-ambiguous, duplicate/missing handler, unknown field, signature, array-bind-no-index, excluded-primitive (trait ISR), driver-callable line control | deferred | GRILL C06/D08/D13/I02 | **IRQ-C06-NEGATIVES**: one reject fixture per check, `fires it and only it` via stage+diagnostic |
+| IRQ-12 | Option/array lowering reached | emit-stage `EmitError` — the form is recognized whole, the lowering loudly deferred (never partial) | deferred | GRILL D06/R02/I05 | **IRQ-FORM-EMIT-REJECT**: witnessed by `irq-option-lowering-reject` |
+| IRQ-13 | reachable `DeferWork` | emit-stage `EmitError` naming `deferred-work-item-scheduling` (fail-loud on Unknown too) | deferred | GRILL R09/D04/I05 | **IRQ-DEFERWORK-REJECT**: witnessed by `irq-deferwork-reject` |
+
 ---
 
 ## Output of this doc — the gap list

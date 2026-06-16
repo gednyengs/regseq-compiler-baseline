@@ -899,7 +899,7 @@ pub(crate) fn validate_domain_attrs(model: &RegseqModel) -> Result<(), Invariant
 }
 
 fn validate_attr_data_payload(
-    _model: &RegseqModel,
+    model: &RegseqModel,
     entry: &AttrData,
 ) -> Result<(), InvariantViolation> {
     match entry {
@@ -907,6 +907,28 @@ fn validate_attr_data_payload(
         // The framework-type marker carries a closed enum with no nested
         // model IDs, so there is nothing to range-check here.
         AttrData::FrameworkType(_) => Ok(()),
+        // The interrupt-resource marker carries the interned resource id;
+        // range-check it against the string table.
+        AttrData::InterruptResource { id, .. } => {
+            if id.index() >= model.strings.len() {
+                return Err(InvariantViolation::DomainAttrMalformed {
+                    reason: "InterruptResource id StringId is out of range",
+                });
+            }
+            Ok(())
+        }
+        // The ISR-binding marker's optional explicit field target is interned;
+        // range-check it when present.
+        AttrData::IsrBinding { field, .. } => {
+            if let Some(field) = field {
+                if field.index() >= model.strings.len() {
+                    return Err(InvariantViolation::DomainAttrMalformed {
+                        reason: "IsrBinding field StringId is out of range",
+                    });
+                }
+            }
+            Ok(())
+        }
     }
 }
 

@@ -66,6 +66,7 @@ fn zephyr_build_gate_over_the_composed_goldens() {
         // against these same literals at C compile time).
         bus: StagedBus::Platform {
             region: (0x0904_0000, 0x1000),
+            interrupts: None,
         },
     };
 
@@ -84,6 +85,57 @@ fn zephyr_build_gate_over_the_composed_goldens() {
             ));
             if !warnings.trim().is_empty() {
                 // Warnings are recorded, not gating (C01.2).
+                visible(format!("--- build warnings (recorded) ---\n{warnings}"));
+            }
+        }
+        Err(err) => panic!("west gate FAILED:\n{err}"),
+    }
+}
+
+#[test]
+fn zephyr_build_gate_over_the_irq_goldens() {
+    // The device-interrupt TU (construct #6, T11): IRQ_CONNECT +
+    // DT_INST_IRQ(0, priority) + irq_enable/irq_disable + the void ISR
+    // wrapper must compile against the same workspace. The overlay node
+    // carries well-formed `interrupts` cells (raw `<GIC_SPI 8
+    // IRQ_TYPE_LEVEL 0>`): the west gate is a COMPILE check — the runtime
+    // line number is the eval campaign's to pin (T14).
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_irq");
+    let fixtures = manifest::discover(&dir).expect("discover irq corpus");
+    let fixture = fixtures
+        .iter()
+        .find(|f| f.manifest.name == "irq-pl011")
+        .expect("irq-pl011 fixture discovered");
+
+    let tu = std::fs::read_to_string(pipeline::zephyr_golden_path(fixture))
+        .expect("read the committed golden.zephyr.c");
+    let binding_yaml = std::fs::read_to_string(pipeline::zephyr_binding_path(fixture))
+        .expect("read the committed golden.zephyr.binding.yaml");
+
+    let driver = StagedDriver {
+        tu: &tu,
+        binding_yaml: &binding_yaml,
+        driver_name: "pl011irq",
+        compatible: "regseq,pl011irq",
+        bus: StagedBus::Platform {
+            region: (0x0904_0000, 0x1000),
+            interrupts: Some("<0 8 2 0>"),
+        },
+    };
+
+    match west_build(&driver) {
+        Ok(WestOutcome::Skipped { notice }) => {
+            visible(notice);
+        }
+        Ok(WestOutcome::Built {
+            zephyr_version,
+            warnings,
+        }) => {
+            visible(format!(
+                "west gate PASSED: the irq TU built for {BOARD} against Zephyr \
+                 {zephyr_version} (workspace: ${WORKSPACE_VAR})"
+            ));
+            if !warnings.trim().is_empty() {
                 visible(format!("--- build warnings (recorded) ---\n{warnings}"));
             }
         }

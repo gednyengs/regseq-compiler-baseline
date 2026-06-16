@@ -1037,7 +1037,7 @@ fn absent_surprise_remove_emits_with_exactly_one_audit_block() {
     assert_eq!(
         emit.conformance.summary_line(),
         "RSEQ-CONFORMANCE [zephyr_c @ v4.4.0 (684c9e8f32e4)] delivered=[on_init] \
-         absent_dispatch=[on_surprise_remove:CAP-ZEPHYR-DT-SURPRISE-1] rejected=[] ignored=[]"
+         absent_dispatch=[on_surprise_remove:CAP-ZEPHYR-DT-SURPRISE-1] structurally_absent=[] rejected=[] ignored=[]"
     );
     assert!(emit.conformance.rejected_slots.is_empty());
 }
@@ -1193,7 +1193,7 @@ fn no_audit_block_when_no_absent_slot() {
     assert_eq!(
         emit.conformance.summary_line(),
         "RSEQ-CONFORMANCE [zephyr_c @ v4.4.0 (684c9e8f32e4)] delivered=[on_init] \
-         absent_dispatch=[] rejected=[] ignored=[]"
+         absent_dispatch=[] structurally_absent=[] rejected=[] ignored=[]"
     );
 }
 

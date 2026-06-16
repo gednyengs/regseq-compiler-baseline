@@ -6,6 +6,7 @@
     {"slot": "on_deinit", "row": null}
   ],
   "absent_dispatch_slots": [],
+  "structurally_absent_slots": [],
   "rejected_slots": [],
   "ignored_match_entries": []
 }

@@ -1,0 +1,22 @@
+version = "1"
+
+[platform]
+os = "zephyr"
+board = "qemu_cortex_a53"
+arch = "aarch64"
+
+# L2 MMIO region binding: the eval DUT node — the SECOND QEMU virt PL011
+# (base 0x0904_0000), matching the composed fixture's zephyr leg.
+[mmio.regs]
+base = 0x09040000
+size = 0x1000
+
+# L2 interrupt binding (C03). On zephyr `irq_number` is ADVISORY (R10):
+# DT_INST_IRQN(0) is authoritative; the value here is the second PL011's
+# INTID (SPI 34 → 66... recorded as the QEMU virt UART1 line) rendered as
+# the advisory comment. Canonical spellings only (D10/R12).
+[interrupt.uart_irq]
+irq_number = 40
+trigger_type = "level"
+trigger_polarity = "active_high"
+shared = false

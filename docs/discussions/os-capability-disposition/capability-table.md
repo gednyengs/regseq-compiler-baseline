@@ -13,10 +13,15 @@ wildcards the queried bus (incl. PCIe-over-DT). Row IDs follow the C02
 grammar `CAP-<OS>-<FORM>-<SLOT>-<N>`, are append-only, and are never renamed;
 a re-ratification that changes substance mints `N+1`.
 
-Dispositions (amendment 1 as amended, D01): `Delivered`, `AbsentDispatch`
-(the ONLY disposition that may non-emit an authored callback),
-`DesignedScheduled` (reject-at-emit with the scheduling diagnostic),
-`NeedsNewSurface`, `RejectedUnsupported`.
+Dispositions (amendment 1 as amended, D01; appended by the device-interrupt
+unit per its GRILL D03/C02): `Delivered`, `AbsentDispatch` (the ONLY
+disposition that may non-emit an authored CALLBACK), `DesignedScheduled`
+(reject-at-emit with the scheduling diagnostic), `NeedsNewSurface`,
+`RejectedUnsupported`, and `StructurallyAbsent` (a compiler-managed
+OPERATION — not an authored callback — structurally absent on the
+registration form; renders its own `RSEQ-ABSENT-OP` audit-block kind, never
+the `RSEQ-ABSENT-SLOT` spelling; first occupant:
+`interrupt.register_handler.deregister` on the static-connect form).
 
 ## Rows (as ratified 2026-06-10; anchors verified per the D05 bar)
 
@@ -26,6 +31,7 @@ Dispositions (amendment 1 as amended, D01): `Delivered`, `AbsentDispatch`
 | CAP-ZEPHYR-DT-SHUTDOWN-1 | zephyr | v4.4.0 (684c9e8f32e4) | any | static-devicetree | on_system_shutdown | DesignedScheduled | PM-device slot witnessed, wrapper designed (scaffold §4); trigger contract pending C-4 pin, per A-18 |
 | CAP-ZEPHYR-DT-DEINIT-1 | zephyr | v4.4.0 (684c9e8f32e4) | any | static-devicetree | on_deinit | Delivered | `device_deinit()` device.h:928; `DEVICE_DT_DEINIT_DEFINE` device.h:243; rc returned verbatim kernel/device.c:199; `CONFIG_DEVICE_DEINIT_SUPPORT` kernel/Kconfig.device:36; delivered by spec-convergence-pl011 GRILL D03 |
 | CAP-LINUX-PCI-SURPRISE-1 | linux | v6.6 | pci | pci-dynamic | on_surprise_remove | Delivered | present-predicate dispatch (pci_device_is_present) in `.remove`, e1000-composed/golden.linux.c:370; v6.6 is the linux-backend docs' verification pin (linux-open-questions.md, git.kernel.org ?h=v6.6 anchors) |
+| CAP-ZEPHYR-STATICIRQ-DEREGISTER-1 | zephyr | v4.4.0 (684c9e8f32e4) | any | static-devicetree | interrupt.register_handler.deregister | StructurallyAbsent | Zephyr v4.4.0 (684c9e8f32e4) static IRQ_CONNECT, re-verified live in the eval-workspace checkout 2026-06-11 (device-interrupt T10): IRQ_CONNECT (include/zephyr/irq.h:48) expands to ARCH_IRQ_CONNECT, a BUILD-TIME sw_isr_table install; the only disconnect API is irq_disconnect_dynamic (irq.h:90), documented for irq_connect_dynamic clients (z_isr_uninstall sw_isr_table.h:302 is its dynamic-table internal) — no runtime disconnect exists for a static connect. irq_disable IS emitted at deinit; the line stays connected-but-masked (GRILL device-interrupt D03/C02) |
 
 NEVER_ABSENT: on_init, on_init_failure
 
@@ -38,7 +44,9 @@ and registration are included) — enforced by
 
 `ZEPHYR_PIN` in `capability.rs` is the single authoritative current pin. On
 a re-pin, `absent_dispatch_rows_match_current_os_pin` fails naming each
-Zephyr `AbsentDispatch`/`DesignedScheduled` row still carrying the old pin;
+Zephyr `AbsentDispatch`/`DesignedScheduled`/`StructurallyAbsent` row still
+carrying the old pin (the structurally-absent impossibility claim is just as
+version-bound — device-interrupt unit);
 re-review = re-verify the claim on the new pin, update the row's
 pin+citation in the Rust table, and mirror it here (forced by the sync
 test).

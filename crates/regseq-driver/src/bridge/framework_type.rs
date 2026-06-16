@@ -25,7 +25,7 @@ use super::BridgeCtxt;
 /// with `#![register_tool(rseq)]`). Returns `None` when the attribute
 /// is absent, appears more than once, is not a single string literal,
 /// or carries a NAME outside the closed framework-type vocabulary.
-fn recognise_framework_type_attr(
+pub(crate) fn recognise_framework_type_attr(
     tcx: rustc_middle::ty::TyCtxt<'_>,
     def_id: DefId,
 ) -> Option<FrameworkType> {
@@ -59,6 +59,9 @@ fn recognise_framework_type_attr(
 fn framework_type_for_name(name: &str) -> Option<FrameworkType> {
     match name {
         "regseq-error" => Some(FrameworkType::RegseqError),
+        // The ISR dispatch-result type (device-interrupt construct #6):
+        // `#[rseq::framework_type("irq-result")]`.
+        "irq-result" => Some(FrameworkType::IrqResult),
         _ => None,
     }
 }
@@ -167,6 +170,16 @@ mod tests {
             framework_type_for_name("regseq-error"),
             Some(FrameworkType::RegseqError)
         );
+    }
+
+    #[test]
+    fn recognises_irq_result_name() {
+        assert_eq!(
+            framework_type_for_name("irq-result"),
+            Some(FrameworkType::IrqResult)
+        );
+        // Underscore typo stays outside the closed vocabulary.
+        assert_eq!(framework_type_for_name("irq_result"), None);
     }
 
     #[test]

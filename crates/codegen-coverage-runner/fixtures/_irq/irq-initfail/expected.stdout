@@ -1,0 +1,19 @@
+LC register pl011irqfail match=amba:0x41011/0xfffff
+BUS register_driver path=amba binding=bound
+LC create
+LC associate
+LC preamble regs
+BUS claim_regions bar=-1
+BUS get_handle
+BUS map base=0x9000000 size=0x1000 bar=-1
+IRQ register line=37
+IRQ binding line=37 trigger_type=level trigger_polarity=active_high shared=0 priority=-1
+LC call on_init
+[DEBUG] pl011irqfail probe start
+W32 @0x9000038 = 0x00000000
+W32 @0x9000044 = 0x000007ff
+[ERROR] pl011irqfail device busy
+LC on_init -> Err
+LC call on_init_failure
+[WARN] pl011irqfail rollback
+IRQ unregister line=37

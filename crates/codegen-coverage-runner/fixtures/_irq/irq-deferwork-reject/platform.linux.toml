@@ -1,0 +1,9 @@
+version = "1"
+
+[platform]
+os = "linux"
+
+# The section is present and valid — the fixture must sail through Bind and
+# hit the EMIT-stage DeferWork guard (R09).
+[interrupt.a]
+irq_number = 5

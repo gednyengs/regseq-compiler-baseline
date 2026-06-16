@@ -24,6 +24,7 @@
 
 pub mod bus_resource;
 mod error;
+pub mod interrupt;
 
 pub use error::{L2Error, PlatformIdentityError};
 
@@ -53,8 +54,12 @@ pub trait L2Binder: Sync {
 
 /// The L2 tenants, in bind/validate order — **the one line that grows per
 /// construct**. Binders are zero-sized, so this is a `const` table (no
-/// allocation).
-const REGISTRY: &[&dyn L2Binder] = &[&bus_resource::BusResourceBinder];
+/// allocation). `device-interrupt` binds after `bus-resource` (it reads no
+/// bus state today; the order is pinned for determinism).
+const REGISTRY: &[&dyn L2Binder] = &[
+    &bus_resource::BusResourceBinder,
+    &interrupt::InterruptBinder,
+];
 
 /// Bind every tenant's platform metadata into `model`. This is the production
 /// post-bridge "1b" join seam (`regseq-driver`'s callback) and the identical

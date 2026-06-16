@@ -1925,6 +1925,19 @@ impl<'a> PrettyPrinter<'a> {
                 // form in this phase; its render rule (if any) lands with
                 // the bridge/backend stages that consume it. Emit nothing.
                 AttrData::FrameworkType(_) => {}
+                // ISR-binding marker (device-interrupt construct #6): render
+                // the authored attribute form.
+                AttrData::IsrBinding { field, .. } => match field {
+                    Some(field) => {
+                        let name = self.model.strings.resolve(*field);
+                        out.push_str(&format!("#[rseq::isr(field = \"{name}\")]\n"));
+                    }
+                    None => out.push_str("#[rseq::isr]\n"),
+                },
+                // The interrupt-resource marker is a field attribute
+                // (`field_attrs`); it never appears in the item-attr stream.
+                // Emit nothing if it does.
+                AttrData::InterruptResource { .. } => {}
             }
         }
         out

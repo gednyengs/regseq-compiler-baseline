@@ -1,0 +1,16 @@
+name   = "irq-pl011"
+kind   = "rust"
+# The device-interrupt M1 vertical slice (construct #6, PLAN T07): one
+# Interrupt + one bare ISR on a PL011-shaped AMBA driver. The orderly
+# scenario runs the C01 placement (register-disabled last in the preamble →
+# enable after on_init Ok → disable→deregister after on_deinit) and the fire
+# script exercises the four lifecycle points; `expected.stdout` is the FULL
+# C01 interleaving (I07). Covers aggregation rides `irq_covers` (the _irq
+# corpus is interner-isolated from the top-level ledger, like _lifecycle).
+covers = ["IRQ-1", "IRQ-2", "IRQ-3", "IRQ-4", "IRQ-5", "IRQ-6", "IRQ-7", "IRQ-10"]
+lifecycle_scenario = "orderly"
+# (a) pre-init: inert (registered, line disabled — D02); (b) post-init:
+# masked sources → NotHandled (R08); (c) RX cause (MIS=0x010 at 0x040) →
+# Handled + the ICR W1C ack in the MMIO trace (I03); (d) post-deinit: inert.
+irq_fire = "pre-init,post-init,cause:0x040=0x00000010,post-deinit"
+expect = "pass"

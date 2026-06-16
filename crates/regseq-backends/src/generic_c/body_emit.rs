@@ -41,16 +41,19 @@
 use std::cell::RefCell;
 
 use regseq_model::{
-    args_key_for_generic_args, AggregateKind, AssertKind, BinOp, Byte, CallCallee, CastKind,
-    ConfigOp, Const,
-    ConstId, Endian, EnumShape, FloatKind, GenericArg, InstanceId, InstanceKind, InstanceRef,
-    IntKind, IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel, MatchEntry, MmioOp,
-    NonDivergingIntrinsic,
+    args_key_for_generic_args, AggregateKind, ArmReachability, AssertKind, BinOp, Byte,
+    CallCallee, CastKind, ConfigOp, Const,
+    ConstId, DriverInterrupts, Endian, EnumShape, FloatKind, GenericArg, InstanceId, InstanceKind,
+    InstanceRef, InterruptForm, IntKind, IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel,
+    MatchEntry, MmioOp, NonDivergingIntrinsic,
     Operand, Place, PlaceElem, PointerCoercion, RegseqModel, Rvalue, StatementKind, SwitchTargets,
-    SyntheticItemKind, TagEncoding, TerminatorKind, Ty, TyId, UintKind, UnOp, VariantIdx,
-    VariantLayout,
+    SyntheticItemKind, TagEncoding, TerminatorKind, TriggerPolarity, TriggerType, Ty, TyId,
+    UintKind, UnOp, VariantIdx, VariantLayout,
 };
 
+use crate::interrupt_order::{irq_steps_for, IrqPhase, IrqStep};
+
+use super::backend_options::IrqFireStep;
 use super::errno::errno_symbol;
 use super::prelude::HelperUsage;
 use super::{
@@ -5085,6 +5088,314 @@ pub(crate) fn max_resolved_bindings_per_driver(model: &RegseqModel) -> usize {
         .unwrap_or(0)
 }
 
+/// Prepared device-interrupt emission facts for one driver (construct #6):
+/// the per-resource line numbers + binding-trace calls, the per-resource
+/// wrapper symbols, and the wrapper definitions. Built once per driver by
+/// [`prepare_irq_emission`]; the emit-stage guards (I05) all fire there.
+struct IrqEmission {
+    /// Per resource (declaration order): the `[interrupt.<id>] irq_number`
+    /// line (required for the generic-c target, R10).
+    lines: Vec<u32>,
+    /// Per resource: the `regseq_irq_binding(...)` trace call (R12 facts,
+    /// verbatim, no flag semantics).
+    binding_calls: Vec<String>,
+    /// Per resource: the wrapper symbol registered for its handler.
+    wrappers: Vec<String>,
+    /// The emitted wrapper definitions (placed after the target struct).
+    wrapper_defs: String,
+}
+
+impl IrqEmission {
+    /// The deinit-postamble disable→deregister block (D09/R06), emitted after
+    /// the teardown callback and before the resource postambles. `indent` is
+    /// the emission column.
+    fn teardown_block(&self, interrupts: &DriverInterrupts, indent: &str) -> String {
+        let mut out = String::new();
+        for step in irq_steps_for(interrupts, IrqPhase::DeinitPostambleBeforeResources) {
+            match step {
+                IrqStep::Disable { resource } => out.push_str(&format!(
+                    "{indent}regseq_irq_disable({}u);\n",
+                    self.lines[resource]
+                )),
+                IrqStep::Unregister { resource } => out.push_str(&format!(
+                    "{indent}regseq_irq_unregister({}u);\n",
+                    self.lines[resource]
+                )),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// The `on_init`-Err reverse-unwind block (R16): unregister only — the
+    /// line was registered disabled and never enabled on this path (D02).
+    fn unwind_block(&self, interrupts: &DriverInterrupts, indent: &str) -> String {
+        let mut out = String::new();
+        for step in irq_steps_for(interrupts, IrqPhase::InitErrUnwind) {
+            if let IrqStep::Unregister { resource } = step {
+                out.push_str(&format!(
+                    "{indent}regseq_irq_unregister({}u);\n",
+                    self.lines[resource]
+                ));
+            }
+        }
+        out
+    }
+
+    /// The post-`on_init`-Ok enable block (D02/R05) plus, when `with_fires`,
+    /// the harness post-init / cause fire steps (orderly scenario only).
+    /// Fires target the FIRST resource's line (the lowered M1 surface).
+    fn enable_block(
+        &self,
+        interrupts: &DriverInterrupts,
+        options: &BackendOptions,
+        with_fires: bool,
+        indent: &str,
+    ) -> String {
+        let mut out = String::new();
+        for step in irq_steps_for(interrupts, IrqPhase::AfterOnInitOk) {
+            if let IrqStep::Enable { resource } = step {
+                out.push_str(&format!(
+                    "{indent}regseq_irq_enable({}u);\n",
+                    self.lines[resource]
+                ));
+            }
+        }
+        if with_fires {
+            let line = self.lines[0];
+            for step in options.irq_fire() {
+                match step {
+                    IrqFireStep::PostInit => {
+                        out.push_str(&format!("{indent}regseq_irq_fire({line}u);\n"));
+                    }
+                    IrqFireStep::Cause { offset, value } => {
+                        out.push_str(&format!(
+                            "{indent}regseq_irq_dev_poke(0x{offset:x}u, 0x{value:x}u);\n"
+                        ));
+                        out.push_str(&format!("{indent}regseq_irq_fire({line}u);\n"));
+                    }
+                    IrqFireStep::PreInit | IrqFireStep::PostDeinit => {}
+                }
+            }
+        }
+        out
+    }
+}
+
+/// Build the [`IrqEmission`] for one driver, firing every emit-stage guard
+/// (I05 — loud, never partial):
+///
+///   * non-`Single` declaration forms are recognized-but-rejected (D06/R02);
+///   * the generic-c target requires the `[interrupt.<id>] irq_number`
+///     literal (R10);
+///   * a handler whose `IrqResult::DeferWork` arm is not PROVEN unreachable
+///     is rejected naming the `deferred-work-item-scheduling` construct
+///     (R09/D04 — fail-loud on `Unknown` too).
+fn prepare_irq_emission(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    label: &str,
+    target_name: &str,
+    interrupts: &DriverInterrupts,
+) -> Result<IrqEmission, EmitError> {
+    let mut lines = Vec::new();
+    let mut binding_calls = Vec::new();
+    let mut wrappers = Vec::new();
+    let mut wrapper_defs = String::new();
+    for (idx, resource) in interrupts.resources.iter().enumerate() {
+        if !matches!(resource.form, InterruptForm::Single) {
+            return Err(EmitError::Unsupported(
+                "device-interrupt: Option<Interrupt> / [Interrupt; N] lowering is not \
+                 implemented this slice (the form is recognized; emit-stage rejection per \
+                 GRILL D06/R02)",
+            ));
+        }
+        let line = resource.binding.irq_number.ok_or(EmitError::Unsupported(
+            "device-interrupt: the generic-c target requires the [interrupt.<id>] \
+             irq_number literal (R10)",
+        ))?;
+        lines.push(line);
+        // R12: the resolved L2 facts trace verbatim; no flag semantics.
+        let tt = match resource.binding.trigger_type {
+            Some(TriggerType::Level) => "level",
+            Some(TriggerType::Edge) => "edge",
+            None => "-",
+        };
+        let tp = match resource.binding.trigger_polarity {
+            Some(TriggerPolarity::ActiveHigh) => "active_high",
+            Some(TriggerPolarity::ActiveLow) => "active_low",
+            Some(TriggerPolarity::Rising) => "rising",
+            Some(TriggerPolarity::Falling) => "falling",
+            None => "-",
+        };
+        let shared = u8::from(resource.binding.shared);
+        let priority = resource.binding.priority.map(i64::from).unwrap_or(-1);
+        binding_calls.push(format!(
+            "    regseq_irq_binding({line}u, \"{tt}\", \"{tp}\", {shared}, {priority}ll);\n"
+        ));
+
+        // The bound handler (exactly one per non-optional resource, D13 —
+        // bridge-enforced; defensive here).
+        let handler = interrupts
+            .handlers
+            .iter()
+            .find(|h| h.resource as usize == idx)
+            .ok_or(EmitError::Unsupported(
+                "device-interrupt: a lowered Interrupt resource has no bound handler",
+            ))?;
+        if handler.arms.defer_work != ArmReachability::ProvenUnreachable {
+            return Err(EmitError::Unsupported(
+                "device-interrupt: the handler's IrqResult::DeferWork arm is not proven \
+                 unreachable — deferring work from an ISR requires the \
+                 deferred-work-item-scheduling construct (not yet built); rejected at \
+                 emit per R09/D04",
+            ));
+        }
+        let iref = handler.body.ok_or(EmitError::Unsupported(
+            "device-interrupt: handler body InstanceRef missing",
+        ))?;
+        let id = resolve_reloc(model, iref).ok_or(EmitError::Unsupported(
+            "device-interrupt: handler InstanceRef does not resolve",
+        ))?;
+        let sym = syms.symbol(id).to_string();
+        let data = model.instances[id]
+            .kind
+            .as_function()
+            .ok_or(EmitError::Unsupported(
+                "device-interrupt: handler instance is not a function",
+            ))?;
+        let ret_ty = model.sigs.resolve(data.fn_sig).output;
+
+        // The IrqResult Direct-tag read: member path + per-arm tag values,
+        // resolved BY VARIANT NAME (the names are the C04 contract; the
+        // declaration order is authored).
+        let shape = enum_emit::enum_shape(model, ret_ty).ok_or(EmitError::Unsupported(
+            "device-interrupt: handler return type is not an enum",
+        ))?;
+        let (member_path, scalar_ty) = match enum_emit::enum_tag(model, shape) {
+            enum_emit::EnumTag::View {
+                member_path,
+                scalar_ty,
+            } => (member_path, scalar_ty),
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "device-interrupt: IrqResult is not a Direct-tag enum",
+                ))
+            }
+        };
+        let variants = match shape {
+            EnumShape::Multiple { variants, .. } => variants,
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "device-interrupt: IrqResult is not a multi-variant enum",
+                ))
+            }
+        };
+        let tag_for = |arm: &str| -> Result<String, EmitError> {
+            let v = variants
+                .iter()
+                .find(|v| model.strings.resolve(v.name) == arm)
+                .ok_or(EmitError::Unsupported(
+                    "device-interrupt: IrqResult lacks a Handled/NotHandled/DeferWork arm",
+                ))?;
+            let tv = v.tag_value.ok_or(EmitError::Unsupported(
+                "device-interrupt: IrqResult variant lacks a tag value",
+            ))?;
+            render_tag_value(model, names, scalar_ty, tv)
+        };
+        let handled_tv = tag_for("Handled")?;
+        let not_handled_tv = tag_for("NotHandled")?;
+
+        // The void ISR wrapper (C04): recover the driver from the registered
+        // ctx (the target-view container), run the authored body, trace the
+        // dispatch result verbatim. The wrapper acquires NO locks (R18/D11 —
+        // the ISR↔mainline race is a documented phase limitation until the
+        // Synchronization construct lands).
+        let wrapper = if interrupts.handlers.len() == 1 {
+            format!("rseq_isr_{label}")
+        } else {
+            format!("rseq_isr_{label}_{idx}")
+        };
+        let ret_decl = types::declare(model, names, ret_ty, "__r");
+        wrapper_defs.push_str(&format!(
+            "static void {wrapper}(void *__ctx) {{\n\
+             \x20   struct {target_name} *__t = (struct {target_name} *)__ctx;\n\
+             \x20   {ret_decl} = {sym}(&__t->inner);\n\
+             \x20   if (__r.{member_path} == {handled_tv}) {{\n\
+             \x20       regseq_irq_result(\"Handled\");\n\
+             \x20   }} else if (__r.{member_path} == {not_handled_tv}) {{\n\
+             \x20       regseq_irq_result(\"NotHandled\");\n\
+             \x20   }} else {{\n\
+             \x20       regseq_irq_result(\"DeferWork\");\n\
+             \x20   }}\n\
+             }}\n\n"
+        ));
+        wrappers.push(wrapper);
+    }
+    Ok(IrqEmission {
+        lines,
+        binding_calls,
+        wrappers,
+        wrapper_defs,
+    })
+}
+
+/// The `on_init` capture machinery shared by the init-fail rollback and the
+/// interrupt enable gate: the capture block (`__r` + the niche-discriminant
+/// read into `__disc`) and the rendered `Ok` discriminant to compare against.
+/// `None` when `on_init` is not overridden (the trait default cannot fail).
+fn build_on_init_capture(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    on_init: &Option<InstanceRef>,
+) -> Result<Option<(String, String)>, EmitError> {
+    let Some(iref) = on_init else {
+        return Ok(None);
+    };
+    let id = resolve_reloc(model, *iref).ok_or(EmitError::Unsupported(
+        "device-lifecycle on_init InstanceRef does not resolve",
+    ))?;
+    let sym = syms.symbol(id).to_string();
+    let data = model.instances[id].kind.as_function().ok_or(EmitError::Unsupported(
+        "device-lifecycle on_init instance is not a function",
+    ))?;
+    let result_ty = model.sigs.resolve(data.fn_sig).output;
+
+    let result_shape = enum_emit::enum_shape(model, result_ty).ok_or(EmitError::Unsupported(
+        "init-fail: the on_init return type is not an enum",
+    ))?;
+    let niche_scalar_ty = match enum_emit::enum_tag(model, result_shape) {
+        enum_emit::EnumTag::Niche { scalar_ty, .. } => scalar_ty,
+        _ => {
+            return Err(EmitError::Unsupported(
+                "init-fail: the on_init Result is not niche-encoded",
+            ))
+        }
+    };
+    let ok_disc = match result_shape {
+        EnumShape::Multiple { variants, .. } if !variants.is_empty() => variants[0].discriminant,
+        _ => {
+            return Err(EmitError::Unsupported(
+                "init-fail: the on_init Result is not a multi-variant enum",
+            ))
+        }
+    };
+
+    let result_decl = types::declare(model, names, result_ty, "__r");
+    let disc_cty = types::c_type(model, names, niche_scalar_ty);
+    let niche_block =
+        niche_discriminant_read_block(model, result_ty, "__r", "__disc", niche_scalar_ty, "__nd")?;
+    let ok_disc_render = render_discriminant(model, niche_scalar_ty, ok_disc)?;
+
+    let mut capture = String::new();
+    capture.push_str(&format!("    {result_decl} = {sym}(&inst.inner);\n"));
+    capture.push_str(&format!("    {disc_cty} __disc;\n"));
+    capture.push_str(&format!("    {niche_block}\n"));
+    Ok(Some((capture, ok_disc_render)))
+}
+
 pub(crate) fn emit_lifecycle_synthesis(
     model: &RegseqModel,
     names: &NameTable,
@@ -5188,6 +5499,26 @@ pub(crate) fn emit_lifecycle_synthesis(
         out.push_str("    uint32_t __rseq_state;\n");
         out.push_str("};\n\n");
 
+        // Device-interrupt surface (construct #6): the per-driver emission
+        // facts + the ISR wrapper definitions. The emit-stage guards (form /
+        // irq_number / DeferWork-reachability, I05) all fire inside
+        // `prepare_irq_emission`. `None` for an interrupt-less driver — every
+        // existing fixture's emission is byte-unchanged.
+        let irq = match model.interrupt.drivers.get(driver_item) {
+            Some(interrupts) => Some((
+                interrupts,
+                prepare_irq_emission(model, names, syms, &label, &target_name, interrupts)?,
+            )),
+            None => None,
+        };
+        if let Some((_, e)) = &irq {
+            out.push_str(&e.wrapper_defs);
+        }
+        // The on_init capture machinery (an interrupt driver gates its enable
+        // on the captured Ok; the init-fail scenario branches its rollback on
+        // the same capture).
+        let on_init_capture = build_on_init_capture(model, names, syms, &driver.ops.on_init)?;
+
         for &scenario in options.lifecycle_scenarios() {
             let fn_name = format!("__rseq_lc_{idx}_{label}_{}", scenario.ident());
             out.push_str(&format!("static void {fn_name}(void) {{\n"));
@@ -5288,79 +5619,154 @@ pub(crate) fn emit_lifecycle_synthesis(
             // whose address is each callback's `&mut self`. Declared once iff a
             // callback invoked in THIS scenario is overridden (an empty
             // `impl Lifecycle` would otherwise leave it unused -> -Wunused).
-            let needs_inst = match scenario {
-                LifecycleScenario::Orderly => on_init_sym.is_some() || on_deinit_sym.is_some(),
-                LifecycleScenario::Surprise => {
-                    on_init_sym.is_some() || on_surprise_remove_sym.is_some()
-                }
-                LifecycleScenario::InitFail => on_init_sym.is_some(),
-                LifecycleScenario::Shutdown => {
-                    on_init_sym.is_some() || on_system_shutdown_sym.is_some()
-                }
-            };
+            let needs_inst = irq.is_some()
+                || match scenario {
+                    LifecycleScenario::Orderly => on_init_sym.is_some() || on_deinit_sym.is_some(),
+                    LifecycleScenario::Surprise => {
+                        on_init_sym.is_some() || on_surprise_remove_sym.is_some()
+                    }
+                    LifecycleScenario::InitFail => on_init_sym.is_some(),
+                    LifecycleScenario::Shutdown => {
+                        on_init_sym.is_some() || on_system_shutdown_sym.is_some()
+                    }
+                };
             if needs_inst {
                 // The target-view container instance (Policy-P morph). The
                 // callbacks take `&inst.inner` — a spec-view pointer to the
-                // embedded driver (CR-7).
+                // embedded driver (CR-7). An interrupt driver always needs it:
+                // the wrapper's registered ctx is `&inst`.
                 out.push_str(&format!("    struct {target_name} inst = {{0}};\n"));
+            }
+
+            // Interrupt preamble (construct #6, D14): register each line
+            // DISABLED, LAST among the resource preambles (after the bus ops
+            // + map_region keystone above), in the order the single placement
+            // source dictates (R17). The resolved L2 facts trace verbatim
+            // right after each registration (R12).
+            if let Some((interrupts, e)) = &irq {
+                for step in irq_steps_for(interrupts, IrqPhase::InitPreambleAfterResources) {
+                    if let IrqStep::RegisterDisabled { resource } = step {
+                        out.push_str(&format!(
+                            "    regseq_irq_register({}u, {}, (void *)&inst);\n",
+                            e.lines[resource], e.wrappers[resource]
+                        ));
+                        out.push_str(&e.binding_calls[resource]);
+                    }
+                }
+                // Harness pre-init fires (orderly only): the line is
+                // registered but DISABLED — the fire traces inert (O1).
+                if scenario == LifecycleScenario::Orderly {
+                    for step in options.irq_fire() {
+                        if matches!(step, IrqFireStep::PreInit) {
+                            out.push_str(&format!("    regseq_irq_fire({}u);\n", e.lines[0]));
+                        }
+                    }
+                }
             }
 
             // on_init: the marker always prints (CR-3). The author body is
             // invoked iff overridden — its Result discarded (CR-4) in every
-            // scenario except `init-fail`, which captures it to drive rollback.
+            // scenario except `init-fail`, which captures it to drive rollback,
+            // and any scenario of an interrupt driver, which captures it to
+            // gate the enable point (D02/R05: enable only after Ok).
             out.push_str("    regseq_lc_call(\"on_init\");\n");
+
+            // The interrupt view threaded into the scenario emission.
+            let irq_view = irq.as_ref().map(|(i, e)| (*i, e));
 
             // Scenario-specific on_init handling + teardown/shutdown suffix.
             match scenario {
-                // Orderly teardown (device present, M2): on_init Result discarded,
-                // then the teardown dispatch (present=1) + always-on `on_deinit`.
+                // Orderly teardown (device present, M2): on_init Result discarded
+                // (or, for an interrupt driver, captured to gate the enable —
+                // D02/R05), then the teardown dispatch (present=1) + always-on
+                // `on_deinit`, the interrupt disable→deregister riding before the
+                // resource postambles (D09/R06), then the post-deinit harness
+                // fires (inert — the line is unregistered, O1).
                 LifecycleScenario::Orderly => {
-                    if let Some(sym) = &on_init_sym {
-                        out.push_str(&format!("    {sym}(&inst.inner);\n"));
+                    emit_on_init_invocation(
+                        &on_init_sym,
+                        &on_init_capture,
+                        irq_view,
+                        options,
+                        true,
+                        &mut out,
+                    );
+                    let irq_teardown = irq_view
+                        .map(|(i, e)| e.teardown_block(i, "    "))
+                        .unwrap_or_default();
+                    emit_teardown_dispatch(
+                        1,
+                        "on_deinit",
+                        &on_deinit_sym,
+                        &resource_names,
+                        &irq_teardown,
+                        &mut out,
+                    );
+                    if let Some((_, e)) = irq_view {
+                        for step in options.irq_fire() {
+                            if matches!(step, IrqFireStep::PostDeinit) {
+                                out.push_str(&format!("    regseq_irq_fire({}u);\n", e.lines[0]));
+                            }
+                        }
                     }
-                    emit_teardown_dispatch(1, "on_deinit", &on_deinit_sym, &resource_names, &mut out);
                 }
-                // Surprise removal (device gone, M4): on_init Result discarded, then
-                // the teardown dispatch (present=0) + always-on `on_surprise_remove`.
-                // Byte-distinct from orderly (present=0, surprise_remove vs deinit);
-                // HW-touching postambles would be `skipped(surprise)` once a
-                // resourceful fixture lands (M7) — none here (fieldless).
+                // Surprise removal (device gone, M4): like orderly with present=0
+                // and `on_surprise_remove`; the interrupt disable→deregister still
+                // emits (CPU-side line ops, not HW-touching postambles). No
+                // harness fires (the fire script is the orderly scenario's).
                 LifecycleScenario::Surprise => {
-                    if let Some(sym) = &on_init_sym {
-                        out.push_str(&format!("    {sym}(&inst.inner);\n"));
-                    }
+                    emit_on_init_invocation(
+                        &on_init_sym,
+                        &on_init_capture,
+                        irq_view,
+                        options,
+                        false,
+                        &mut out,
+                    );
+                    let irq_teardown = irq_view
+                        .map(|(i, e)| e.teardown_block(i, "    "))
+                        .unwrap_or_default();
                     emit_teardown_dispatch(
                         0,
                         "on_surprise_remove",
                         &on_surprise_remove_sym,
                         &resource_names,
+                        &irq_teardown,
                         &mut out,
                     );
                 }
                 // Init-failure rollback (M3): capture on_init's Result; on the Err
                 // niche discriminant emit `LC on_init -> Err`, the always-on
-                // on_init_failure marker (CR-3), and the author failure body iff
-                // overridden. Emits nothing when on_init is not overridden (the
-                // trait-default `Ok` can never take the failure path).
+                // on_init_failure marker (CR-3), the author failure body iff
+                // overridden, and the interrupt reverse unwind (unregister only —
+                // the line was never enabled; R16/D02). On the Ok discriminant an
+                // interrupt driver enables (no fires). Emits nothing when on_init
+                // is not overridden (the trait-default `Ok` can never take the
+                // failure path) except an interrupt driver's enable.
                 LifecycleScenario::InitFail => {
                     emit_init_fail_body(
-                        model,
-                        names,
-                        syms,
-                        &driver.ops.on_init,
+                        &on_init_capture,
                         &on_init_failure_sym,
+                        irq_view,
+                        options,
                         &mut out,
-                    )?;
+                    );
                 }
-                // System shutdown (M5): on_init Result discarded, then
+                // System shutdown (M5): on_init Result discarded (interrupt
+                // drivers gate their enable as everywhere), then
                 // `on_system_shutdown` — the ONLY omit-when-absent callback
                 // (D10/I02): UNLIKE the four glued callbacks it emits NO marker and
                 // NO slot when not overridden; when overridden, the marker + the
                 // author body (its Result discarded, CR-4).
                 LifecycleScenario::Shutdown => {
-                    if let Some(sym) = &on_init_sym {
-                        out.push_str(&format!("    {sym}(&inst.inner);\n"));
-                    }
+                    emit_on_init_invocation(
+                        &on_init_sym,
+                        &on_init_capture,
+                        irq_view,
+                        options,
+                        false,
+                        &mut out,
+                    );
                     if let Some(sym) = &on_system_shutdown_sym {
                         out.push_str("    regseq_lc_call(\"on_system_shutdown\");\n");
                         out.push_str(&format!("    {sym}(&inst.inner);\n"));
@@ -5393,6 +5799,7 @@ fn emit_teardown_dispatch(
     cb: &str,
     cb_sym: &Option<String>,
     resource_names: &[String],
+    irq_teardown: &str,
     out: &mut String,
 ) {
     out.push_str(&format!("    regseq_lc_teardown({present});\n"));
@@ -5400,9 +5807,49 @@ fn emit_teardown_dispatch(
     if let Some(sym) = cb_sym {
         out.push_str(&format!("    {sym}(&inst.inner);\n"));
     }
+    // Device-interrupt disable→deregister (construct #6, D09/R06): after the
+    // teardown callback, BEFORE the resource postambles (the reverse of the
+    // preamble, where the interrupt registration came last). Empty for an
+    // interrupt-less driver.
+    out.push_str(irq_teardown);
     let skipped = if present == 0 { 1 } else { 0 };
     for res in resource_names.iter().rev() {
         out.push_str(&format!("    regseq_lc_postamble(\"{res}\", {skipped});\n"));
+    }
+}
+
+/// Emit the scenario's `on_init` author-body invocation. For an interrupt-less
+/// driver this is the historical one-liner (Result discarded, CR-4). For an
+/// interrupt driver the Result is CAPTURED and the interrupt enable runs only
+/// on the `Ok` discriminant (D02/R05/I01) — the C01 enable point made
+/// structural in the emitted C; `with_fires` additionally runs the harness
+/// post-init / cause fire script inside the `Ok` branch (orderly only).
+fn emit_on_init_invocation(
+    on_init_sym: &Option<String>,
+    on_init_capture: &Option<(String, String)>,
+    irq: Option<(&DriverInterrupts, &IrqEmission)>,
+    options: &BackendOptions,
+    with_fires: bool,
+    out: &mut String,
+) {
+    match (on_init_sym, irq) {
+        (Some(sym), None) => {
+            out.push_str(&format!("    {sym}(&inst.inner);\n"));
+        }
+        (None, None) => {}
+        (Some(_), Some((interrupts, e))) => {
+            let (capture, ok) = on_init_capture
+                .as_ref()
+                .expect("an overridden on_init always builds a capture");
+            out.push_str(capture);
+            out.push_str(&format!("    if (__disc == {ok}) {{\n"));
+            out.push_str(&e.enable_block(interrupts, options, with_fires, "        "));
+            out.push_str("    }\n");
+        }
+        (None, Some((interrupts, e))) => {
+            // The trait-default on_init cannot fail: enable unconditionally.
+            out.push_str(&e.enable_block(interrupts, options, with_fires, "    "));
+        }
     }
 }
 
@@ -5410,76 +5857,53 @@ fn emit_teardown_dispatch(
 ///
 /// When `on_init` is overridden, capture its `Result<(), RegseqError>` C struct,
 /// read the niche discriminant (the exact machinery the errno exit-adapter uses —
-/// [`niche_discriminant_read_block`] over the [`enum_emit`] shape/tag), and on the
-/// Err discriminant emit `LC on_init -> Err`, the always-on `LC call on_init_failure`
-/// marker (CR-3 — the trait-default no-op still counts as invoked), and the author
-/// failure body iff overridden. The reverse partial postamble (high-water mark,
-/// GRILL D12) lands with the first resourceful fixture (M7); a fieldless driver
-/// rolls back nothing. Emits nothing when `on_init` is not overridden: the
-/// trait-default `Ok(())` can never take the failure path. The process exits
-/// cleanly — the rollback is asserted by the stdout trace, not a nonzero exit.
+/// [`niche_discriminant_read_block`] over the [`enum_emit`] shape/tag, prepared
+/// by [`build_on_init_capture`]), and on the Err discriminant emit
+/// `LC on_init -> Err`, the always-on `LC call on_init_failure` marker (CR-3 —
+/// the trait-default no-op still counts as invoked), the author failure body iff
+/// overridden, and the device-interrupt reverse unwind (unregister only — the
+/// line was registered DISABLED and never enabled on this path; R16/D02). On
+/// the Ok discriminant an interrupt driver enables its lines (no harness
+/// fires — the fire script is the orderly scenario's). The reverse partial
+/// postamble (high-water mark, GRILL D12) lands with the first resourceful
+/// fixture (M7); a fieldless driver rolls back nothing. Emits nothing when
+/// `on_init` is not overridden (the trait-default `Ok(())` can never take the
+/// failure path) except an interrupt driver's unconditional enable. The
+/// process exits cleanly — the rollback is asserted by the stdout trace, not a
+/// nonzero exit.
 fn emit_init_fail_body(
-    model: &RegseqModel,
-    names: &NameTable,
-    syms: &InstanceSymbols,
-    on_init: &Option<InstanceRef>,
+    on_init_capture: &Option<(String, String)>,
     on_init_failure_sym: &Option<String>,
+    irq: Option<(&DriverInterrupts, &IrqEmission)>,
+    options: &BackendOptions,
     out: &mut String,
-) -> Result<(), EmitError> {
-    let Some(iref) = on_init else {
-        return Ok(());
-    };
-    let id = resolve_reloc(model, *iref).ok_or(EmitError::Unsupported(
-        "device-lifecycle on_init InstanceRef does not resolve",
-    ))?;
-    let sym = syms.symbol(id).to_string();
-    let data = model.instances[id].kind.as_function().ok_or(EmitError::Unsupported(
-        "device-lifecycle on_init instance is not a function",
-    ))?;
-    let result_ty = model.sigs.resolve(data.fn_sig).output;
-
-    // The on_init `Result<(), RegseqError>` niche enum: the niche cell scalar (the
-    // discriminant temp's C type + the `Ok` test) and the `Ok` discriminant
-    // (variant index 0, rustc's `Result` order).
-    let result_shape = enum_emit::enum_shape(model, result_ty).ok_or(EmitError::Unsupported(
-        "init-fail: the on_init return type is not an enum",
-    ))?;
-    let niche_scalar_ty = match enum_emit::enum_tag(model, result_shape) {
-        enum_emit::EnumTag::Niche { scalar_ty, .. } => scalar_ty,
-        _ => {
-            return Err(EmitError::Unsupported(
-                "init-fail: the on_init Result is not niche-encoded",
-            ))
+) {
+    let Some((capture, ok_disc_render)) = on_init_capture else {
+        if let Some((interrupts, e)) = irq {
+            out.push_str(&e.enable_block(interrupts, options, false, "    "));
         }
+        return;
     };
-    let ok_disc = match result_shape {
-        EnumShape::Multiple { variants, .. } if !variants.is_empty() => variants[0].discriminant,
-        _ => {
-            return Err(EmitError::Unsupported(
-                "init-fail: the on_init Result is not a multi-variant enum",
-            ))
-        }
-    };
-
-    let result_decl = types::declare(model, names, result_ty, "__r");
-    let disc_cty = types::c_type(model, names, niche_scalar_ty);
-    let niche_block =
-        niche_discriminant_read_block(model, result_ty, "__r", "__disc", niche_scalar_ty, "__nd")?;
-    let ok_disc_render = render_discriminant(model, niche_scalar_ty, ok_disc)?;
-
     // Capture on_init's Result and branch on the Err niche discriminant (`!= Ok`,
     // the inverse of the exit-adapter's `== Ok -> return 0`).
-    out.push_str(&format!("    {result_decl} = {sym}(&inst.inner);\n"));
-    out.push_str(&format!("    {disc_cty} __disc;\n"));
-    out.push_str(&format!("    {niche_block}\n"));
+    out.push_str(capture);
     out.push_str(&format!("    if (__disc != {ok_disc_render}) {{\n"));
     out.push_str("        regseq_lc_on_init_err();\n");
     out.push_str("        regseq_lc_call(\"on_init_failure\");\n");
     if let Some(fsym) = on_init_failure_sym {
         out.push_str(&format!("        {fsym}(&inst.inner);\n"));
     }
-    out.push_str("    }\n");
-    Ok(())
+    match irq {
+        Some((interrupts, e)) => {
+            out.push_str(&e.unwind_block(interrupts, "        "));
+            out.push_str("    } else {\n");
+            out.push_str(&e.enable_block(interrupts, options, false, "        "));
+            out.push_str("    }\n");
+        }
+        None => {
+            out.push_str("    }\n");
+        }
+    }
 }
 
 /// The emitted `TyId` of a driver struct Item (the `inst` local's C type): the

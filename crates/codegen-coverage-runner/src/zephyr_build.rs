@@ -91,12 +91,22 @@ impl std::error::Error for WestError {}
 
 /// The staged DUT's bus form: it decides the board, the overlay node shape,
 /// and the prj.conf pin set.
-pub enum StagedBus {
+pub enum StagedBus<'a> {
     /// Platform/AMBA: a memory-mapped DUT node under `/soc` carrying `reg`
     /// (the first-light form; board [`BOARD`]).
     Platform {
         /// The DUT region `(base, size)` for the overlay node's `reg` cells.
         region: (u64, u64),
+        /// Optional raw `interrupts` cells for the overlay node
+        /// (device-interrupt construct #6: an interrupt-bearing TU's
+        /// `DT_INST_IRQN(0)` needs the property), e.g. `"<0 8 2 0>"` =
+        /// `<GIC_SPI 8 IRQ_TYPE_LEVEL 0>` raw. The west gate is a COMPILE
+        /// check — the cells must be well-formed; the runtime line number is
+        /// the eval campaign's to pin. `None` emits no property (every
+        /// pre-construct fixture, byte-identical overlay). This is a platform
+        /// node fact, so it lives in the variant — PCIe lines reach the
+        /// device through the `pcie0` controller, not a node property.
+        interrupts: Option<&'a str>,
     },
     /// PCIe (backend-zephyr-c-e1000 T07): a vendor/device-matched DUT node
     /// under the board's `pcie0` bus — NO `reg` (the C05 binding requires
@@ -122,8 +132,9 @@ pub struct StagedDriver<'a> {
     /// The DT compatible the binding declares (`"regseq,pl011"`); names the
     /// staged binding file and the overlay node's compatible.
     pub compatible: &'a str,
-    /// The DUT's bus form (board + overlay + prj.conf selector).
-    pub bus: StagedBus,
+    /// The DUT's bus form (board + overlay + prj.conf selector). The
+    /// [`StagedBus::Platform`] variant carries any DT `interrupts` cells.
+    pub bus: StagedBus<'a>,
 }
 
 /// Build the staged app against the workspace named by
@@ -215,16 +226,21 @@ pub fn west_build_with_workspace(
     std::fs::write(app.join("prj.conf"), prj_conf).map_err(WestError::Io)?;
     // The DUT overlay, per bus form.
     let overlay = match driver.bus {
-        StagedBus::Platform { region } => {
+        StagedBus::Platform { region, interrupts } => {
             // A status-okay node under /soc (the qemu-virt-a53 soc node is
-            // #address-cells=2 / #size-cells=2).
+            // #address-cells=2 / #size-cells=2). The optional `interrupts`
+            // cells (device-interrupt construct #6) ride the platform node —
+            // an interrupt-bearing TU's `DT_INST_IRQN(0)` needs the property.
             let (base, size) = region;
             let base_hi = base >> 32;
             let base_lo = base & 0xffff_ffff;
+            let interrupts_prop = interrupts
+                .map(|cells| format!("\t\t\tinterrupts = {cells};\n"))
+                .unwrap_or_default();
             format!(
                 "/* The eval DUT node (GRILL D04): the second PL011, matched ONLY by\n \
                  * the generated driver's `{}` compatible. */\n\
-                 / {{\n\tsoc {{\n\t\tregseq_dut: uart@{base:x} {{\n\t\t\tcompatible = \"{}\";\n\t\t\treg = <{base_hi:#x} {base_lo:#x} 0x00 {size:#x}>;\n\t\t\tstatus = \"okay\";\n\t\t}};\n\t}};\n}};\n",
+                 / {{\n\tsoc {{\n\t\tregseq_dut: uart@{base:x} {{\n\t\t\tcompatible = \"{}\";\n\t\t\treg = <{base_hi:#x} {base_lo:#x} 0x00 {size:#x}>;\n{interrupts_prop}\t\t\tstatus = \"okay\";\n\t\t}};\n\t}};\n}};\n",
                 driver.compatible, driver.compatible
             )
         }
@@ -355,6 +371,7 @@ mod tests {
             compatible: "regseq,pl011",
             bus: StagedBus::Platform {
                 region: (0x0904_0000, 0x1000),
+                interrupts: None,
             },
         }
     }

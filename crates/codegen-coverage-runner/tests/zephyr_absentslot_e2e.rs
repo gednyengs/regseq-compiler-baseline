@@ -121,7 +121,7 @@ fn zephyr_absentslot_snapshot_audit_block_and_determinism() {
     assert_eq!(
         line,
         "RSEQ-CONFORMANCE [zephyr_c @ v4.4.0 (684c9e8f32e4)] delivered=[on_init] \
-         absent_dispatch=[on_surprise_remove:CAP-ZEPHYR-DT-SURPRISE-1] rejected=[] ignored=[]"
+         absent_dispatch=[on_surprise_remove:CAP-ZEPHYR-DT-SURPRISE-1] structurally_absent=[] rejected=[] ignored=[]"
     );
     let (tu2, yaml2, json2, _) = produce(fixture);
     assert_eq!(tu1, tu2, "TU must be byte-stable across producer runs");

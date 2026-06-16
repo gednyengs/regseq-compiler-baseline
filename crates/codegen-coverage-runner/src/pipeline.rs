@@ -231,9 +231,9 @@ fn apply_expectation(fixture: &Fixture, raw: FixtureVerdict) -> FixtureVerdict {
 
 /// Build the backend codegen options for a fixture from its manifest (RD-8/T27):
 /// the manifest `lifecycle_scenario` CSV maps to the `backend.lifecycle.scenario`
-/// param, validated by the same [`regseq_backends::BackendOptions`] parser the
-/// CLI uses. Absent → the default (all scenarios; no effect on a no-lifecycle
-/// fixture).
+/// param and the `irq_fire` CSV to `backend.irq.fire` (construct #6), validated
+/// by the same [`regseq_backends::BackendOptions`] parser the CLI uses. Absent →
+/// the defaults (all scenarios; no fires).
 pub fn backend_options_for(
     fixture: &Fixture,
 ) -> Result<regseq_backends::BackendOptions, regseq_backends::EmitError> {
@@ -242,7 +242,14 @@ pub fn backend_options_for(
             .manifest
             .lifecycle_scenario
             .iter()
-            .map(|csv| ("lifecycle.scenario", csv.as_str())),
+            .map(|csv| ("lifecycle.scenario", csv.as_str()))
+            .chain(
+                fixture
+                    .manifest
+                    .irq_fire
+                    .iter()
+                    .map(|csv| ("irq.fire", csv.as_str())),
+            ),
     )
 }
 

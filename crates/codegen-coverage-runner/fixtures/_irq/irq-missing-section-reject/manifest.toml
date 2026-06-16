@@ -1,0 +1,12 @@
+name   = "irq-missing-section-reject"
+kind   = "rust"
+# The [interrupt.<id>]-missing bind reject (C03/IRQ-L2-003): the platform
+# file carries the MMIO region but no [interrupt.uart_irq]; the non-Option
+# Interrupt resource fails validate_l2_surface at Stage::Bind. Covers
+# aggregation rides `irq_covers`.
+covers = ["IRQ-9"]
+expect = "reject"
+
+[expected]
+stage = "bind"
+diagnostic = "IRQ-L2-003"

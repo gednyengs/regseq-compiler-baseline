@@ -6,6 +6,7 @@
     {"slot": "on_init_failure", "row": null}
   ],
   "absent_dispatch_slots": [],
+  "structurally_absent_slots": [],
   "rejected_slots": [],
   "ignored_match_entries": [
     {"entry": "pci vendor=0x8086 device=0x100e", "reason": "foreign transport: not consumed by the ratified static-devicetree registration form; >=1 native entry present", "license": "spec-convergence-pl011 GRILL D08 (D03(a) rule)", "native_on": ["linux_c"]}

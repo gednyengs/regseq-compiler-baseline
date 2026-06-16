@@ -13,8 +13,12 @@ pub struct Interrupt {
 ///
 /// This is a dispatch result, not an error type. Handlers return one of these
 /// variants to indicate how the interrupt was handled.
+// NO `Debug` derive (device-interrupt T13): the derived `fmt` method's
+// `Formatter<'_>` carries `dyn fmt::Write` with a late-bound lifetime, which
+// the bridge's fn-sig translation cannot layout-query (the same rule the
+// shared `_interrupt_surface.rs` fixture records).
 #[rseq::framework_type("irq-result")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum IrqResult {
     Handled,
     NotHandled,

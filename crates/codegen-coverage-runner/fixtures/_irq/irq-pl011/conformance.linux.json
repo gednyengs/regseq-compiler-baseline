@@ -1,0 +1,15 @@
+{
+  "target": "linux_c",
+  "os_version_pin": "v6.6",
+  "delivered_slots": [
+    {"slot": "on_init", "row": null},
+    {"slot": "on_deinit", "row": null},
+    {"slot": "interrupt.register_handler.deregister", "row": null}
+  ],
+  "absent_dispatch_slots": [],
+  "structurally_absent_slots": [],
+  "rejected_slots": [],
+  "ignored_match_entries": [
+    {"entry": "devicetree compatible=\"regseq,pl011irq\"", "reason": "foreign transport: not consumed by the ratified amba_driver registration form; >=1 native entry present", "license": "spec-convergence-pl011 GRILL D08 (D03(a) rule)", "native_on": ["zephyr_c"]}
+  ]
+}

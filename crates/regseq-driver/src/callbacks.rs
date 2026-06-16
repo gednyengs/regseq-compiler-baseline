@@ -217,7 +217,7 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         match regseq_config::parse_platform_file_path(&self.options.platform_file) {
             Ok(file) => {
                 if let Err(err) = regseq_l2::bind_all(&mut model, &file.bindings) {
-                    tcx.dcx().fatal(format!("regseq-driver: bus-resource {err}"));
+                    tcx.dcx().fatal(format!("regseq-driver: L2 {err}"));
                 }
                 match regseq_l2::resolve_platform_identity(&file.identity) {
                     Ok(identity) => platform_identity = identity,
@@ -247,8 +247,15 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         // platform file was present (an absent file still leaves a bus-managed
         // region unresolvable -> BRM-006). A non-bus driver is never affected.
         if let Err(err) = regseq_l2::validate_l2_surface(&model) {
-            tcx.dcx()
-                .fatal(format!("regseq-driver: bus-resource {err}"));
+            tcx.dcx().fatal(format!("regseq-driver: L2 {err}"));
+        }
+
+        // Device-interrupt R11 shared-line discipline (construct #6, C06
+        // warning row): non-fatal, routed to the compiler warning channel.
+        // Warn-on-unknown — fires unless a NotHandled return is PROVEN
+        // reachable; the tenant's pure query keeps `validate` error-only.
+        for warning in regseq_l2::interrupt::shared_discipline_warnings(&model) {
+            tcx.dcx().warn(format!("regseq-driver: {warning}"));
         }
 
         // 2. Joint validate. `RegseqModel::validate` takes `&mut self`

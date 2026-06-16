@@ -24,6 +24,7 @@ mod discovery;
 pub mod fnsig;
 mod framework_type;
 mod handles;
+mod interrupt;
 pub(crate) mod intrinsic;
 mod opaque_handle;
 mod sort;
@@ -640,6 +641,10 @@ pub enum BridgeError {
     /// user-data). Distinct from the parse-time CR-5 unsupported-bus rejection.
     #[error("device-lifecycle validation: {0}")]
     DeviceLifecycleValidation(DeviceLifecycleDiagnostic),
+
+    /// A device-interrupt frontend check failed (construct #6, contract C06).
+    #[error("device-interrupt validation: {0}")]
+    InterruptValidation(InterruptDiagnostic),
 }
 
 /// Per-construct device-lifecycle validation diagnostics (PLAN T16; GRILL I09;
@@ -674,6 +679,128 @@ pub enum DeviceLifecycleDiagnostic {
         field: String,
         /// The rejected field type, rendered.
         rejected_type: String,
+    },
+}
+
+/// Per-construct device-interrupt frontend diagnostics (construct #6,
+/// contract C06; GRILL D08/D13). Carried by
+/// [`BridgeError::InterruptValidation`]. This is the T03 M1-critical subset;
+/// T08 completes the C06 family (`IRQ-ERR-ARRAY-BIND-NO-INDEX`,
+/// `IRQ-ERR-EXCLUDED-PRIMITIVE`, `IRQ-ERR-DRIVER-CALLABLE-LINE-CONTROL`, the
+/// R11 shared-discipline warning). The `IRQ-ERR-MISSING-ID` /
+/// `IRQ-ERR-MISSING-HANDLER` / `IRQ-ERR-UNKNOWN-FIELD` / `IRQ-ERR-ISR-SIGNATURE`
+/// IDs are minted here within the `IRQ-ERR-*` family (GRILL O3).
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum InterruptDiagnostic {
+    /// `IRQ-ERR-MISSING-ID`: an `Interrupt` field without `id` (R01/D08 —
+    /// mandatory, no field-name fallback; intended taxonomy tightening).
+    #[error(
+        "IRQ-ERR-MISSING-ID: driver `{driver}` interrupt field `{field}` carries no \
+         `#[rseq::interrupt(id = \"…\")]` join key (the id is mandatory; there is no \
+         field-name fallback)"
+    )]
+    MissingId {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+    },
+    /// `IRQ-ERR-BARE-ISR-AMBIGUOUS`: a bare `#[rseq::isr]` on a driver with
+    /// ≠1 `Interrupt` resource.
+    #[error(
+        "IRQ-ERR-BARE-ISR-AMBIGUOUS: driver `{driver}` method `{method}` is a bare \
+         #[rseq::isr] but the driver declares {resource_count} Interrupt resources \
+         (bare binding requires exactly one; use `#[rseq::isr(field = \"…\")]`)"
+    )]
+    BareIsrAmbiguous {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The handler method name.
+        method: String,
+        /// How many `Interrupt` resources the driver declares.
+        resource_count: usize,
+    },
+    /// `IRQ-ERR-DUPLICATE-HANDLER`: >1 handler bound to one resource.
+    #[error(
+        "IRQ-ERR-DUPLICATE-HANDLER: driver `{driver}` binds more than one #[rseq::isr] \
+         handler to interrupt resource `{resource}` (exactly one per resource)"
+    )]
+    DuplicateHandler {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The doubly-bound resource's field name.
+        resource: String,
+    },
+    /// `IRQ-ERR-MISSING-HANDLER`: 0 handlers on a non-optional resource (D13).
+    #[error(
+        "IRQ-ERR-MISSING-HANDLER: driver `{driver}` interrupt resource `{resource}` has \
+         no #[rseq::isr] handler (a non-optional Interrupt requires exactly one)"
+    )]
+    MissingHandler {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The handlerless resource's field name.
+        resource: String,
+    },
+    /// `IRQ-ERR-UNKNOWN-FIELD`: `#[rseq::isr(field = "…")]` naming a field
+    /// that is not a recognized `Interrupt` resource.
+    #[error(
+        "IRQ-ERR-UNKNOWN-FIELD: #[rseq::isr] method `{method}` names field `{field}`, \
+         which is not a recognized Interrupt resource on its driver"
+    )]
+    UnknownField {
+        /// The handler method name.
+        method: String,
+        /// The unknown field name.
+        field: String,
+    },
+    /// `IRQ-ERR-ISR-SIGNATURE`: the handler signature violates C04
+    /// (`&mut self -> IrqResult`, `index: usize` for array-bind, never
+    /// `Result<_, RegseqError>`).
+    #[error("IRQ-ERR-ISR-SIGNATURE: #[rseq::isr] method `{method}`: {detail}")]
+    IsrSignature {
+        /// The handler method name.
+        method: String,
+        /// What is wrong with the signature.
+        detail: String,
+    },
+    /// `IRQ-ERR-ARRAY-BIND-NO-INDEX`: a handler bound to an `[Interrupt; N]`
+    /// resource without the `index: usize` parameter (C06).
+    #[error(
+        "IRQ-ERR-ARRAY-BIND-NO-INDEX: #[rseq::isr] method `{method}` binds array \
+         interrupt resource `{resource}` but lacks the `index: usize` parameter \
+         (the array-bind form is `fn(&mut self, index: usize) -> IrqResult`)"
+    )]
+    ArrayBindNoIndex {
+        /// The handler method name.
+        method: String,
+        /// The array resource's field name.
+        resource: String,
+    },
+    /// `IRQ-ERR-EXCLUDED-PRIMITIVE`: an excluded-set reintroduction (C06) —
+    /// a trait-provided ISR binding (the witnessed exclusion; the
+    /// sync-with-handler exclusion becomes representable only when the
+    /// Synchronization construct lands), or an `#[rseq::isr]` anchored
+    /// outside an inherent `#[rseq::driver]` impl.
+    #[error("IRQ-ERR-EXCLUDED-PRIMITIVE: #[rseq::isr] on `{method}`: {detail}")]
+    ExcludedPrimitive {
+        /// The offending method name.
+        method: String,
+        /// Which exclusion was reintroduced.
+        detail: String,
+    },
+    /// `IRQ-ERR-DRIVER-CALLABLE-LINE-CONTROL`: the `Interrupt` resource shell
+    /// grew driver-callable methods (C06/I02) — line control
+    /// (register/enable/disable/deregister) is compiler-managed lifecycle
+    /// placement, never an author call.
+    #[error(
+        "IRQ-ERR-DRIVER-CALLABLE-LINE-CONTROL: the `Interrupt` resource shell declares \
+         a driver-callable method `{method}` — interrupt line control is \
+         compiler-managed (I02); the shell must stay methodless"
+    )]
+    DriverCallableLineControl {
+        /// The offending method name.
+        method: String,
     },
 }
 
@@ -1777,6 +1904,11 @@ fn construct_instances_and_resolve_cross_references(
     // and force-materialize the overriding instances BEFORE the Phase-5 body
     // drain, so those synthesized callbacks get bodies the backend can emit.
     device_lifecycle::resolve_drivers(ctxt)?;
+    // Device-interrupt (construct #6): discover + validate + bind the
+    // #[rseq::isr] handlers and force-materialize their instances before the
+    // drain, exactly like the lifecycle callbacks. The pending attribute
+    // records are finalised after the late-item barriers below.
+    let pending_isr_attrs = interrupt::resolve_isrs(ctxt)?;
     body::run_phase5_body_passes(ctxt)?;
     // Body materialisation calls `translate_const`, which can synthesise
     // late `ConstMemoryStatic` pending items for reference-typed const
@@ -1851,6 +1983,11 @@ fn construct_instances_and_resolve_cross_references(
     // `model.sort_instances_by_f4_2()` in `run_bridge` restores
     // F4-2 canonical ordering across the expanded Instance set.
     construct_nominal_adt_instances(ctxt)?;
+    // Device-interrupt finalisation (construct #6): every barrier above has
+    // given the handler function Items their final `ItemId`s and the drain
+    // has materialized their bodies — record the `AttrData::IsrBinding`
+    // markers and compute the `IrqResult` arm-reachability facts.
+    interrupt::finalise_isrs(ctxt, pending_isr_attrs)?;
     Ok(())
 }
 

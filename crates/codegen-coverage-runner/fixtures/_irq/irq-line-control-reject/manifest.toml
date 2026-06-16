@@ -1,0 +1,9 @@
+name   = "irq-line-control-reject"
+kind   = "rust"
+# C06/I02: driver-callable methods on the Interrupt shell.
+covers = ["IRQ-11"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "IRQ-ERR-DRIVER-CALLABLE-LINE-CONTROL"

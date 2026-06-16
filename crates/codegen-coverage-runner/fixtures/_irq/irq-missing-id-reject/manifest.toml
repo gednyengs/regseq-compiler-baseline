@@ -1,0 +1,9 @@
+name   = "irq-missing-id-reject"
+kind   = "rust"
+# C06: an Interrupt field without the mandatory id join key (R01/D08).
+covers = ["IRQ-11"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "IRQ-ERR-MISSING-ID"

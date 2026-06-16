@@ -41,7 +41,7 @@ mod layout_emit;
 mod naming;
 mod types;
 
-pub use backend_options::{BackendContext, BackendOptions, LifecycleScenario};
+pub use backend_options::{BackendContext, BackendOptions, IrqFireStep, LifecycleScenario};
 pub use naming::{entry_c_symbol, generate_main_c, EntryShim, EntrySymbol};
 
 /// The default Doc-2 D3 entry suffix both consumers pass on the error path
@@ -308,6 +308,12 @@ fn emit_generic_c_inner(
     // drivers so a no-lifecycle TU's `.c` is byte-unchanged (no golden churn).
     if !model.device_lifecycle.drivers.is_empty() {
         out.push_str(prelude::LIFECYCLE_HELPERS);
+    }
+    // Device-interrupt host line model (construct #6, C05), emitted only for a
+    // TU with recognized Interrupt resources so an interrupt-less TU's `.c` is
+    // byte-unchanged (no golden churn).
+    if !model.interrupt.drivers.is_empty() {
+        out.push_str(prelude::IRQ_HELPERS);
     }
     // Bus-resource-management host bus model (construct #3, the keystone),
     // emitted for a TU with a resolved bus-resource binding, a bus-declared
@@ -1015,8 +1021,13 @@ fn build_instance_symbols(model: &RegseqModel) -> InstanceSymbols {
     // no-lifecycle TU reserves exactly the historical set and stays
     // byte-identical (RD-7), matching the conditional `LIFECYCLE_HELPERS` emit.
     let include_lifecycle = !model.device_lifecycle.drivers.is_empty();
+    // Same conditional-reservation discipline for the device-interrupt hooks
+    // (construct #6): reserved only for a TU that emits `IRQ_HELPERS`.
+    let include_irq = !model.interrupt.drivers.is_empty();
     let mut used: HashSet<String> =
-        prelude_ordinary_idents(include_lifecycle).into_iter().collect();
+        prelude_ordinary_idents(include_lifecycle, include_irq)
+            .into_iter()
+            .collect();
     // The synthesized lifecycle runner is an external-linkage TU symbol; reserve
     // it for a lifecycle TU so no internal author symbol is renamed onto it.
     if include_lifecycle {
@@ -1095,8 +1106,9 @@ fn is_external_linkage(model: &RegseqModel, item: regseq_model::ItemId) -> bool 
 /// are emitted only for a lifecycle TU; pass `true` only for such a TU so a
 /// no-lifecycle TU reserves exactly the historical set and stays byte-identical
 /// (RD-7) -- reserving them unconditionally could rename a no-lifecycle symbol
-/// that happened to collide with `regseq_lc_*`.
-fn prelude_ordinary_idents(include_lifecycle: bool) -> Vec<String> {
+/// that happened to collide with `regseq_lc_*`. `include_irq` does the same
+/// for the device-interrupt hook bank (construct #6, `IRQ_HELPERS`).
+fn prelude_ordinary_idents(include_lifecycle: bool, include_irq: bool) -> Vec<String> {
     // The integer C type spellings of the prelude's fixed helper set
     // (prelude.rs `INT_TYPES`) and the float prefixes (`FLOAT_TYPES`).
     const INT_CTYPES: [&str; 12] = [
@@ -1143,6 +1155,26 @@ fn prelude_ordinary_idents(include_lifecycle: bool) -> Vec<String> {
             "postamble",
         ] {
             idents.push(format!("regseq_lc_{lc}"));
+        }
+    }
+    // Device-interrupt host line-model names (prelude.rs `IRQ_HELPERS`,
+    // construct #6), emitted + reserved only for an interrupt TU. The typedef
+    // name shares C's ordinary identifier namespace, so it is reserved too.
+    if include_irq {
+        for irq in [
+            "slot_t",
+            "slot_table",
+            "slot",
+            "register",
+            "enable",
+            "disable",
+            "unregister",
+            "fire",
+            "result",
+            "binding",
+            "dev_poke",
+        ] {
+            idents.push(format!("regseq_irq_{irq}"));
         }
     }
     idents

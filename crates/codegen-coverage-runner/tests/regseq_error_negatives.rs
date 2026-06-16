@@ -104,6 +104,7 @@ fn fixture(dir: &TempFixtureDir, entry: &str) -> Fixture {
             overflow_checks: None,
             expected: Default::default(),
             lifecycle_scenario: None,
+            irq_fire: None,
         },
         dir: dir.dir.clone(),
         input: dir.dir.join("input.rs"),

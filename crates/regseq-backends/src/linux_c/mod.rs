@@ -293,7 +293,17 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             roots.push((name, id));
         }
     }
-    let closure = reachable_closure(model, roots.iter().map(|(_, id)| *id))?;
+    // -- device-interrupt facts (construct #6, T09): guards + the handler
+    //    body joins the lowered closure (its symbol comes from the leaf
+    //    loop; the irqreturn_t WRAPPER is scaffold-synthesized) ------------
+    let irq = linux_irq_facts(model, driver_item, &drv, bus)?;
+    let closure = reachable_closure(
+        model,
+        roots
+            .iter()
+            .map(|(_, id)| *id)
+            .chain(irq.iter().map(|i| i.handler)),
+    )?;
     // Symbols: `<drv>_<leaf>` with deterministic clash suffixes, callbacks
     // named first so they always get the bare leaf.
     for (name, id) in &roots {
@@ -339,7 +349,14 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
 
     // -- lifecycle callbacks: probe / remove (D04 bank 5) -------------------
     let scaffold = match bus {
-        ScaffoldBus::Amba => emit_scaffold(&mut cx, &drv, driver_ty, &resource_names, &roots)?,
+        ScaffoldBus::Amba => emit_scaffold(
+            &mut cx,
+            &drv,
+            driver_ty,
+            &resource_names,
+            &roots,
+            irq.as_ref(),
+        )?,
         ScaffoldBus::Pci => {
             emit_scaffold_pci(&mut cx, &drv, driver_ty, &resource_names, &roots, driver)?
         }
@@ -437,7 +454,7 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     //    the one table-ratified delivery (D16(b): row ID iff a ratified row
     //    exists, rendered from the const — never a literal); rejected_slots
     //    structurally empty (I07).
-    let delivered_slots = roots
+    let mut delivered_slots: Vec<capability::SlotEntry> = roots
         .iter()
         .map(|(name, _)| capability::SlotEntry {
             slot: (*name).to_string(),
@@ -446,11 +463,24 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             citation: None,
         })
         .collect();
+    // Device-interrupt deregister slot (construct #6, T12 linux leg): the
+    // manual `free_irq` DELIVERS the deregister operation on Linux — the D09
+    // contrast with zephyr's structurally-absent static-connect deregister
+    // (C02). No ratified row backs a delivery; the slot string is the
+    // non-lifecycle domain spelling the capability schema widens to (T10).
+    if irq.is_some() {
+        delivered_slots.push(capability::SlotEntry {
+            slot: "interrupt.register_handler.deregister".to_string(),
+            row: None,
+            citation: None,
+        });
+    }
     let conformance = capability::ConformanceReport {
         target: "linux_c",
         os_version_pin: capability::LINUX_PIN,
         delivered_slots,
         absent_dispatch_slots: Vec::new(),
+        structurally_absent_slots: Vec::new(),
         rejected_slots: Vec::new(),
         ignored_match_entries: ignored_audits,
         // linux_c carries a declared class unvalidated (the D14 evidence:
@@ -532,6 +562,174 @@ fn is_intrinsic_anchored(model: &RegseqModel, instance: InstanceId) -> bool {
         .any(|attr| matches!(attr, AttrData::Intrinsic(_)))
 }
 
+/// The device-interrupt lowering facts for one driver (construct #6, T09).
+struct LinuxIrq {
+    /// The lowered handler-body instance (joins the closure; its symbol comes
+    /// from the leaf naming loop).
+    handler: InstanceId,
+    /// The `request_irq` name string (the descriptor's logical name).
+    dev_name: String,
+    /// The `IrqResult` tag cell + the `Handled` tag value, for the wrapper's
+    /// C04 mapping (`Handled -> IRQ_HANDLED`, everything else `IRQ_NONE` —
+    /// never suppressed, R08; `DeferWork` is guard-proven unreachable).
+    ret_ty: TyId,
+    tag_offset: u64,
+    tag_size: u64,
+    handled_tag: u64,
+}
+
+impl LinuxIrq {
+    /// The irqreturn_t wrapper symbol (C04 names it `rseq_isr_<drv>`).
+    fn wrapper_sym(&self, drv: &str) -> String {
+        format!("rseq_isr_{drv}")
+    }
+
+    /// The request flags: registered DISABLED (D02). A shared line is
+    /// emit-rejected upstream — `IRQF_NO_AUTOEN | IRQF_SHARED` is `-EINVAL`
+    /// in the kernel (`kernel/irq/manage.c` `__setup_irq`), so the PLAN's
+    /// flag formula cannot be lowered as written (Codex M3 MUST-FIX; the
+    /// shared-line registration contract is a recorded design amendment for
+    /// the unit that lands a shared-irq fixture).
+    fn flags(&self) -> &'static str {
+        "IRQF_NO_AUTOEN"
+    }
+}
+
+/// Build the device-interrupt facts for the driver, firing the emit-stage
+/// guards (I05 — loud, never partial): single `Single`-form resource only
+/// this slice (D06/R02), AMBA only (the PCI `pdev->irq` leg arrives with an
+/// e1000 irq fixture), `DeferWork` proven unreachable (R09/D04), and the
+/// handler's `IrqResult` must be the marked framework type with a `Handled`
+/// arm. `Ok(None)` for an interrupt-less driver — zero churn. The line
+/// identity is runtime-resolved (`adev->irq[0]`, R10); `irq_number` is not
+/// consumed here.
+fn linux_irq_facts(
+    model: &RegseqModel,
+    driver_item: &regseq_model::ItemId,
+    drv: &str,
+    bus: ScaffoldBus,
+) -> Result<Option<LinuxIrq>, EmitError> {
+    let Some(interrupts) = model.interrupt.drivers.get(driver_item) else {
+        return Ok(None);
+    };
+    if interrupts.resources.is_empty() {
+        return Ok(None);
+    }
+    if bus == ScaffoldBus::Pci {
+        return Err(EmitError::UnsupportedInUnit {
+            what: "the PCI interrupt scaffold (`pdev->irq` line identity)".to_string(),
+            unit: "the unit that lands an e1000 irq fixture",
+        });
+    }
+    if interrupts.resources.len() > 1 {
+        return Err(EmitError::Unsupported(
+            "more than one Interrupt resource per driver (AMBA `adev->irq[0]` single-line \
+             slice)"
+                .into(),
+        ));
+    }
+    let resource = &interrupts.resources[0];
+    if resource.binding.shared {
+        // The kernel REJECTS `IRQF_NO_AUTOEN | IRQF_SHARED` with -EINVAL
+        // (`kernel/irq/manage.c` `__setup_irq`): a shared line cannot be held
+        // request-disabled, so the D02 registered-disabled contract and the
+        // D05 shared flag cannot compose as the PLAN's flag formula wrote
+        // them. Fail loud (I05) rather than emit a module whose probe always
+        // fails; the shared-line registration contract is a recorded design
+        // amendment for the unit that lands a shared-irq fixture (e1000,
+        // whose PCI leg is deferred anyway).
+        return Err(EmitError::Unsupported(
+            "device-interrupt: a shared line (L2 `shared = true`) cannot be lowered with \
+             the registered-disabled contract — the kernel rejects \
+             IRQF_NO_AUTOEN | IRQF_SHARED with -EINVAL; the shared-line registration \
+             form needs a design amendment (deferred to the shared-irq fixture unit)"
+                .into(),
+        ));
+    }
+    if !matches!(resource.form, regseq_model::InterruptForm::Single) {
+        return Err(EmitError::Unsupported(
+            "device-interrupt: Option<Interrupt> / [Interrupt; N] lowering is not \
+             implemented this slice (the form is recognized; emit-stage rejection per \
+             GRILL D06/R02)"
+                .into(),
+        ));
+    }
+    let handler = interrupts
+        .handlers
+        .iter()
+        .find(|h| h.resource == 0)
+        .ok_or_else(|| {
+            EmitError::Driver("a lowered Interrupt resource has no bound handler".into())
+        })?;
+    if handler.arms.defer_work != regseq_model::ArmReachability::ProvenUnreachable {
+        return Err(EmitError::Unsupported(
+            "device-interrupt: the handler's IrqResult::DeferWork arm is not proven \
+             unreachable — deferring work from an ISR requires the \
+             deferred-work-item-scheduling construct (not yet built); rejected at emit \
+             per R09/D04"
+                .into(),
+        ));
+    }
+    let iref = handler
+        .body
+        .ok_or_else(|| EmitError::Driver("handler body InstanceRef missing".into()))?;
+    let handler_id = resolve_instance_ref(model, iref)
+        .ok_or_else(|| EmitError::Driver("handler InstanceRef does not resolve".into()))?;
+
+    // The IrqResult tag cell + the Handled arm's tag, by variant NAME (the
+    // C04 contract names the arms; the marker certifies the type).
+    let InstanceKind::Function(data) = &model.instances[handler_id].kind else {
+        return Err(EmitError::Driver("handler is not a function".into()));
+    };
+    let ret_ty = model.sigs.resolve(data.fn_sig).output;
+    let ret_item = match &model.types[ret_ty] {
+        Ty::Enum { item, .. } => *item,
+        other => {
+            return Err(EmitError::Driver(format!(
+                "handler return type is not a nominal enum: {other:?}"
+            )))
+        }
+    };
+    let marked = (ret_item.as_u32() as usize) < model.domain_attrs.item_attrs.len()
+        && model.domain_attrs.item_attrs[ret_item]
+            .iter()
+            .any(|a| matches!(a, AttrData::FrameworkType(FrameworkType::IrqResult)));
+    if !marked {
+        return Err(EmitError::Driver(
+            "handler return enum is not the marked irq-result framework type".into(),
+        ));
+    }
+    let layout = types::layout_of(model, ret_ty)
+        .ok_or_else(|| EmitError::Driver("IrqResult has no layout".into()))?;
+    let LayoutKind::Enum {
+        shape: EnumShape::Multiple { variants, .. },
+    } = &layout.kind
+    else {
+        return Err(EmitError::Driver(
+            "IrqResult is not a multi-variant enum".into(),
+        ));
+    };
+    let handled_tag = variants
+        .iter()
+        .find(|v| model.strings.resolve(v.name) == "Handled")
+        .and_then(|v| v.tag_value)
+        .ok_or_else(|| EmitError::Driver("IrqResult lacks a tagged Handled arm".into()))?;
+    let (tag_offset, tag_size) = types::enum_tag_cell(model, ret_ty)?;
+
+    // The descriptor name doubles as the request_irq name string.
+    let driver = &model.device_lifecycle.drivers[driver_item];
+    let dev_name = model.strings.resolve(driver.descriptor.name).to_string();
+    let _ = drv;
+    Ok(Some(LinuxIrq {
+        handler: handler_id,
+        dev_name,
+        ret_ty,
+        tag_offset,
+        tag_size,
+        handled_tag: handled_tag as u64,
+    }))
+}
+
 /// The emitted scaffold pieces plus facts the include set needs.
 struct Scaffold {
     /// The per-device private container definition (driver-state bank, D04).
@@ -554,6 +752,7 @@ fn emit_scaffold(
     driver_ty: TyId,
     resource_names: &[String],
     roots: &[(&'static str, InstanceId)],
+    irq: Option<&LinuxIrq>,
 ) -> Result<Scaffold, EmitError> {
     let model = cx.model;
     let driver_struct = cx.names.name_of(model, driver_ty)?;
@@ -585,6 +784,40 @@ fn emit_scaffold(
     let container = format!(
         "/* per-device private container: kernel back-pointer + the spec driver */\nstruct {drv}_priv {{\n\tstruct amba_device *adev;\n\tstruct {driver_struct} inner;\n}};\n\n"
     );
+
+    // The irqreturn_t ISR wrapper (construct #6, C04): recover the driver
+    // from the registered dev_id (the priv container), run the authored
+    // handler, map the dispatch result — `Handled -> IRQ_HANDLED`, everything
+    // else `IRQ_NONE`, never suppressed (R08; `DeferWork` is guard-proven
+    // unreachable). The wrapper acquires NO locks (R18/D11 — the
+    // ISR↔mainline race is the documented phase limitation until the
+    // Synchronization construct lands). Emitted before `.probe`, which
+    // passes it to `request_irq`.
+    if let Some(irq) = irq {
+        cx.extra_includes.insert("<linux/interrupt.h>");
+        let wrapper = irq.wrapper_sym(drv);
+        let handler_sym = cx.fn_symbols[&irq.handler].clone();
+        let ret_c = types::c_type(cx.model, &mut cx.names, irq.ret_ty)?;
+        let tag_read = match irq.tag_size {
+            1 => format!("\tu8 __tag = __r._raw[{}];\n", irq.tag_offset),
+            2 => format!(
+                "\tu16 __tag; memcpy(&__tag, &__r._raw[{}], 2);\n",
+                irq.tag_offset
+            ),
+            4 => format!(
+                "\tu32 __tag; memcpy(&__tag, &__r._raw[{}], 4);\n",
+                irq.tag_offset
+            ),
+            _ => format!(
+                "\tu64 __tag; memcpy(&__tag, &__r._raw[{}], 8);\n",
+                irq.tag_offset
+            ),
+        };
+        out.push_str(&format!(
+            "/* the bound ISR (construct #6, C04): no locks (R18) */\nstatic irqreturn_t {wrapper}(int irq, void *dev_id)\n{{\n\tstruct {drv}_priv *priv = dev_id;\n\t{ret_c} __r = {handler_sym}(&priv->inner);\n{tag_read}\n\tif (__tag == {:#x})\n\t\treturn IRQ_HANDLED;\n\treturn IRQ_NONE;\n}}\n\n",
+            irq.handled_tag
+        ));
+    }
 
     // .probe
     out.push_str(&format!(
@@ -627,14 +860,40 @@ fn emit_scaffold(
             );
         }
     }
+    // Interrupt preamble (construct #6, D14): register the handler with the
+    // line DISABLED (IRQF_NO_AUTOEN — D02, generalizing G-INT-04), LAST among
+    // the resource preambles, via the manual request/free pair (D09, no
+    // devm). A request failure is a native preamble failure: the probe fails
+    // BEFORE on_init (R16/D12) with the kernel status unwrapped; devm unwinds
+    // the region. Line identity is runtime-resolved (`adev->irq[0]`, R10);
+    // no IRQF_TRIGGER_* is emitted (D10/R12 — the DT is authoritative).
+    if let Some(irq) = irq {
+        out.push_str(&format!(
+            "\n\t/* interrupt preamble (construct #6): register DISABLED (D02);\n\t * manual request/free pair (D09) */\n\t{{\n\t\tint __irq_ret = request_irq(adev->irq[0], {wrapper},\n\t\t\t\t\t    {flags}, \"{name}\", priv);\n\t\tif (__irq_ret)\n\t\t\treturn __irq_ret;\n\t}}\n",
+            wrapper = irq.wrapper_sym(drv),
+            flags = irq.flags(),
+            name = c_ident(&irq.dev_name),
+        ));
+    }
     if let Some(id) = on_init {
         let sym = cx.fn_symbols[&id].clone();
-        let failure_hook = on_init_failure.map(|fid| {
-            format!(
+        let mut hook = String::new();
+        if let Some(fid) = on_init_failure {
+            hook.push_str(&format!(
                 "\t\t\t/* authored on_init -> Err: the failure hook IS the cleanup\n\t\t\t * (the kernel does not call .remove on probe failure; devm\n\t\t\t * unwinds the preamble) */\n\t\t\t(void){}(&priv->inner);\n",
                 cx.fn_symbols[&fid]
-            )
-        });
+            ));
+        }
+        if let Some(irq) = irq {
+            // The interrupt reverse unwind (R16): request_irq is NOT devm —
+            // free it explicitly on the Err path. The line was registered
+            // disabled and never enabled here (D02), so no disable step.
+            let _ = irq;
+            hook.push_str(
+                "\t\t\t/* interrupt unwind (R16): never enabled; free the manual\n\t\t\t * request (no devm) */\n\t\t\tfree_irq(adev->irq[0], priv);\n",
+            );
+        }
+        let failure_hook = (!hook.is_empty()).then_some(hook);
         let adapter = emit_result_adapter(
             cx,
             id,
@@ -642,6 +901,15 @@ fn emit_scaffold(
             failure_hook.as_deref(),
         )?;
         out.push_str(&adapter);
+    }
+    if irq.is_some() {
+        // The enable point (D02/R05/I01): only after on_init returned Ok —
+        // the adapter above has already returned the negated errno on every
+        // Err path (and when on_init is not overridden, the trait default
+        // cannot fail).
+        out.push_str(
+            "\n\t/* enable the line only after on_init Ok (D02/R05) */\n\tenable_irq(adev->irq[0]);\n",
+        );
     }
     out.push_str("\treturn 0;\n}\n\n");
 
@@ -659,6 +927,15 @@ fn emit_scaffold(
         }
         None => out
             .push_str("\t/* on_deinit not overridden: default no-op teardown */\n\t(void)priv;\n"),
+    }
+    if irq.is_some() {
+        // Interrupt teardown (construct #6, D09/R06): disable then deregister
+        // — the manual pair, AFTER the teardown callback and BEFORE the
+        // (devm-automatic) resource postambles; the reverse of the preamble
+        // where the interrupt registration came last.
+        out.push_str(
+            "\t/* interrupt teardown (construct #6): disable -> deregister (D09) */\n\tdisable_irq(adev->irq[0]);\n\tfree_irq(adev->irq[0], priv);\n",
+        );
     }
     out.push_str("\t/* postamble: devm-managed resources release automatically (A-2) */\n}\n\n");
 

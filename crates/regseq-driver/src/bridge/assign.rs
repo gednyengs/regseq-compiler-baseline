@@ -1,6 +1,6 @@
 //! Phase 4 final `ItemId` assignment and side-table population.
 
-use super::{device_lifecycle, framework_type, intrinsic, BridgeCtxt, BridgeError};
+use super::{device_lifecycle, framework_type, interrupt, intrinsic, BridgeCtxt, BridgeError};
 
 /// Assigns dense `ItemId`s and populates item side tables in lock-step.
 pub(crate) fn assign_item_ids_and_populate_sidetables(
@@ -10,6 +10,9 @@ pub(crate) fn assign_item_ids_and_populate_sidetables(
     intrinsic::materialise_intrinsics(ctxt);
     framework_type::materialise_framework_types(ctxt);
     device_lifecycle::materialise_drivers(ctxt)?;
+    // Device-interrupt (construct #6): walks the driver map materialised by
+    // the device-lifecycle pass above, so it must run after it.
+    interrupt::materialise_interrupts(ctxt)?;
     Ok(())
 }
 

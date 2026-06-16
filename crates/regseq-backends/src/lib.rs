@@ -28,11 +28,13 @@
 
 pub mod capability;
 mod generic_c;
+pub mod interrupt_order;
 mod linux_c;
 pub mod match_audit;
 mod zephyr_c;
 
 pub use capability::{ConformanceReport, SlotEntry};
+pub use interrupt_order::{irq_placement, irq_steps_for, IrqPhase, IrqStep};
 pub use match_audit::MatchAudit;
 
 pub use linux_c::{emit_linux_c, EmitError as LinuxEmitError, LinuxEmit};
@@ -43,5 +45,5 @@ pub use generic_c::{
     emit_generic_c, emit_generic_c_for_entry, emit_generic_c_for_entry_with,
     emit_generic_c_for_entry_with_context, emit_generic_c_with, emit_generic_c_with_context,
     entry_c_symbol, full_helper_prelude, generate_main_c, BackendContext, BackendOptions,
-    EmitError, EntryEmit, EntryShim, EntrySymbol, LifecycleScenario,
+    EmitError, EntryEmit, EntryShim, EntrySymbol, IrqFireStep, LifecycleScenario,
 };

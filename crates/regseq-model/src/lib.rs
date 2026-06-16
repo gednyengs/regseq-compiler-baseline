@@ -26,6 +26,7 @@ mod idx;
 mod index_vec;
 mod instance;
 mod instance_ref;
+mod interrupt;
 mod item;
 mod layout;
 mod layout_validator;
@@ -87,6 +88,10 @@ pub use instance::{
     FunctionInstanceFlavor, Instance, InstanceKind, RegseqInstanceKey,
 };
 pub use instance_ref::InstanceRef;
+pub use interrupt::{
+    ArmReachability, DriverInterrupts, InterruptBinding, InterruptForm, InterruptResource,
+    InterruptTables, IrqArmReachability, IsrHandler, TriggerPolarity, TriggerType,
+};
 pub use item::{BridgeItemFlags, InlineHint, Item, ItemKind, Linkage};
 pub use layout::{
     EnumShape, FieldLayout, Layout, LayoutKind, TagEncoding, TagScalar, VariantLayout,
