@@ -382,6 +382,10 @@ static void e1000_remove(struct pci_dev *pdev)
 }
 
 
+/* RSEQ-IGNORED-MATCH: devicetree compatible="regseq,e1000"
+ * foreign transport: not consumed by the ratified pci_driver registration form
+ * (>=1 native entry present); consumed natively by zephyr_c.
+ * [license: spec-convergence-pl011 GRILL D08 (D03(a) rule)] */
 static const struct pci_device_id e1000_ids[] = {
 	{
 		.vendor		= 0x8086,

@@ -483,6 +483,10 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         structurally_absent_slots: Vec::new(),
         rejected_slots: Vec::new(),
         ignored_match_entries: ignored_audits,
+        // linux_c carries a declared class unvalidated (the D14 evidence:
+        // the class annotation surfaces nowhere in the linux artifacts);
+        // the deferred-class note is the zephyr_c disposition's.
+        deferred_class: None,
     };
 
     Ok(LinuxEmit {

@@ -422,11 +422,20 @@ const CACHE_LINE_SIZE_DWORDS: u8 = 0x10;
 // `-device e1000` default) PLUS the 82545EM sibling (8086:100f), exercising
 // the FULL match_set → multi-row pci_device_id table lowering (the kernel
 // tables are inherently multi-row + zero-sentinel; B-6 never-truncate).
+// The CONVERGED match set (backend-zephyr-c-e1000 D01, the pl011 D09
+// precedent: Pci rows first, DT last): the pci rows are linux_c's native
+// form; the devicetree entry is zephyr_c's (the hermetic eval DUT node under
+// pcie0 carries `regseq,e1000`; stock eth_e1000 matches "intel,e1000" only).
+// Each backend consumes its native entries and audits the foreign ones
+// (D03(a)); generic_c traces only the FIRST entry — this ONE file is the
+// spec for all three backends.
 #[rseq::device_class(network)]
 #[rseq::driver(name = "e1000", bus = "pci", pci = [
     { vendor = 0x8086, device = 0x100e },
     { vendor = 0x8086, device = 0x100f },
-])]
+    ],
+    compatible = ["regseq,e1000"]
+)]
 pub struct E1000Composed {
     #[rseq::mmio(id = "regs", bar = 0)]
     regs: Mmio<e1000::Regs>,

@@ -26,7 +26,7 @@ extern crate rustc_driver;
 use std::path::{Path, PathBuf};
 
 use codegen_coverage_runner::zephyr_build::{
-    west_build, StagedDriver, WestOutcome, BOARD, WORKSPACE_VAR,
+    west_build, StagedBus, StagedDriver, WestOutcome, BOARD, PCIE_BOARD, WORKSPACE_VAR,
 };
 use codegen_coverage_runner::{manifest, pipeline};
 
@@ -64,8 +64,10 @@ fn zephyr_build_gate_over_the_composed_goldens() {
         // The eval DUT (D04/D11) — must agree with the fixture platform.toml
         // (the emitted A-1 BUILD_ASSERT cross-checks the overlay's reg
         // against these same literals at C compile time).
-        region: (0x0904_0000, 0x1000),
-        interrupts: None,
+        bus: StagedBus::Platform {
+            region: (0x0904_0000, 0x1000),
+            interrupts: None,
+        },
     };
 
     match west_build(&driver) {
@@ -115,8 +117,10 @@ fn zephyr_build_gate_over_the_irq_goldens() {
         binding_yaml: &binding_yaml,
         driver_name: "pl011irq",
         compatible: "regseq,pl011irq",
-        region: (0x0904_0000, 0x1000),
-        interrupts: Some("<0 8 2 0>"),
+        bus: StagedBus::Platform {
+            region: (0x0904_0000, 0x1000),
+            interrupts: Some("<0 8 2 0>"),
+        },
     };
 
     match west_build(&driver) {
@@ -136,5 +140,63 @@ fn zephyr_build_gate_over_the_irq_goldens() {
             }
         }
         Err(err) => panic!("west gate FAILED:\n{err}"),
+    }
+}
+
+/// The PCIe variant (backend-zephyr-c-e1000 T07/R09): BOTH generated e1000
+/// TUs — the composed PCI keystone and the induced-failure variant — build
+/// for qemu_x86 against the same v4.4.0 workspace, each staged with its
+/// pcie0 DUT overlay and the O4 CONFIG_PCIE pin set. The C03 env semantics
+/// are identical to the pl011 gate above (one visible skip notice; a
+/// misconfigured workspace FAILS; build stderr verbatim).
+#[test]
+fn zephyr_build_gate_over_the_e1000_goldens() {
+    let fixtures = manifest::discover(&composed_corpus()).expect("discover composed corpus");
+    for (name, driver_name, compatible, device_id) in [
+        ("e1000-composed", "e1000", "regseq,e1000", 0x100e_u16),
+        ("e1000-initfail", "e1000fail", "regseq,e1000fail", 0x100e_u16),
+    ] {
+        let fixture = fixtures
+            .iter()
+            .find(|f| f.manifest.name == name)
+            .unwrap_or_else(|| panic!("{name} fixture discovered"))
+            .with_binding(manifest::OsBinding::Zephyr)
+            .expect("the converged fixture resolves the zephyr binding (C05)");
+        let tu = std::fs::read_to_string(pipeline::zephyr_golden_path(&fixture))
+            .expect("read the committed golden.zephyr.c");
+        let binding_yaml = std::fs::read_to_string(pipeline::zephyr_binding_path(&fixture))
+            .expect("read the committed golden.zephyr.binding.yaml");
+        let driver = StagedDriver {
+            tu: &tu,
+            binding_yaml: &binding_yaml,
+            driver_name,
+            compatible,
+            // The hermetic DUT identity (D08(4)): the QEMU `-device e1000`
+            // default id pair; the overlay node is matched ONLY by the
+            // generated compatible.
+            bus: StagedBus::Pcie {
+                vendor_id: 0x8086,
+                device_id,
+            },
+        };
+        match west_build(&driver) {
+            Ok(WestOutcome::Skipped { notice }) => {
+                visible(format!("[{name}] {notice}"));
+            }
+            Ok(WestOutcome::Built {
+                zephyr_version,
+                warnings,
+            }) => {
+                visible(format!(
+                    "west gate PASSED: the {name} TU built for {PCIE_BOARD} against \
+                     Zephyr {zephyr_version} (workspace: ${WORKSPACE_VAR})"
+                ));
+                if !warnings.trim().is_empty() {
+                    // Warnings are recorded, not gating.
+                    visible(format!("--- build warnings (recorded) ---\n{warnings}"));
+                }
+            }
+            Err(err) => panic!("west gate FAILED for {name}:\n{err}"),
+        }
     }
 }

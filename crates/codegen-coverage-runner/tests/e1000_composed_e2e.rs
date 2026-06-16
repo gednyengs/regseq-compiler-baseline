@@ -56,13 +56,16 @@ fn e1000_composed_six_stage_oracle() {
     let fixture = fixtures
         .iter()
         .find(|f| f.manifest.name == "e1000-composed")
-        .expect("e1000-composed fixture discovered");
+        .expect("e1000-composed fixture discovered")
+        .with_binding(manifest::OsBinding::Linux)
+        .expect("the converged fixture resolves the linux binding (C05)");
+    let fixture = &fixture;
 
-    // The fixture MUST carry its sibling platform.toml: per the ratified A-10
-    // policy the L2 literals are the resolution trigger (dead on Linux, C04).
+    // The bound fixture MUST carry its per-OS platform file: per the ratified
+    // A-10 policy the L2 literals are the resolution trigger (dead on Linux).
     assert!(
         fixture.platform.is_some(),
-        "e1000-composed must discover a sibling platform.toml (A-10 trigger)"
+        "e1000-composed must resolve platform.linux.toml (A-10 trigger, C05)"
     );
 
     if std::env::var_os("BLESS").is_some() {
@@ -246,9 +249,12 @@ fn assert_recognition_facts(model: &RegseqModel) {
         "exactly one recognized driver"
     );
     let driver = model.device_lifecycle.drivers.values().next().unwrap();
+    // The CONVERGED match set (backend-zephyr-c-e1000 D01): the campaign
+    // 82540EM id + the 82545EM sibling row first, the zephyr DT entry LAST.
+    assert_eq!(driver.descriptor.match_set.len(), 3, "Pci, Pci, DT");
     assert_eq!(
-        driver.descriptor.match_set,
-        vec![
+        &driver.descriptor.match_set[..2],
+        &[
             MatchEntry::Pci {
                 vendor: 0x8086,
                 device: 0x100e,
@@ -264,6 +270,10 @@ fn assert_recognition_facts(model: &RegseqModel) {
         ],
         "the campaign 82540EM id + the 82545EM sibling row (B-6 full match_set)"
     );
+    let MatchEntry::Devicetree { compatible } = &driver.descriptor.match_set[2] else {
+        panic!("the converged DT entry is appended LAST (D01)");
+    };
+    assert_eq!(model.strings.resolve(*compatible), "regseq,e1000");
     assert!(
         driver.ops.on_init.is_some() && driver.ops.on_deinit.is_some(),
         "on_init + on_deinit overridden"

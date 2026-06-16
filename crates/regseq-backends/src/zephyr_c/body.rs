@@ -10,8 +10,10 @@
 //! it is a loud [`EmitError::Unsupported`] naming the construct — never
 //! wrong code (I06). Intrinsic-anchored calls (Log/Mmio/Config/PollUntil)
 //! are intercepted by callee item attribute before ordinary call lowering;
-//! the Config/PollUntil arms mirror the D12 frame scan's D.2 rejections
-//! defensively (the scan fires first on every `emit_zephyr_c` path).
+//! the Config arm lowers the licensed C02/C03 shapes on the PCIe arm (the
+//! `config_shape` classifier — shared with the D12 frame scan, which fires
+//! first on every `emit_zephyr_c` path) and the PollUntil arm mirrors the
+//! scan's D.2 rejection defensively.
 //!
 //! Structural sibling of `linux_c::body` (F-1: the lowering MECHANISM —
 //! reaching-def receiver chase, descriptor const-folding, opaque enum
@@ -82,6 +84,10 @@ pub(crate) struct DriverFacts {
     /// faithful first realization, paired with the emitted single-instance
     /// `BUILD_ASSERT` guard).
     pub base_symbol: String,
+    /// Whether this TU is the PCIe arm (bus = "pci"): config-space ops are
+    /// licensed (C02/C03) and read the TU-static `__rseq_pcie` carrier
+    /// (D12); on every other arm they keep the D.2 rejection.
+    pub pcie: bool,
 }
 
 /// The `static <ret> <name>(<params>)` head shared by the forward
@@ -682,7 +688,9 @@ fn emit_call(
                  lowering is invented"
                     .into(),
             )),
-            IntrinsicKind::Config(op) => Err(super::config_rejection(cx.model, *instance, &op)),
+            IntrinsicKind::Config(op) => {
+                cx.emit_config(op, *instance, body, args, destination, out)
+            }
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {
@@ -939,7 +947,7 @@ impl LowerCx<'_> {
         let recv = args
             .first()
             .ok_or_else(|| EmitError::Unsupported("mmio call with no receiver".into()))?;
-        let (base, offset, width) = self.recover_register(body, recv)?;
+        let (base, offset, runtime, width) = self.recover_register(body, recv)?;
         self.extra_includes.insert("<zephyr/sys/sys_io.h>");
         let (read_fn, write_fn, cast) = match width {
             1 => ("sys_read8", "sys_write8", "uint8_t"),
@@ -957,11 +965,17 @@ impl LowerCx<'_> {
                 )))
             }
         };
-        let addr = if offset == 0 {
+        let mut addr = if offset == 0 {
             base.clone()
         } else {
             format!("{base} + {}", self.offset_token(offset))
         };
+        // Runtime register-array index terms (`base + i*stride` — the
+        // certified reaching-def mechanism shared with the sibling
+        // backend's recovery, F-1).
+        for (idx, stride) in &runtime {
+            addr = format!("{addr} + ({idx}) * {stride}");
+        }
         // Field/FieldValue descriptors: a runtime place renders as member
         // reads; a const-propagated aggregate const-folds to literals.
         let stmt = match op {
@@ -1020,7 +1034,8 @@ impl LowerCx<'_> {
         }
     }
 
-    /// Resolve an mmio receiver to `(base expr, byte offset, access width)`.
+    /// Resolve an mmio receiver to `(base expr, byte offset, runtime
+    /// array-index terms, access width)`.
     ///
     /// The receiver borrows the register wrapper through the chain
     /// `self.<resource>.inner.<reg>` (`Mmio<T>: Deref` inlined by rustc).
@@ -1028,12 +1043,14 @@ impl LowerCx<'_> {
     /// A-10 gate fires here), but the rendered base is the TU-static
     /// `mm_reg_t` symbol (A-2) — the spec-view field is dead weight in the
     /// zero image; the kernel's mapped base flows through
-    /// `DEVICE_MMIO_MAP`/`DEVICE_MMIO_GET` at init.
+    /// `DEVICE_MMIO_MAP`/`DEVICE_MMIO_GET` at init (platform arm) or the
+    /// C01 `device_map` (PCIe arm).
+    #[allow(clippy::type_complexity)]
     fn recover_register(
         &mut self,
         body: &regseq_model::Body,
         recv: &Operand,
-    ) -> Result<(String, u64, u64), EmitError> {
+    ) -> Result<(String, u64, Vec<(String, u64)>, u64), EmitError> {
         let mut src = self.resolve_receiver_src(body, recv, 0)?;
         // Normalize through intermediate borrow temps: while the root local
         // is not the driver borrow, splice in its unique `Ref` definition
@@ -1179,8 +1196,14 @@ impl LowerCx<'_> {
             }
         };
         let base = self.driver.base_symbol.clone();
-        // The block-relative offset (Mmio.inner + register fields).
+        // The block-relative offset (Mmio.inner + register fields), plus the
+        // runtime index terms of register-array accesses (the donor
+        // `mta[m]`/`ra[r].ral` patterns): each `Index` contributes
+        // `(<index local>) * <element stride>` — the offset is recovered as
+        // `base + i*stride`, not a layout constant (the certified
+        // reaching-def mechanism, F-1).
         let mut offset: u64 = 0;
+        let mut runtime: Vec<(String, u64)> = Vec::new();
         for elem in elems {
             match elem {
                 PlaceElem::Field(idx, field_ty) => {
@@ -1203,6 +1226,17 @@ impl LowerCx<'_> {
                     offset += f.offset;
                     ty = f.ty;
                 }
+                PlaceElem::Index(idx_local) => {
+                    let Ty::Array(elem_ty, _) = &self.model.types[ty] else {
+                        return Err(EmitError::Unsupported(
+                            "mmio index projection into a non-array register field".into(),
+                        ));
+                    };
+                    let elem_ty = *elem_ty;
+                    let stride = self.model.size_align_of(elem_ty).size;
+                    runtime.push((local_name(self.model, body, *idx_local), stride));
+                    ty = elem_ty;
+                }
                 other => {
                     return Err(EmitError::Unsupported(format!(
                         "mmio receiver projection {other:?} (first-light subset)"
@@ -1213,7 +1247,7 @@ impl LowerCx<'_> {
         let width = types::layout_of(self.model, ty)
             .map(|l| l.size)
             .ok_or_else(|| EmitError::Unsupported("mmio register wrapper has no layout".into()))?;
-        Ok((base, offset, width))
+        Ok((base, offset, runtime, width))
     }
 
     /// Chase a bare-local receiver to the place it uniquely borrows
@@ -1371,6 +1405,89 @@ impl LowerCx<'_> {
             .filter(|f| !types::is_zst(self.model, f.ty))
             .map(|f| super::naming::c_ident(self.model.strings.resolve(f.name)))
             .collect())
+    }
+
+    // -----------------------------------------------------------------------
+    // Config-space lowering (backend-zephyr-c-e1000 T02, contracts C02/C03):
+    // word-index marshalling over the 32-bit `pcie_conf_read/write` pins
+    // (pcie.h:176/:187 — reg is "the configuration word index (not
+    // address)"), reads served from the D06 word-0 ID cache or one live
+    // word read with shift/mask extraction, width-4 writes native, width-1/2
+    // writes via the audited D05 containing-word RMW. Legality (bus, width,
+    // constant offset, alignment) is [`super::config_shape`] — the SAME
+    // classifier the D12 frame scan runs first, so the op site can only see
+    // licensed shapes.
+    // -----------------------------------------------------------------------
+
+    /// Lower one `IntrinsicKind::Config(op)` call per C02/C03 against the
+    /// TU-static `__rseq_pcie` carrier (D12).
+    pub(crate) fn emit_config(
+        &mut self,
+        op: regseq_model::ConfigOp,
+        callee: InstanceId,
+        body: &regseq_model::Body,
+        args: &[Operand],
+        destination: &Place,
+        out: &mut String,
+    ) -> Result<(), EmitError> {
+        use regseq_model::ConfigOp;
+        let shape = super::config_shape(self.model, callee, &op, args, self.driver.pcie)?;
+        let word = shape.off >> 2;
+        let sh = (shape.off & 0x3) * 8;
+        match op {
+            ConfigOp::Read => {
+                let mask = match shape.width {
+                    1 => "0xffu",
+                    2 => "0xffffu",
+                    _ => "0xffffffffu",
+                };
+                let dst = place_lvalue(self, body, destination)?;
+                let dst_ty = place_ty(self.model, body, destination)?;
+                let dst_cty = types::c_type(self.model, &mut self.names, dst_ty)?;
+                let source = if word == 0 {
+                    // The D06 cache: any read whose containing word is word
+                    // 0 (vendor@0x00 AND device@0x02) is served from the
+                    // pcie_dev ID snapshot — zero bus traffic.
+                    "\t\t/* C03 word-0 cache (A-4/D06): VID|DID served from __rseq_pcie->id;\n\t\t * zero bus traffic */\n\t\tuint32_t __cw = __rseq_pcie->id;\n"
+                        .to_string()
+                } else {
+                    format!(
+                        "\t\tuint32_t __cw = pcie_conf_read(__rseq_pcie->bdf, {word}u); /* word index (\"not address\", pcie.h:176) */\n"
+                    )
+                };
+                out.push_str(&format!(
+                    "\t{{\n{source}\t\t{dst} = ({dst_cty})((__cw >> {sh}u) & {mask});\n\t}}\n"
+                ));
+            }
+            ConfigOp::Write => {
+                let val_arg = args.get(1).ok_or_else(|| {
+                    EmitError::Unsupported("write_config with no value argument".into())
+                })?;
+                let val = operand_expr(self, body, val_arg)?;
+                if shape.width == 4 {
+                    out.push_str(&format!(
+                        "\t{{\n\t\tpcie_conf_write(__rseq_pcie->bdf, {word}u, (uint32_t)({val})); /* word index (\"not address\", pcie.h:187) */\n\t}}\n"
+                    ));
+                } else {
+                    // The D05 containing-word RMW (the ratified B-3 partial
+                    // lift), C02 shape verbatim; its internal read is always
+                    // the LIVE word, never the D06 cache.
+                    let off_expr = operand_expr(
+                        self,
+                        body,
+                        args.first().expect("config_shape validated the offset"),
+                    )?;
+                    let lane_mask = if shape.width == 1 { "0xFFu" } else { "0xFFFFu" };
+                    out.push_str(&format!(
+                        "\t{{\n\t\t/* RSEQ-RMW: width-{w} config write lowered to the containing-word RMW\n\t\t * (the ratified B-3 partial lift): one extra word read; adjacent bytes\n\t\t * rewritten with read-back values — benign per PCI config semantics\n\t\t * (QEMU e1000_write_config reacts only to PCI_COMMAND,\n\t\t * hw/net/e1000.c:1624). [license: backend-zephyr-c-e1000 GRILL D05] */\n\t\tunsigned int __w = ({off}) >> 2; /* pcie word index (\"not address\", pcie.h:187) */\n\t\tuint32_t __cur = pcie_conf_read(__rseq_pcie->bdf, __w); /* always the LIVE word, never the word-0 cache (C03) */\n\t\tuint32_t __sh = (({off}) & 0x3u) * 8u; /* byte lane */\n\t\tuint32_t __msk = {lane_mask} << __sh;\n\t\tpcie_conf_write(__rseq_pcie->bdf, __w, (__cur & ~__msk) | (((uint32_t)({val}) << __sh) & __msk));\n\t}}\n",
+                        w = shape.width,
+                        off = off_expr,
+                        val = val
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }
 

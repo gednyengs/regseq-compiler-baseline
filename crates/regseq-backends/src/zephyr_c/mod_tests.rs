@@ -352,10 +352,129 @@ fn two_drivers_is_a_named_driver_error() {
     assert!(matches!(err, EmitError::Driver(ref s) if s.contains("more than one")));
 }
 
-#[test]
-fn pci_bus_names_the_e1000_unit() {
+/// A resolved PCIe MMIO region: dead base/size literals (A-10(a)) + the
+/// LIVE effective BAR number feeding `pcie_get_mbar` (D04).
+fn pcie_mmio(m: &mut RegseqModel, name: &str, bar: Option<u8>) -> ResourceField {
+    ResourceField {
+        name: m.strings.intern(name),
+        kind: ResourceKind::Mmio,
+        binding: MmioBinding {
+            id: None,
+            bar_index: None,
+            bar_type: regseq_model::BarType::Mem,
+            effective_bar: bar,
+            base: Some(0xf000_0000),
+            size: Some(0x2_0000),
+        },
+    }
+}
+
+/// The minimal emitting PCIe model (backend-zephyr-c-e1000 R01): one-region
+/// PCIe driver, devicetree-matched, no callbacks.
+fn pcie_dt_model(bar: Option<u8>) -> RegseqModel {
     let mut m = model();
-    let match_set = dt_match_for(&mut m, "regseq,pl011");
+    let match_set = dt_match_for(&mut m, "regseq,e1000");
+    let region = pcie_mmio(&mut m, "regs", bar);
+    driver_into(
+        &mut m,
+        Some(BusType::Pci),
+        match_set,
+        LifecycleOps::default(),
+        regseq_model::DriverHandle {
+            resource_fields: vec![region],
+            user_data_fields: vec![],
+        },
+    );
+    m
+}
+
+// -- the PCIe scaffold (backend-zephyr-c-e1000 R01/R02, C01): positive
+//    structure tests replacing the lifted UnsupportedInUnit gate ------------
+
+#[test]
+fn pcie_scaffold_emits_complete_tu_with_c01_preamble_order() {
+    let emit = emit_zephyr_c(&pcie_dt_model(Some(0))).expect("PCIe model must emit");
+    let tu = &emit.tu;
+    let pos = |needle: &str| {
+        tu.find(needle)
+            .unwrap_or_else(|| panic!("landmark `{needle}` missing from TU:\n{tu}"))
+    };
+    // Scaffold blocks (R01): include, data field, TU-static carrier,
+    // DECLARE/INIT in the instantiation block.
+    pos("#include <zephyr/drivers/pcie/pcie.h>");
+    let p_pcie_field = pos("struct pcie_dev *pcie;");
+    let p_carrier_decl = pos("static struct pcie_dev *__rseq_pcie;");
+    let p_declare = pos("DEVICE_PCIE_INST_DECLARE(n);");
+    let p_init_macro = pos("DEVICE_PCIE_INST_INIT(n, pcie),");
+    assert!(p_pcie_field < p_carrier_decl, "data field before carrier");
+    assert!(p_carrier_decl < p_declare && p_declare < p_init_macro);
+    // The C01 preamble, in emission order (R02): BDF rung -> carrier
+    // install -> hoisted probe (deviation audit) -> claim elision ->
+    // MEM-only enable -> map into the TU-static base.
+    let p_rung1 = pos("if (data->pcie->bdf == PCIE_BDF_NONE)");
+    let p_carrier = pos("__rseq_pcie = data->pcie;");
+    let p_deviation = pos("RSEQ-DEVIATION: get_resource_handle hoisted before enable_device");
+    let p_probe = pos("if (!pcie_get_mbar(data->pcie->bdf, 0, &mbar))");
+    let p_claim = pos("claim_regions: zero-call elision");
+    let p_enable = pos("pcie_set_cmd(data->pcie->bdf, PCIE_CONF_CMDSTAT_MEM, true);");
+    let p_map = pos("device_map(&minimal_mmio_base, mbar.phys_addr, mbar.size, K_MEM_CACHE_NONE);");
+    assert!(p_rung1 < p_carrier, "BDF rung before the carrier install");
+    assert!(
+        p_carrier < p_deviation && p_deviation < p_probe,
+        "carrier, then hoisted probe"
+    );
+    assert!(
+        p_probe < p_claim && p_claim < p_enable,
+        "probe -> claim elision -> enable"
+    );
+    assert!(p_enable < p_map, "enable before map (D02 order)");
+    // Both rungs return unwrapped -ENODEV (D11/I09).
+    assert_eq!(
+        tu.matches("return -ENODEV; /* native channel, unwrapped (D11) */")
+            .count(),
+        2
+    );
+    // The deviation audit cites its license (never silent, I08).
+    pos("[license: backend-zephyr-c-e1000 GRILL D02]");
+    // The guard wording covers BOTH TU-statics (I07).
+    pos("\"TU-static MMIO base and __rseq_pcie carrier require a single status-okay instance\"");
+    // No DT-reg machinery on the PCIe arm: no DEVICE_MMIO map/capture, no
+    // A-1 cross-check (the C05 binding requires no `reg`; base/size dead).
+    assert!(!tu.contains("DEVICE_MMIO_MAP"), "{tu}");
+    assert!(!tu.contains("DEVICE_MMIO_ROM_INIT"), "{tu}");
+    assert!(!tu.contains("DEVICE_MMIO_ROM;"), "{tu}");
+    assert!(!tu.contains("DEVICE_MMIO_RAM;"), "{tu}");
+    assert!(!tu.contains("DT_REG_ADDR"), "{tu}");
+    // A-15/D07: init placement unchanged.
+    pos("POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE");
+}
+
+#[test]
+fn pcie_effective_bar_is_the_bar_number_fed_to_get_mbar() {
+    let emit = emit_zephyr_c(&pcie_dt_model(Some(2))).expect("PCIe model must emit");
+    assert!(
+        emit.tu.contains("pcie_get_mbar(data->pcie->bdf, 2, &mbar)"),
+        "{}",
+        emit.tu
+    );
+}
+
+#[test]
+fn pcie_region_without_effective_bar_is_a_named_driver_error() {
+    let err = emit_zephyr_c(&pcie_dt_model(None)).unwrap_err();
+    let EmitError::Driver(s) = err else {
+        panic!("expected Driver, got {err:?}");
+    };
+    assert!(s.contains("no BAR number") && s.contains("regs"), "{s}");
+}
+
+#[test]
+fn pcie_without_region_is_rejected_not_partially_emitted() {
+    // The C01 preamble is region-shaped: a PCIe driver with no MMIO region
+    // has no preamble contract — D.2 fail-loud, never a partial preamble
+    // (C1 review round-1 finding 1).
+    let mut m = model();
+    let match_set = dt_match_for(&mut m, "regseq,e1000");
     driver_into(
         &mut m,
         Some(BusType::Pci),
@@ -364,11 +483,13 @@ fn pci_bus_names_the_e1000_unit() {
         Default::default(),
     );
     let err = emit_zephyr_c(&m).unwrap_err();
-    let EmitError::UnsupportedInUnit { what, unit } = err else {
-        panic!("expected UnsupportedInUnit, got {err:?}");
+    let EmitError::Rejected(s) = err else {
+        panic!("expected Rejected, got {err:?}");
     };
-    assert!(what.contains("PCIe scaffold"));
-    assert_eq!(unit, "backend/zephyr-c-e1000");
+    assert!(
+        s.contains("no MMIO resource region") && s.contains("region-shaped"),
+        "{s}"
+    );
 }
 
 #[test]
@@ -388,24 +509,224 @@ fn deferred_bus_is_unsupported_in_unit() {
     ));
 }
 
+// -- the C06 class disposition (backend-zephyr-c-e1000 R14/D14): audited
+//    class-neutral emission replacing the former A-16 reject -----------------
+
 #[test]
-fn non_generic_class_is_rejected_citing_a16() {
-    let mut m = model();
-    let match_set = dt_match_for(&mut m, "regseq,pl011");
-    driver_into(
-        &mut m,
-        None,
-        match_set,
-        LifecycleOps::default(),
-        Default::default(),
-    );
+fn non_generic_class_emits_class_neutral_with_the_c06_audit_comment() {
+    let mut m = minimal_dt_model();
     let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
     driver.descriptor.device_class = ClassTag::Network;
-    let err = emit_zephyr_c(&m).unwrap_err();
-    let EmitError::Rejected(s) = err else {
-        panic!("expected Rejected, got {err:?}");
+    let emit = emit_zephyr_c(&m).expect("non-Generic class must emit (D14)");
+    let tu = &emit.tu;
+    let pos = |needle: &str| {
+        tu.find(needle)
+            .unwrap_or_else(|| panic!("landmark `{needle}` missing from TU:\n{tu}"))
     };
-    assert!(s.contains("B-9") && s.contains("A-16"), "{s}");
+    // The audit comment names the declared class + the D14 license, and
+    // sits immediately above the instantiation define (C06 item 1).
+    let p_comment = pos("RSEQ-DEFERRED-CLASS: device_class \"network\" declared by the spec");
+    let p_license = pos("[license: backend-zephyr-c-e1000 GRILL D14]");
+    let p_define = pos("DEVICE_DT_INST_DEFINE(n, minimal_init, NULL,");
+    assert!(p_comment < p_license && p_license < p_define);
+    assert!(
+        !tu[p_license..p_define].contains(";\\"),
+        "no macro statement between the audit comment and the define:\n{}",
+        &tu[p_comment..p_define]
+    );
+    // The scaffold itself stays the class-neutral NULL-api form.
+    pos("NULL /* api: ClassTag::Generic only (A-16) */");
+}
+
+#[test]
+fn generic_class_tu_carries_no_deferred_class_comment() {
+    // C06 item 3: the ClassTag::Generic emission is byte-frozen — locally,
+    // no audit comment; globally, the pl011 zephyr snapshots stay green
+    // with zero re-bless.
+    let emit = emit_zephyr_c(&minimal_dt_model()).expect("minimal model must emit");
+    assert!(!emit.tu.contains("RSEQ-DEFERRED-CLASS"), "{}", emit.tu);
+    assert!(!emit.tu.contains("__rseq_pcie"), "{}", emit.tu);
+    assert!(
+        !emit.tu.contains("<zephyr/drivers/pcie/pcie.h>"),
+        "{}",
+        emit.tu
+    );
+}
+
+// -- T03 match consumption (backend-zephyr-c-e1000 R05/C04): native DT
+//    entry + Pci rows triple-render-audited; the D10 PCIe binding form ----
+
+#[test]
+fn pcie_mixed_match_triple_renders_each_pci_row() {
+    let mut m = model();
+    let compatible = m.strings.intern("regseq,e1000");
+    let match_set = vec![
+        MatchEntry::Pci {
+            vendor: 0x8086,
+            device: 0x100e,
+            subsystem: None,
+            class: None,
+        },
+        MatchEntry::Pci {
+            vendor: 0x8086,
+            device: 0x100f,
+            subsystem: None,
+            class: None,
+        },
+        MatchEntry::Devicetree { compatible },
+    ];
+    let region = pcie_mmio(&mut m, "regs", Some(0));
+    driver_into(
+        &mut m,
+        Some(BusType::Pci),
+        match_set,
+        LifecycleOps::default(),
+        regseq_model::DriverHandle {
+            resource_fields: vec![region],
+            user_data_fields: vec![],
+        },
+    );
+    let emit = emit_zephyr_c(&m).expect("mixed Pci+DT set must emit (C04)");
+    let tu = &emit.tu;
+    // (i) native consumption: the authored DT entry IS the compat pin (I05:
+    // nothing synthesized).
+    assert!(tu.contains("#define DT_DRV_COMPAT regseq_e1000"), "{tu}");
+    // (ii) one C block per Pci row, adjacent to the pin.
+    let b1 = tu
+        .find("/* RSEQ-IGNORED-MATCH: pci vendor=0x8086 device=0x100e")
+        .unwrap_or_else(|| panic!("100e audit block:\n{tu}"));
+    let b2 = tu
+        .find("/* RSEQ-IGNORED-MATCH: pci vendor=0x8086 device=0x100f")
+        .unwrap_or_else(|| panic!("100f audit block:\n{tu}"));
+    let pin = tu.find("#define DT_DRV_COMPAT").expect("compat pin");
+    assert!(b1 < b2 && b2 < pin, "both blocks at the pin, set order");
+    // (iii) conformance rows + the summary-line section, from the SAME
+    // struct values.
+    assert_eq!(emit.conformance.ignored_match_entries.len(), 2);
+    assert!(
+        emit.conformance.summary_line().contains(
+            "ignored=[pci vendor=0x8086 device=0x100e;pci vendor=0x8086 device=0x100f]"
+        ),
+        "{}",
+        emit.conformance.summary_line()
+    );
+    // (iv) the binding-yaml third render + the D10 PCIe binding form:
+    // pcie-device.yaml include (witnessed intel,e1000.yaml idiom),
+    // vendor-id/device-id required, NO reg requirement.
+    let yaml = &emit.binding_yaml;
+    assert!(
+        yaml.contains("# RSEQ-IGNORED-MATCH: pci vendor=0x8086 device=0x100e"),
+        "{yaml}"
+    );
+    assert!(
+        yaml.contains("# RSEQ-IGNORED-MATCH: pci vendor=0x8086 device=0x100f"),
+        "{yaml}"
+    );
+    assert!(yaml.contains("include: [base.yaml, pcie-device.yaml]"), "{yaml}");
+    assert!(yaml.contains("vendor-id:\n    required: true"), "{yaml}");
+    assert!(yaml.contains("device-id:\n    required: true"), "{yaml}");
+    assert!(!yaml.contains("reg:"), "no reg requirement on the PCIe form:\n{yaml}");
+    // The yaml audit comments sit adjacent to (above) the consumed
+    // `compatible:` surface — the yaml analog of the C-block/pin adjacency.
+    let ya = yaml.find("# RSEQ-IGNORED-MATCH").unwrap();
+    let yc = yaml.find("compatible:").unwrap();
+    assert!(ya < yc, "audit comments above the compatible line:\n{yaml}");
+}
+
+// -- T04 capability/conformance wiring (backend-zephyr-c-e1000 R06/R14):
+//    the wildcard row over bus "pci"; the C06 deferred-class note ----------
+
+#[test]
+fn pcie_absent_surprise_remove_resolves_the_wildcard_row() {
+    // R06: an authored on_surprise_remove on the PCIe arm queries
+    // bus_family = "pci"; the existing CAP-ZEPHYR-DT-SURPRISE-1 wildcard
+    // resolves (registration form unchanged: StaticDevicetree) and the
+    // absent-slot render is exactly the platform path's. No sibling row.
+    let mut m = pcie_dt_model(Some(0));
+    let (driver_ty, result_ty) = pcie_driver_and_result(&mut m);
+    let on_init = push_ok_callback(&mut m, driver_ty, result_ty, "on_init");
+    let on_sr = push_ok_callback(&mut m, driver_ty, result_ty, "on_surprise_remove");
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_init = Some(on_init);
+    driver.ops.on_surprise_remove = Some(on_sr);
+    let emit = emit_zephyr_c(&m).expect("the PCIe absent slot must emit (R06)");
+    let tu = &emit.tu;
+    let row = &capability::CAP_ZEPHYR_DT_SURPRISE_1;
+    assert_eq!(tu.matches("RSEQ-ABSENT-SLOT:").count(), 1, "{tu}");
+    assert!(
+        tu.contains(&format!("* disposition: AbsentDispatch row: {}", row.id)),
+        "{tu}"
+    );
+    // Non-emission with the body still checked; the conformance row cites
+    // the row ID + full citation (I06).
+    assert!(!tu.contains("minimal_on_surprise_remove"), "{tu}");
+    assert_eq!(
+        emit.conformance.absent_dispatch_slots,
+        vec![capability::SlotEntry {
+            slot: "on_surprise_remove".into(),
+            row: Some(row.id.into()),
+            citation: Some(row.citation.into()),
+        }]
+    );
+}
+
+#[test]
+fn non_generic_class_carries_the_conformance_note() {
+    let mut m = minimal_dt_model();
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.descriptor.device_class = ClassTag::Network;
+    let emit = emit_zephyr_c(&m).expect("non-Generic class must emit (D14)");
+    assert_eq!(
+        emit.conformance.deferred_class,
+        Some(capability::DeferredClassNote {
+            class: "network".into(),
+            license: capability::DEFERRED_CLASS_LICENSE,
+        })
+    );
+    assert!(
+        emit.conformance
+            .summary_line()
+            .ends_with("deferred_class=[network]"),
+        "{}",
+        emit.conformance.summary_line()
+    );
+}
+
+#[test]
+fn generic_class_report_carries_no_note() {
+    let emit = emit_zephyr_c(&minimal_dt_model()).expect("must emit");
+    assert!(emit.conformance.deferred_class.is_none());
+    assert!(
+        !emit.conformance.summary_line().contains("deferred_class"),
+        "{}",
+        emit.conformance.summary_line()
+    );
+}
+
+#[test]
+fn platform_binding_yaml_is_byte_frozen() {
+    // The non-PCIe yaml form carries neither the PCIe include nor any
+    // audit section (I08: the pl011 goldens stay green with zero re-bless).
+    let emit = emit_zephyr_c(&minimal_dt_model()).expect("must emit");
+    let yaml = &emit.binding_yaml;
+    assert!(!yaml.contains("pcie-device.yaml"), "{yaml}");
+    assert!(!yaml.contains("RSEQ-IGNORED-MATCH"), "{yaml}");
+    assert!(yaml.contains("include: base.yaml"), "{yaml}");
+}
+
+#[test]
+fn other_class_tag_renders_its_carried_name() {
+    let mut m = minimal_dt_model();
+    let tag = m.strings.intern("quantum");
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.descriptor.device_class = ClassTag::Other(tag);
+    let emit = emit_zephyr_c(&m).expect("Other class must emit (D14)");
+    assert!(
+        emit.tu
+            .contains("RSEQ-DEFERRED-CLASS: device_class \"quantum\""),
+        "{}",
+        emit.tu
+    );
 }
 
 #[test]
@@ -1045,27 +1366,321 @@ fn poll_until_is_rejected_citing_b1() {
     );
 }
 
-#[test]
-fn config_write_subword_is_rejected_citing_b3() {
-    let mut m = minimal_dt_model();
-    let ut = unit_ty(&mut m);
-    let u16t = m.types.intern(Ty::Uint(UintKind::U16));
+// -- T02 config-space lowering (backend-zephyr-c-e1000 C02/C03): reads with
+//    the D06 word-0 cache, the D05 write RMW, retained D.2 rejections ------
+
+/// Push an `Ok(())`-returning lifecycle callback over `&mut <driver_ty>`
+/// whose first block CALLS `callee` with the given args into a scratch
+/// local — the config-intrinsic positive-emission seam. `extra_locals` are
+/// appended after the scratch destination (locals _3, _4, ... — for
+/// runtime-operand shapes).
+#[allow(clippy::too_many_arguments)]
+fn push_ok_callback_calling(
+    m: &mut RegseqModel,
+    driver_ty: TyId,
+    result_ty: TyId,
+    leaf: &str,
+    callee: regseq_model::InstanceId,
+    args: Vec<Operand>,
+    dest_ty: TyId,
+    extra_locals: Vec<TyId>,
+) -> regseq_model::InstanceRef {
+    let self_ty = m
+        .types
+        .intern(Ty::Ref(driver_ty, regseq_model::Provenance::UniqueBorrow));
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![self_ty],
+        output: result_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let unit_const = m.consts.intern(Const::ZST);
+    let mut body = Body::default();
+    for (ty, debug) in [(result_ty, None), (self_ty, Some("self")), (dest_ty, None)] {
+        body.local_decls.push(LocalDecl {
+            ty,
+            mutability: Mutability::Mut,
+            span: span(),
+            debug_name: debug.map(|d| m.strings.intern(d)),
+        });
+    }
+    for ty in extra_locals {
+        body.local_decls.push(LocalDecl {
+            ty,
+            mutability: Mutability::Mut,
+            span: span(),
+            debug_name: None,
+        });
+    }
+    body.arg_count = 1;
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([]),
+        terminator: Terminator {
+            kind: TerminatorKind::Call {
+                callee: regseq_model::CallCallee::Direct(callee),
+                args: args.into_boxed_slice(),
+                destination: Place::from(regseq_model::LocalId::from_u32(2)),
+                target: Some(regseq_model::BlockId::from_u32(1)),
+            },
+            span: span(),
+        },
+    });
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([Statement {
+            kind: StatementKind::Assign(
+                Place::from(regseq_model::LocalId::RETURN_PLACE),
+                Rvalue::Aggregate(
+                    regseq_model::AggregateKind::Enum(result_ty, VariantIdx::from_u32(0)),
+                    Box::new([Operand::Constant(unit_const)]),
+                ),
+            ),
+            span: span(),
+        }]),
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span: span(),
+        },
+    });
+    let fn_item = item(m, ItemKind::Function, leaf);
+    let emission = m.strings.intern(leaf);
+    let id = m.instances.push(Instance {
+        item: fn_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body: Some(body),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+    m.instance_ref_of(id)
+}
+
+/// The PCIe model's driver struct ty + the certified Result carrier.
+fn pcie_driver_and_result(m: &mut RegseqModel) -> (TyId, TyId) {
+    let driver_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| {
+            matches!(t, Ty::Struct { item, .. } if {
+                m.strings.resolve(m.items[*item].def_path.rendered) == "Minimal"
+            })
+        })
+        .map(|(id, _)| id)
+        .unwrap();
+    let (result_ty, _) = result_carrier(m, &["HardwareError"]);
+    (driver_ty, result_ty)
+}
+
+/// A PCIe model whose on_init performs one config READ of `ret_kind` at
+/// constant `off`; returns the emitted TU.
+fn pcie_config_read_tu(ret_kind: UintKind, off: u128) -> String {
+    let mut m = pcie_dt_model(Some(0));
     let u32t = m.types.intern(Ty::Uint(UintKind::U32));
+    let ret = m.types.intern(Ty::Uint(ret_kind));
+    let rc = push_intrinsic(
+        &mut m,
+        "read_config",
+        IntrinsicKind::Config(ConfigOp::Read),
+        vec![u32t],
+        ret,
+    );
+    let off_c = m.consts.intern(Const::Uint(UintKind::U32, off));
+    let (driver_ty, result_ty) = pcie_driver_and_result(&mut m);
+    let on_init = push_ok_callback_calling(
+        &mut m,
+        driver_ty,
+        result_ty,
+        "on_init",
+        rc,
+        vec![Operand::Constant(off_c)],
+        ret,
+        vec![],
+    );
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_init = Some(on_init);
+    emit_zephyr_c(&m).expect("licensed config read must emit").tu
+}
+
+/// A PCIe model whose on_init performs one config WRITE of `val_kind` at
+/// constant `off`; returns the emit result.
+fn pcie_config_write_emit(val_kind: UintKind, off: u128, val: u128) -> Result<String, EmitError> {
+    let mut m = pcie_dt_model(Some(0));
+    let ut = unit_ty(&mut m);
+    let u32t = m.types.intern(Ty::Uint(UintKind::U32));
+    let vt = m.types.intern(Ty::Uint(val_kind));
     let wc = push_intrinsic(
         &mut m,
         "write_config",
         IntrinsicKind::Config(ConfigOp::Write),
-        vec![u32t, u16t],
+        vec![u32t, vt],
         ut,
     );
-    let on_init = push_callback_calling(&mut m, wc, ut);
+    let off_c = m.consts.intern(Const::Uint(UintKind::U32, off));
+    let val_c = m.consts.intern(Const::Uint(val_kind, val));
+    let (driver_ty, result_ty) = pcie_driver_and_result(&mut m);
+    let on_init = push_ok_callback_calling(
+        &mut m,
+        driver_ty,
+        result_ty,
+        "on_init",
+        wc,
+        vec![Operand::Constant(off_c), Operand::Constant(val_c)],
+        ut,
+        vec![],
+    );
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_init = Some(on_init);
+    emit_zephyr_c(&m).map(|e| e.tu)
+}
+
+#[test]
+fn config_word0_reads_are_served_from_the_id_cache() {
+    // vendor@0x00 AND device@0x02 both live in containing word 0 (D06).
+    let tu = pcie_config_read_tu(UintKind::U16, 0x00);
+    assert!(tu.contains("uint32_t __cw = __rseq_pcie->id;"), "{tu}");
+    assert!(tu.contains("(uint16_t)((__cw >> 0u) & 0xffffu)"), "{tu}");
+    assert!(!tu.contains("pcie_conf_read"), "zero bus traffic (D06):\n{tu}");
+
+    let tu = pcie_config_read_tu(UintKind::U16, 0x02);
+    assert!(tu.contains("uint32_t __cw = __rseq_pcie->id;"), "{tu}");
+    assert!(tu.contains("(uint16_t)((__cw >> 16u) & 0xffffu)"), "{tu}");
+    assert!(!tu.contains("pcie_conf_read"), "zero bus traffic (D06):\n{tu}");
+}
+
+#[test]
+fn config_reads_beyond_word0_issue_one_live_word_read() {
+    // revision@0x08 -> word 2, byte lane 0.
+    let tu = pcie_config_read_tu(UintKind::U8, 0x08);
+    assert!(
+        tu.contains("uint32_t __cw = pcie_conf_read(__rseq_pcie->bdf, 2u);"),
+        "{tu}"
+    );
+    assert!(tu.contains("(uint8_t)((__cw >> 0u) & 0xffu)"), "{tu}");
+    // BAR0@0x10 -> word 4, full width.
+    let tu = pcie_config_read_tu(UintKind::U32, 0x10);
+    assert!(
+        tu.contains("uint32_t __cw = pcie_conf_read(__rseq_pcie->bdf, 4u);"),
+        "{tu}"
+    );
+    assert!(tu.contains("(uint32_t)((__cw >> 0u) & 0xffffffffu)"), "{tu}");
+}
+
+#[test]
+fn config_write_width4_is_a_single_native_word_write() {
+    let tu = pcie_config_write_emit(UintKind::U32, 0x04, 0x1234).expect("width-4 write emits");
+    assert!(
+        tu.contains("pcie_conf_write(__rseq_pcie->bdf, 1u, (uint32_t)("),
+        "{tu}"
+    );
+    assert!(!tu.contains("RSEQ-RMW"), "no RMW on the native width:\n{tu}");
+}
+
+#[test]
+fn config_write_subword_lowers_to_the_audited_c02_rmw() {
+    // The fixture's CLS shape: u8 write @0x0C (D05, the B-3 partial lift).
+    let tu = pcie_config_write_emit(UintKind::U8, 0x0C, 0x10).expect("u8 write emits via RMW");
+    let pos = |needle: &str| {
+        tu.find(needle)
+            .unwrap_or_else(|| panic!("landmark `{needle}` missing from TU:\n{tu}"))
+    };
+    let p_audit = pos("RSEQ-RMW: width-1 config write lowered to the containing-word RMW");
+    pos("[license: backend-zephyr-c-e1000 GRILL D05]");
+    let p_read = pos("uint32_t __cur = pcie_conf_read(__rseq_pcie->bdf, __w);");
+    let p_mask = pos("uint32_t __msk = 0xFFu << __sh;");
+    let p_write =
+        pos("pcie_conf_write(__rseq_pcie->bdf, __w, (__cur & ~__msk) | (((uint32_t)(");
+    assert!(p_audit < p_read && p_read < p_mask && p_mask < p_write, "RMW order");
+    // Halfword lane mask for a u16 write.
+    let tu = pcie_config_write_emit(UintKind::U16, 0x0E, 0xBEEF).expect("u16 write emits via RMW");
+    assert!(tu.contains("uint32_t __msk = 0xFFFFu << __sh;"), "{tu}");
+}
+
+#[test]
+fn config_word0_subword_write_rmw_reads_live_never_the_cache() {
+    // A sub-word write INTO word 0: the RMW's internal read stays a live
+    // pcie_conf_read (C03's explicit carve-out), never the D06 id cache.
+    let tu = pcie_config_write_emit(UintKind::U8, 0x01, 0xAA).expect("u8 write emits via RMW");
+    assert!(
+        tu.contains("uint32_t __cur = pcie_conf_read(__rseq_pcie->bdf, __w);"),
+        "{tu}"
+    );
+    assert!(!tu.contains("__rseq_pcie->id"), "never the cache:\n{tu}");
+}
+
+#[test]
+fn config_misaligned_subword_access_is_rejected() {
+    // Misaligned halfword write (odd offset).
+    let err = pcie_config_write_emit(UintKind::U16, 0x0D, 0x1).unwrap_err();
+    let EmitError::Rejected(s) = err else {
+        panic!("expected Rejected, got {err:?}");
+    };
+    assert!(s.contains("misaligned") && s.contains("B-3"), "{s}");
+    // Misaligned dword write.
+    let err = pcie_config_write_emit(UintKind::U32, 0x02, 0x1).unwrap_err();
+    let EmitError::Rejected(s) = err else {
+        panic!("expected Rejected, got {err:?}");
+    };
+    assert!(s.contains("misaligned"), "{s}");
+}
+
+#[test]
+fn config_width8_write_is_rejected_citing_b3() {
+    let err = pcie_config_write_emit(UintKind::U64, 0x08, 0x1).unwrap_err();
+    let EmitError::Rejected(s) = err else {
+        panic!("expected Rejected, got {err:?}");
+    };
+    assert!(s.contains("two-word") && s.contains("B-3"), "{s}");
+}
+
+#[test]
+fn config_offset_beyond_the_u32_domain_is_rejected_not_truncated() {
+    // A u64 constant above u32::MAX in the offset operand: out of the
+    // intrinsics' u32 offset domain — rejected, never silently truncated
+    // into an unrelated in-range access (C1 review round-1 finding 2).
+    let err = pcie_config_write_emit(UintKind::U32, 0x1_0000_0004, 0x1).unwrap_err();
+    let EmitError::Rejected(s) = err else {
+        panic!("expected Rejected, got {err:?}");
+    };
+    assert!(s.contains("u32 offset domain"), "{s}");
+}
+
+#[test]
+fn config_nonconstant_offset_is_rejected() {
+    // The offset is a RUNTIME place, not a constant: the word-0 cache and
+    // alignment legality cannot be decided at emit time -> D.2 reject.
+    let mut m = pcie_dt_model(Some(0));
+    let u32t = m.types.intern(Ty::Uint(UintKind::U32));
+    let u16t = m.types.intern(Ty::Uint(UintKind::U16));
+    let rc = push_intrinsic(
+        &mut m,
+        "read_config",
+        IntrinsicKind::Config(ConfigOp::Read),
+        vec![u32t],
+        u16t,
+    );
+    let (driver_ty, result_ty) = pcie_driver_and_result(&mut m);
+    let off_local = regseq_model::LocalId::from_u32(3);
+    let on_init = push_ok_callback_calling(
+        &mut m,
+        driver_ty,
+        result_ty,
+        "on_init",
+        rc,
+        vec![Operand::Copy(Place::from(off_local))],
+        u16t,
+        vec![u32t],
+    );
     let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
     driver.ops.on_init = Some(on_init);
     let err = emit_zephyr_c(&m).unwrap_err();
     let EmitError::Rejected(s) = err else {
         panic!("expected Rejected, got {err:?}");
     };
-    assert!(s.contains("B-3") && s.contains("RMW"), "{s}");
+    assert!(s.contains("non-constant offset"), "{s}");
 }
 
 #[test]
@@ -1095,8 +1710,9 @@ fn specified_config_shape_on_non_pci_is_rejected_citing_b4() {
     let mut m = minimal_dt_model();
     let u16t = m.types.intern(Ty::Uint(UintKind::U16));
     let u32t = m.types.intern(Ty::Uint(UintKind::U32));
-    // A width-2 READ is one of the SPECIFIED PCI shapes (§B.4) — here it
-    // still has no carrier because the unit has no PCIe scaffold.
+    // A width-2 READ is one of the SPECIFIED PCI shapes (§B.4) — under a
+    // non-PCI bus it has no carrier (B-4; the PCIe scaffold carries the
+    // only ratified contract).
     let rc = push_intrinsic(
         &mut m,
         "read_config",
@@ -1111,10 +1727,7 @@ fn specified_config_shape_on_non_pci_is_rejected_citing_b4() {
     let EmitError::Rejected(s) = err else {
         panic!("expected Rejected, got {err:?}");
     };
-    assert!(
-        s.contains("BRM-001") && s.contains("backend/zephyr-c-e1000"),
-        "{s}"
-    );
+    assert!(s.contains("BRM-001") && s.contains("B-4"), "{s}");
 }
 
 // -- T07: lifecycle/BRM lowering — MMIO scaffold, errno adapter,
@@ -1882,6 +2495,7 @@ fn lower_cx<'m>(m: &'m RegseqModel, driver_ty: TyId, resolved: bool) -> LowerCx<
             resources: vec![("regs".to_string(), resolved, "regs".to_string())],
             reg_macros: vec![("MMIODRIVER_CR".to_string(), 0x30)],
             base_symbol: "mmiodriver_mmio_base".to_string(),
+            pcie: false,
         },
         width8_used: false,
         uses_log: false,

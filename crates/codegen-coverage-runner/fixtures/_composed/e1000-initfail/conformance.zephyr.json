@@ -1,0 +1,15 @@
+{
+  "target": "zephyr_c",
+  "os_version_pin": "v4.4.0 (684c9e8f32e4)",
+  "delivered_slots": [
+    {"slot": "on_init", "row": null},
+    {"slot": "on_init_failure", "row": null}
+  ],
+  "absent_dispatch_slots": [],
+  "structurally_absent_slots": [],
+  "rejected_slots": [],
+  "ignored_match_entries": [
+    {"entry": "pci vendor=0x8086 device=0x100e", "reason": "foreign transport: not consumed by the ratified static-devicetree registration form; >=1 native entry present", "license": "spec-convergence-pl011 GRILL D08 (D03(a) rule)", "native_on": ["linux_c"]}
+  ],
+  "deferred_class": {"class": "network", "license": "backend-zephyr-c-e1000 GRILL D14"}
+}

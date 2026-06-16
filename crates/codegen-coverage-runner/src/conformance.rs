@@ -16,10 +16,24 @@
 use regseq_backends::capability::{ConformanceReport, SlotEntry};
 use regseq_backends::MatchAudit;
 
-/// Render the C05 JSON, byte-stable across runs.
+/// Render the C05 JSON, byte-stable across runs. The `deferred_class` key
+/// is SKIP-SERIALIZED when absent (backend-zephyr-c-e1000 C06 item 2):
+/// every conformance golden blessed before that disposition existed stays
+/// byte-identical.
 pub fn render_json(report: &ConformanceReport) -> String {
+    let deferred = report
+        .deferred_class
+        .as_ref()
+        .map(|n| {
+            format!(
+                ",\n  \"deferred_class\": {{\"class\": {}, \"license\": {}}}",
+                json_str(&n.class),
+                json_str(n.license)
+            )
+        })
+        .unwrap_or_default();
     format!(
-        "{{\n  \"target\": {},\n  \"os_version_pin\": {},\n{},\n{},\n{},\n{},\n{}\n}}\n",
+        "{{\n  \"target\": {},\n  \"os_version_pin\": {},\n{},\n{},\n{},\n{},\n{}{deferred}\n}}\n",
         json_str(report.target),
         json_str(report.os_version_pin),
         render_list("delivered_slots", &report.delivered_slots),
@@ -122,6 +136,7 @@ mod tests {
             structurally_absent_slots: vec![],
             rejected_slots: vec![],
             ignored_match_entries: vec![],
+            deferred_class: None,
         }
     }
 
@@ -139,6 +154,36 @@ mod tests {
             a,
             "{\n  \"target\": \"zephyr_c\",\n  \"os_version_pin\": \"v4.4.0 (684c9e8f32e4)\",\n  \"delivered_slots\": [\n    {\"slot\": \"on_init\", \"row\": null}\n  ],\n  \"absent_dispatch_slots\": [\n    {\"slot\": \"on_surprise_remove\", \"row\": \"CAP-ZEPHYR-DT-SURPRISE-1\", \"citation\": \"ratified citation \\\"quoted\\\"\"}\n  ],\n  \"structurally_absent_slots\": [],\n  \"rejected_slots\": [],\n  \"ignored_match_entries\": []\n}\n"
         );
+    }
+
+    /// C06 item 2 (backend-zephyr-c-e1000): the deferred-class note is
+    /// SKIP-SERIALIZED — a report without one renders byte-identically to
+    /// the pre-disposition shape (the C05 test above is that pin), and a
+    /// report with one gains exactly the `deferred_class` object carrying
+    /// class + license.
+    #[test]
+    fn deferred_class_note_is_skip_serialized() {
+        let without = render_json(&sample());
+        assert!(
+            !without.contains("deferred_class"),
+            "absent note must serialize NO key:\n{without}"
+        );
+        let mut report = sample();
+        report.deferred_class = Some(capability::DeferredClassNote {
+            class: "network".into(),
+            license: capability::DEFERRED_CLASS_LICENSE,
+        });
+        let with = render_json(&report);
+        assert_eq!(with, render_json(&report), "byte-stable across runs");
+        assert!(
+            with.contains(
+                ",\n  \"deferred_class\": {\"class\": \"network\", \"license\": \"backend-zephyr-c-e1000 GRILL D14\"}\n}\n"
+            ),
+            "{with}"
+        );
+        // Removing the note recovers the pre-disposition bytes exactly.
+        report.deferred_class = None;
+        assert_eq!(render_json(&report), without);
     }
 
     /// C02 (spec-convergence-pl011): a carried ignored entry serializes all

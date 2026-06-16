@@ -94,8 +94,12 @@ fn generated_drivers_kbuild_against_the_campaign_tree() {
     // PCI keystone and the induced-failure variant — compile against the
     // same campaign tree (C02 item 2). This is the O3 pin's mechanical
     // backstop: a wrong pcim symbol or include fails compilation here.
-    let e1000 = fixture("fixtures/_composed", "e1000-composed");
+    let e1000 = fixture("fixtures/_composed", "e1000-composed")
+        .with_binding(manifest::OsBinding::Linux)
+        .expect("the converged fixture resolves the linux binding (C05)");
     gate("e1000-composed", &emit(&e1000));
-    let e1000fail = fixture("fixtures/_composed", "e1000-initfail");
+    let e1000fail = fixture("fixtures/_composed", "e1000-initfail")
+        .with_binding(manifest::OsBinding::Linux)
+        .expect("the converged fixture resolves the linux binding (C05)");
     gate("e1000-initfail", &emit(&e1000fail));
 }

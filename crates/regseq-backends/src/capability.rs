@@ -285,6 +285,27 @@ pub fn lookup(
     })
 }
 
+/// The fixed license citation the deferred-class disposition carries
+/// (backend-zephyr-c-e1000 D14/C06) — a GRILL decision reference,
+/// deliberately NOT a capability-table row (the table's domain stays
+/// lifecycle slots only). The TU audit comment and the conformance note
+/// render from this same const, so cross-artifact consistency holds by
+/// construction.
+pub const DEFERRED_CLASS_LICENSE: &str = "backend-zephyr-c-e1000 GRILL D14";
+
+/// The OPTIONAL deferred-class note (backend-zephyr-c-e1000 C06 item 2):
+/// carried when the spec declares a non-Generic device class that registers
+/// class-neutral under the D14 audited disposition. Skip-serialized when
+/// absent, so every conformance artifact emitted before this disposition
+/// existed stays byte-identical.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeferredClassNote {
+    /// The declared class name, e.g. "network".
+    pub class: String,
+    /// Always [`DEFERRED_CLASS_LICENSE`].
+    pub license: &'static str,
+}
+
 /// The per-target conformance report every OS-backend build emits
 /// (amendment 6, C05). generic_c is exempt: it is the reference semantics
 /// conformance is measured against; a self-report is vacuous (D09).
@@ -305,6 +326,9 @@ pub struct ConformanceReport {
     /// license cites the GRILL decision const, never a capability row (the
     /// table's domain stays lifecycle slots only).
     pub ignored_match_entries: Vec<crate::match_audit::MatchAudit>,
+    /// The C06 deferred-class note — `Some` only when a non-Generic class
+    /// registered class-neutral (backend-zephyr-c-e1000 D14).
+    pub deferred_class: Option<DeferredClassNote>,
 }
 
 /// One slot row of the conformance report (C05).
@@ -340,8 +364,15 @@ impl ConformanceReport {
             .iter()
             .map(|a| a.entry.as_str())
             .collect();
+        // The deferred-class section appears ONLY when the note is present
+        // (C06 item 2): the existing line shape stays byte-stable.
+        let deferred = self
+            .deferred_class
+            .as_ref()
+            .map(|n| format!(" deferred_class=[{}]", n.class))
+            .unwrap_or_default();
         format!(
-            "RSEQ-CONFORMANCE [{} @ {}] delivered={} absent_dispatch={} structurally_absent={} rejected={} ignored=[{}]",
+            "RSEQ-CONFORMANCE [{} @ {}] delivered={} absent_dispatch={} structurally_absent={} rejected={} ignored=[{}]{deferred}",
             self.target,
             self.os_version_pin,
             list(&self.delivered_slots),
@@ -776,6 +807,7 @@ mod tests {
             }],
             rejected_slots: vec![],
             ignored_match_entries: vec![],
+            deferred_class: None,
         };
         assert_eq!(
             report.summary_line(),
@@ -811,12 +843,39 @@ mod tests {
                     native_on: &["linux_c"],
                 },
             ],
+            deferred_class: None,
         };
         assert_eq!(
             report.summary_line(),
             "RSEQ-CONFORMANCE [zephyr_c @ v4.4.0 (684c9e8f32e4)] delivered=[] \
              absent_dispatch=[] structurally_absent=[] rejected=[] \
              ignored=[amba id=0x00041011 mask=0x000fffff;amba id=0x00abc123 mask=0x00ffffff]"
+        );
+    }
+
+    /// C06 item 2 (backend-zephyr-c-e1000): the deferred-class section
+    /// appears in the summary line ONLY when the note is present; the line
+    /// without it is byte-identical to today's shape (the two tests above).
+    #[test]
+    fn summary_line_gains_a_deferred_class_section_only_when_present() {
+        let report = ConformanceReport {
+            target: "zephyr_c",
+            os_version_pin: ZEPHYR_PIN,
+            delivered_slots: vec![],
+            absent_dispatch_slots: vec![],
+            structurally_absent_slots: vec![],
+            rejected_slots: vec![],
+            ignored_match_entries: vec![],
+            deferred_class: Some(DeferredClassNote {
+                class: "network".into(),
+                license: DEFERRED_CLASS_LICENSE,
+            }),
+        };
+        assert_eq!(
+            report.summary_line(),
+            "RSEQ-CONFORMANCE [zephyr_c @ v4.4.0 (684c9e8f32e4)] delivered=[] \
+             absent_dispatch=[] structurally_absent=[] rejected=[] ignored=[] \
+             deferred_class=[network]"
         );
     }
 }

@@ -32,6 +32,12 @@ pub const WORKSPACE_VAR: &str = "RSEQ_ZEPHYR_WORKSPACE";
 /// The pinned board target (D08/D09; versions.lock SD-Z2).
 pub const BOARD: &str = "qemu_cortex_a53";
 
+/// The PCIe-variant board target (backend-zephyr-c-e1000 D08/plan decision
+/// 2: qemu_x86 primary — its base DT models the e1000 as a pcie0 child,
+/// the exact PCIe-over-DT form; qemu_x86_64 is the named fallback, final
+/// per the D09 spike's item (d) — a flip rides a gate-reported amendment).
+pub const PCIE_BOARD: &str = "qemu_x86";
+
 /// One west-gate run's outcome.
 #[derive(Debug)]
 pub enum WestOutcome {
@@ -83,6 +89,38 @@ impl std::fmt::Display for WestError {
 
 impl std::error::Error for WestError {}
 
+/// The staged DUT's bus form: it decides the board, the overlay node shape,
+/// and the prj.conf pin set.
+pub enum StagedBus<'a> {
+    /// Platform/AMBA: a memory-mapped DUT node under `/soc` carrying `reg`
+    /// (the first-light form; board [`BOARD`]).
+    Platform {
+        /// The DUT region `(base, size)` for the overlay node's `reg` cells.
+        region: (u64, u64),
+        /// Optional raw `interrupts` cells for the overlay node
+        /// (device-interrupt construct #6: an interrupt-bearing TU's
+        /// `DT_INST_IRQN(0)` needs the property), e.g. `"<0 8 2 0>"` =
+        /// `<GIC_SPI 8 IRQ_TYPE_LEVEL 0>` raw. The west gate is a COMPILE
+        /// check — the cells must be well-formed; the runtime line number is
+        /// the eval campaign's to pin. `None` emits no property (every
+        /// pre-construct fixture, byte-identical overlay). This is a platform
+        /// node fact, so it lives in the variant — PCIe lines reach the
+        /// device through the `pcie0` controller, not a node property.
+        interrupts: Option<&'a str>,
+    },
+    /// PCIe (backend-zephyr-c-e1000 T07): a vendor/device-matched DUT node
+    /// under the board's `pcie0` bus — NO `reg` (the C05 binding requires
+    /// none; BAR sizing is probe-time) — with the CONFIG_PCIE prj.conf pins
+    /// (the O4 set, discovered fail-loud at first build). Board
+    /// [`PCIE_BOARD`].
+    Pcie {
+        /// The DUT vendor id (overlay `vendor-id` cell).
+        vendor_id: u16,
+        /// The DUT device id (overlay `device-id` cell).
+        device_id: u16,
+    },
+}
+
 /// The staged-app inputs: the two generated artifacts plus naming facts.
 pub struct StagedDriver<'a> {
     /// The generated TU text.
@@ -94,15 +132,9 @@ pub struct StagedDriver<'a> {
     /// The DT compatible the binding declares (`"regseq,pl011"`); names the
     /// staged binding file and the overlay node's compatible.
     pub compatible: &'a str,
-    /// The DUT region `(base, size)` for the overlay node's `reg` cells.
-    pub region: (u64, u64),
-    /// Optional raw `interrupts` cells for the overlay node (device-interrupt
-    /// construct #6: an interrupt-bearing TU's `DT_INST_IRQN(0)` needs the
-    /// property), e.g. `"<0 8 2 0>"` = `<GIC_SPI 8 IRQ_TYPE_LEVEL 0>` raw.
-    /// The west gate is a COMPILE check — the cells must be well-formed; the
-    /// runtime line number is the eval campaign's to pin. `None` emits no
-    /// property (every pre-construct fixture, byte-identical overlay).
-    pub interrupts: Option<&'a str>,
+    /// The DUT's bus form (board + overlay + prj.conf selector). The
+    /// [`StagedBus::Platform`] variant carries any DT `interrupts` cells.
+    pub bus: StagedBus<'a>,
 }
 
 /// Build the staged app against the workspace named by
@@ -179,31 +211,57 @@ pub fn west_build_with_workspace(
     // (spec-convergence-pl011 C04: CONFIG_DEVICE_DEINIT_SUPPORT defaults OFF
     // and Z_DEVICE_OPS silently drops deinit_fn without it,
     // device.h:1175-1180 — the build would pass and device_deinit() would
-    // return -ENOTSUP at runtime).
-    std::fs::write(
-        app.join("prj.conf"),
-        "CONFIG_LOG=y\nCONFIG_LOG_MODE_DEFERRED=y\nCONFIG_CBPRINTF_COMPLETE=y\nCONFIG_CBPRINTF_FULL_INTEGRAL=y\nCONFIG_DEVICE_DEINIT_SUPPORT=y\n",
-    )
-    .map_err(WestError::Io)?;
-    // The DUT overlay: a status-okay node under /soc (the qemu-virt-a53 soc
-    // node is #address-cells=2 / #size-cells=2).
-    let (base, size) = driver.region;
-    let base_hi = base >> 32;
-    let base_lo = base & 0xffff_ffff;
-    let interrupts_prop = driver
-        .interrupts
-        .map(|cells| format!("\t\t\tinterrupts = {cells};\n"))
-        .unwrap_or_default();
-    std::fs::write(
-        app.join("app.overlay"),
-        format!(
-            "/* The eval DUT node (GRILL D04): the second PL011, matched ONLY by\n \
-             * the generated driver's `{}` compatible. */\n\
-             / {{\n\tsoc {{\n\t\tregseq_dut: uart@{base:x} {{\n\t\t\tcompatible = \"{}\";\n\t\t\treg = <{base_hi:#x} {base_lo:#x} 0x00 {size:#x}>;\n{interrupts_prop}\t\t\tstatus = \"okay\";\n\t\t}};\n\t}};\n}};\n",
-            driver.compatible, driver.compatible
-        ),
-    )
-    .map_err(WestError::Io)?;
+    // return -ENOTSUP at runtime). The PCIe variant additionally pins the
+    // O4 set (backend-zephyr-c-e1000 T07, discovered fail-loud at first
+    // build): CONFIG_PCIE compiles drivers/pcie/host + the DEVICE_PCIE
+    // context machinery the generated scaffold consumes.
+    let prj_conf = match driver.bus {
+        StagedBus::Platform { .. } => {
+            "CONFIG_LOG=y\nCONFIG_LOG_MODE_DEFERRED=y\nCONFIG_CBPRINTF_COMPLETE=y\nCONFIG_CBPRINTF_FULL_INTEGRAL=y\nCONFIG_DEVICE_DEINIT_SUPPORT=y\n".to_string()
+        }
+        StagedBus::Pcie { .. } => {
+            "CONFIG_LOG=y\nCONFIG_LOG_MODE_DEFERRED=y\nCONFIG_CBPRINTF_COMPLETE=y\nCONFIG_CBPRINTF_FULL_INTEGRAL=y\nCONFIG_DEVICE_DEINIT_SUPPORT=y\nCONFIG_PCIE=y\n".to_string()
+        }
+    };
+    std::fs::write(app.join("prj.conf"), prj_conf).map_err(WestError::Io)?;
+    // The DUT overlay, per bus form.
+    let overlay = match driver.bus {
+        StagedBus::Platform { region, interrupts } => {
+            // A status-okay node under /soc (the qemu-virt-a53 soc node is
+            // #address-cells=2 / #size-cells=2). The optional `interrupts`
+            // cells (device-interrupt construct #6) ride the platform node —
+            // an interrupt-bearing TU's `DT_INST_IRQN(0)` needs the property.
+            let (base, size) = region;
+            let base_hi = base >> 32;
+            let base_lo = base & 0xffff_ffff;
+            let interrupts_prop = interrupts
+                .map(|cells| format!("\t\t\tinterrupts = {cells};\n"))
+                .unwrap_or_default();
+            format!(
+                "/* The eval DUT node (GRILL D04): the second PL011, matched ONLY by\n \
+                 * the generated driver's `{}` compatible. */\n\
+                 / {{\n\tsoc {{\n\t\tregseq_dut: uart@{base:x} {{\n\t\t\tcompatible = \"{}\";\n\t\t\treg = <{base_hi:#x} {base_lo:#x} 0x00 {size:#x}>;\n{interrupts_prop}\t\t\tstatus = \"okay\";\n\t\t}};\n\t}};\n}};\n",
+                driver.compatible, driver.compatible
+            )
+        }
+        StagedBus::Pcie {
+            vendor_id,
+            device_id,
+        } => {
+            // The PCIe-over-DT form (backend-zephyr-c-e1000 D08(4)): a
+            // vendor/device-matched child under the board's pcie0 bus, NO
+            // reg (probe-time BAR sizing) — the witnessed qemu_x86.dts eth0
+            // idiom, hermetically owned by the generated compatible.
+            format!(
+                "/* The hermetic e1000 DUT node (backend-zephyr-c-e1000 D08(4)):\n \
+                 * matched ONLY by the generated driver's `{}` compatible;\n \
+                 * vendor-id/device-id feed the DEVICE_PCIE context (PCIE_DT_ID). */\n\
+                 &pcie0 {{\n\tregseq_dut: regseq_dut {{\n\t\tcompatible = \"{}\";\n\t\tvendor-id = <{vendor_id:#x}>;\n\t\tdevice-id = <{device_id:#x}>;\n\t\tstatus = \"okay\";\n\t}};\n}};\n",
+                driver.compatible, driver.compatible
+            )
+        }
+    };
+    std::fs::write(app.join("app.overlay"), overlay).map_err(WestError::Io)?;
     // The generated binding, discoverable via the app-local dts/bindings/.
     std::fs::write(
         app.join("dts/bindings")
@@ -219,12 +277,16 @@ pub fn west_build_with_workspace(
     std::fs::write(app.join("src").join(format!("{drv}.c")), driver.tu).map_err(WestError::Io)?;
 
     // Build from the topdir (west resolves the workspace from cwd).
+    let board = match driver.bus {
+        StagedBus::Platform { .. } => BOARD,
+        StagedBus::Pcie { .. } => PCIE_BOARD,
+    };
     let build_dir = stage.path().join("build");
     let output = std::process::Command::new("west")
         .current_dir(&topdir)
         .arg("build")
         .arg("-b")
-        .arg(BOARD)
+        .arg(board)
         .arg("-d")
         .arg(&build_dir)
         .arg("-s")
@@ -307,8 +369,10 @@ mod tests {
             binding_yaml: "# binding",
             driver_name: "pl011",
             compatible: "regseq,pl011",
-            region: (0x0904_0000, 0x1000),
-            interrupts: None,
+            bus: StagedBus::Platform {
+                region: (0x0904_0000, 0x1000),
+                interrupts: None,
+            },
         }
     }
 
