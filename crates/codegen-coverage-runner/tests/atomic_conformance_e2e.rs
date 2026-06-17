@@ -69,7 +69,10 @@ fn write_fixture(corpus: &TempCorpus) -> PathBuf {
          pub struct AtomicDrv {{\n\
          \t#[rseq::atomic(initial = 7)] counter: Atomic<u32>,\n\
          \tflags: Atomic<u32>,\n\
-         \twide: Atomic<u64>,\n}}\n\n\
+         \twide: Atomic<u64>,\n\
+         \tsi: Atomic<i32>,\n\
+         \twi: Atomic<i64>,\n\
+         \tptr: Atomic<*mut u8>,\n}}\n\n\
          impl Lifecycle for AtomicDrv {{\n\
          \tfn on_init(&mut self) -> Result<(), RegseqError> {{\n\
          \t\tlet _ = self.counter.load(Ordering::Acquire);\n\
@@ -127,10 +130,14 @@ fn linux_atomic_api_selection() {
     // is `&priv->inner.field`.
     for needle in [
         "#include <linux/atomic.h>",
-        // storage override: u32 -> atomic_t, u64 -> atomic64_t.
+        // storage override per element/width/signedness (C07/T18): u32/i32 ->
+        // atomic_t, u64/i64 -> atomic64_t, pointer -> atomic_long_t (LP64).
         "atomic_t counter",
         "atomic_t flags",
         "atomic64_t wide",
+        "atomic_t si",
+        "atomic64_t wi",
+        "atomic_long_t ptr",
         // init (R10/S10): counter seeded to 7 (in the probe) before on_init.
         "atomic_set(&priv->inner.counter, (int)0x7ULL);",
         // load Acquire -> _acquire; store Release -> _release.
@@ -166,10 +173,14 @@ fn zephyr_atomic_builtin_selection() {
     // Ops are in `atomicdrv_on_init(struct AtomicDrv *_1)` (receiver `&(*_1).f`);
     // the init is in the probe (`&data->inner.f`).
     for needle in [
-        // storage override: plain width-T cells.
+        // storage override per element/width/signedness (C07/T18): plain
+        // width-T cells; pointer -> uintptr_t (LP64).
         "uint32_t counter",
         "uint32_t flags",
         "uint64_t wide",
+        "int32_t si",
+        "int64_t wi",
+        "uintptr_t ptr",
         // init (R10/S10) in the probe.
         "__atomic_store_n(&data->inner.counter, (uint32_t)0x7ULL, __ATOMIC_RELAXED);",
         // load Acquire / store Release with the exact order.

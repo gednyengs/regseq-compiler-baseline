@@ -59,6 +59,22 @@ fn cases() -> Vec<(&'static str, Vec<&'static str>, Vec<&'static str>)> {
                 "ATM fence ord=SeqCst",
             ],
         ),
+        // M5/T18 coverage: element-type / width / signedness (i32 wrap; u64/i64
+        // 64-bit width). cells: si=0 (w32), wu=1 (w64), wi=2 (w64).
+        (
+            "atomic-cov",
+            vec!["regseq_atomic_store(0, 32,", "regseq_atomic_store(1, 64,", "regseq_atomic_store(2, 64,"],
+            vec![
+                // i32 two's-complement wrap: 0x7fffffff + 1 -> 0x80000000.
+                "ATM add cell=0 w=32 ord=Relaxed val=0x1 prior=0x7fffffff",
+                "ATM load cell=0 w=32 ord=Relaxed => 0x80000000",
+                // u64 64-bit width: 2^32 is not truncated.
+                "ATM load cell=1 w=64 ord=Relaxed => 0x100000000",
+                // i64 signed: -1 is the all-ones 64-bit pattern.
+                "ATM store cell=2 w=64 ord=Relaxed val=0xffffffffffffffff",
+                "ATM load cell=2 w=64 ord=Relaxed => 0xffffffffffffffff",
+            ],
+        ),
     ]
 }
 

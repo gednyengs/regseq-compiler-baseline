@@ -1,0 +1,7 @@
+ATM store cell=0 w=32 ord=Relaxed val=0x7fffffff
+ATM add cell=0 w=32 ord=Relaxed val=0x1 prior=0x7fffffff
+ATM load cell=0 w=32 ord=Relaxed => 0x80000000
+ATM store cell=1 w=64 ord=Relaxed val=0x100000000
+ATM load cell=1 w=64 ord=Relaxed => 0x100000000
+ATM store cell=2 w=64 ord=Relaxed val=0xffffffffffffffff
+ATM load cell=2 w=64 ord=Relaxed => 0xffffffffffffffff

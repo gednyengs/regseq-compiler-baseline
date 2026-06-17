@@ -331,3 +331,23 @@ fn misdeclared_store_wrong_arity_is_rejected() {
         "wrong-arity store must be MISSING-ORDERING (not silently accepted); got: {err}"
     );
 }
+
+#[test]
+fn mmio_fence_collapse_is_designed_in() {
+    // M5/T19: `ATOMIC-ERR-MMIO-FENCE-COLLAPSE` is in the catalog (C02/I02) but
+    // DESIGNED-IN with NO live trigger (D02/O1) — the trigger (an MMIO-ordering
+    // op smuggled onto the atomic surface) is defined only when register-access
+    // lands its `io_fence`/`ordered!` ordering surface. This asserts the variant
+    // EXISTS and renders its ID; the absence of a live trigger is structural —
+    // no `bridge::atomic` pass ever constructs
+    // `AtomicDiagnostic::MmioFenceCollapse` (grep-verifiable). `atomic::fence`
+    // itself is CPU-only and never collapses to MMIO (I03).
+    let d = regseq_driver::bridge::AtomicDiagnostic::MmioFenceCollapse {
+        mmio_op: "io_fence".to_string(),
+    };
+    let rendered = d.to_string();
+    assert!(
+        rendered.contains("ATOMIC-ERR-MMIO-FENCE-COLLAPSE"),
+        "the designed-in variant must render its ID; got: {rendered}"
+    );
+}
