@@ -1921,6 +1921,13 @@ impl<'a> PrettyPrinter<'a> {
                     };
                     out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
                 }
+                // Timed-CPU-delay-and-sleep intrinsics (timed-cpu-delay-and-sleep construct).
+                AttrData::Intrinsic(IntrinsicKind::BusyWait) => {
+                    out.push_str("#[rseq::intrinsic(\"busy_wait\")]\n");
+                }
+                AttrData::Intrinsic(IntrinsicKind::Sleep) => {
+                    out.push_str("#[rseq::intrinsic(\"sleep\")]\n");
+                }
                 // The framework-type marker has no DSL attribute render
                 // form in this phase; its render rule (if any) lands with
                 // the bridge/backend stages that consume it. Emit nothing.

@@ -2126,6 +2126,19 @@ impl BodyEmit<'_> {
                 let op = *op;
                 return self.emit_config(op, callee, args, destination, target);
             }
+            // Timed-CPU-delay-and-sleep interception (TCD construct): a Direct
+            // callee carrying `IntrinsicKind::BusyWait`/`Sleep` (the
+            // `regseq::delay::{busy_wait,sleep}` facade) lowers to a call to the
+            // host fake-clock extern hook (`regseq_delay_busy_wait_ns` /
+            // `regseq_delay_sleep_ns`) carrying the `Duration` argument's u64
+            // nanoseconds — never a real C delay (the recording impl is
+            // harness-side, C06/D08).
+            if let Some(kind @ (IntrinsicKind::BusyWait | IntrinsicKind::Sleep)) =
+                self.model.instance_intrinsic(*inst)
+            {
+                let kind = kind.clone();
+                return self.emit_delay(kind, callee, args, target);
+            }
             // (Device-lifecycle is no longer call-intercepted: the harness verbs
             // were removed, RD-1; the synthesized `main` drives the lifecycle —
             // see `emit_lifecycle_synthesis`.)
@@ -2219,6 +2232,60 @@ impl BodyEmit<'_> {
                 };
                 Ok(format!("{assign} goto bb_{};", t.as_u32()))
             }
+        }
+    }
+
+    /// Timed-CPU-delay-and-sleep lowering (TCD construct): lower a
+    /// `busy_wait`/`sleep` Call to a call to the host fake-clock extern hook
+    /// `regseq_delay_busy_wait_ns` / `regseq_delay_sleep_ns`, passing the single
+    /// `Duration` argument's `u64` nanoseconds.
+    ///
+    /// The generic-C oracle emits the extern CALL only; the recording
+    /// implementation (record `{kind, ns, seq}`, advance a virtual clock) is
+    /// linked by the test harness (C06/D08). Intent is preserved as hook
+    /// identity (I04): a `busy_wait` never lowers to the sleep hook or vice
+    /// versa. The `ns` value is read off the `Duration` operand's sole field;
+    /// a const-folded `Duration` aggregate and the result place of a runtime
+    /// `Duration::from_*` call both yield the same `(expr).ns` access (I05 is
+    /// trivial here — ns passes through unconverted).
+    fn emit_delay(
+        &self,
+        kind: IntrinsicKind,
+        callee: &CallCallee,
+        args: &[Operand],
+        target: Option<regseq_model::BlockId>,
+    ) -> Result<String, EmitError> {
+        let hook = match kind {
+            IntrinsicKind::BusyWait => "regseq_delay_busy_wait_ns",
+            IntrinsicKind::Sleep => "regseq_delay_sleep_ns",
+            // The interception only routes the two delay kinds here.
+            _ => return Err(EmitError::Unsupported("emit_delay on a non-delay intrinsic")),
+        };
+        let arg = args.first().ok_or(EmitError::Unsupported(
+            "delay intrinsic call without a Duration argument",
+        ))?;
+        // The `Duration` type comes from the callee's first PARAMETER, not from
+        // `operand_ty(arg)`: `operand_ty` is `None` for an `Operand::Constant`
+        // (a const-folded `Duration` aggregate), so reading it from the operand
+        // would fail the const path. The parameter type is known from the
+        // signature for both the const-aggregate and the value-ref operand —
+        // and it is the consumer type `operand_expr` needs to render a const
+        // aggregate.
+        let param_tys = super::callee_param_tys(self.model, self.body, callee);
+        let duration_ty = param_tys.first().copied().ok_or(EmitError::Unsupported(
+            "delay intrinsic callee has no recoverable Duration parameter type",
+        ))?;
+        // The `Duration`'s sole field carries the u64 ns. Recover its C field
+        // name from the layout (rather than hard-coding `ns`) so the access
+        // matches the emitted struct definition.
+        let (field, _) = layout_emit::field_c_name_ty(self.model, duration_ty, 0).ok_or(
+            EmitError::Unsupported("Duration argument is not a single-field struct"),
+        )?;
+        let dur_expr = self.operand_expr(arg, Some(duration_ty))?;
+        let call = format!("{hook}((uint64_t)({dur_expr}).{field})");
+        match target {
+            None => Ok(format!("{call}; __builtin_unreachable();")),
+            Some(t) => Ok(format!("{call}; goto bb_{};", t.as_u32())),
         }
     }
 
@@ -5042,6 +5109,26 @@ pub(crate) fn model_has_config_intrinsic(model: &RegseqModel) -> bool {
         attrs
             .iter()
             .any(|a| matches!(a, regseq_model::AttrData::Intrinsic(IntrinsicKind::Config(_))))
+    })
+}
+
+/// Whether the model contains a `busy_wait`/`sleep` intrinsic
+/// (timed-cpu-delay-and-sleep construct) — the demand gate for emitting the
+/// [`super::prelude::DELAY_HOOKS`] extern declarations. A delay call lowers
+/// (via `emit_delay`) to the `regseq_delay_busy_wait_ns`/`regseq_delay_sleep_ns`
+/// host hooks, so the declarations MUST be present whenever a delay intrinsic
+/// is — otherwise the lowered call would reference an undeclared function. No
+/// existing fixture uses a delay intrinsic, so this churns no committed golden.
+pub(crate) fn model_has_delay_intrinsic(model: &RegseqModel) -> bool {
+    model.domain_attrs.item_attrs.iter().any(|attrs| {
+        attrs.iter().any(|a| {
+            matches!(
+                a,
+                regseq_model::AttrData::Intrinsic(
+                    IntrinsicKind::BusyWait | IntrinsicKind::Sleep
+                )
+            )
+        })
     })
 }
 

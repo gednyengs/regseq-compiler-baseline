@@ -104,6 +104,13 @@ pub enum FrameworkType {
     /// ("irq-result")]`, device-interrupt construct #6). A dispatch result,
     /// not an error type. Appended at discriminant 1.
     IrqResult = 1,
+    /// The Duration value type (`#[rseq::framework_type("duration")]`,
+    /// timed-cpu-delay-and-sleep construct). An opaque u64-nanosecond amount
+    /// consumed by the `busy_wait`/`sleep` intrinsics (and the existing
+    /// `poll_until`/`reset.toggle`/`sync.wait` Duration consumers). The bridge
+    /// records this marker; backends read the inner u64 ns off the operand.
+    /// Appended at discriminant 2.
+    Duration = 2,
 }
 
 /// Closed, append-only intrinsic-family taxonomy.
@@ -125,6 +132,16 @@ pub enum IntrinsicKind {
     /// preserving the discriminants above. PCI-only (BRM-001, the non-PCI
     /// rejection is the construct-#3 M6 diagnostic).
     Config(ConfigOp) = 3,
+    /// Busy-wait CPU spin (`regseq::delay::busy_wait`,
+    /// timed-cpu-delay-and-sleep construct). Spins for ≥ a `Duration` without
+    /// yielding; legal in ANY execution context (including IRQ/atomic).
+    /// Appended at discriminant 4, preserving the discriminants above.
+    BusyWait = 4,
+    /// Scheduler sleep (`regseq::delay::sleep`, timed-cpu-delay-and-sleep
+    /// construct). Yields the calling task for ≥ a `Duration`; legal only in
+    /// sleepable context (sleeping in a marked IRQ region is rejected by
+    /// TCD-ERR-01). Appended at discriminant 5.
+    Sleep = 5,
 }
 
 /// Config-space operation carried by [`IntrinsicKind::Config`]
@@ -201,6 +218,12 @@ impl IntrinsicKind {
             // matching the `#[rseq::intrinsic("read_config"/"write_config")]` tags).
             "read_config" => Some(IntrinsicKind::Config(ConfigOp::Read)),
             "write_config" => Some(IntrinsicKind::Config(ConfigOp::Write)),
+            // Timed-CPU-delay-and-sleep intrinsics (underscore form, matching
+            // the facade `#[rseq::intrinsic("busy_wait"/"sleep")]` tags).
+            // `sleep_ex`/`sleep_until` reserve NAMEs only -- no discriminants
+            // until their later fold.
+            "busy_wait" => Some(IntrinsicKind::BusyWait),
+            "sleep" => Some(IntrinsicKind::Sleep),
             _ => None,
         }
     }
@@ -300,6 +323,13 @@ mod tests {
         // Primitive-repr enums with fields store a `u8` tag; reading the
         // tag byte lets this test assert the spec-pinned discriminant.
         unsafe { *(value as *const AttrData as *const u8) }
+    }
+
+    fn intrinsic_kind_tag(value: &IntrinsicKind) -> u8 {
+        // SAFETY: `IntrinsicKind` is `repr(u8)` with explicit discriminants;
+        // the same tag-byte read as `attr_data_tag`. (`as u8` is unavailable
+        // because some variants carry fields.)
+        unsafe { *(value as *const IntrinsicKind as *const u8) }
     }
 
     #[test]
@@ -496,6 +526,37 @@ mod tests {
     }
 
     #[test]
+    fn timed_delay_from_name_round_trip_and_discriminants() {
+        // Timed-cpu-delay-and-sleep: busy_wait/sleep map from their
+        // underscore-form NAMEs, round-trip through JSON, are distinct, and
+        // append at discriminants 4/5 with every prior family unmoved
+        // (Log=0 / Mmio=1 / PollUntil=2 / Config=3). `AttrData::Intrinsic`
+        // stays at 0 regardless of which family it carries.
+        assert_eq!(
+            IntrinsicKind::from_name(symbol("busy_wait")),
+            Some(IntrinsicKind::BusyWait)
+        );
+        assert_eq!(
+            IntrinsicKind::from_name(symbol("sleep")),
+            Some(IntrinsicKind::Sleep)
+        );
+        assert_json_round_trip(IntrinsicKind::BusyWait);
+        assert_json_round_trip(IntrinsicKind::Sleep);
+        assert_ne!(IntrinsicKind::BusyWait, IntrinsicKind::Sleep);
+        // Append-only discriminant stability (pinned numeric tags).
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Log(LogLevel::Debug)), 0);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Mmio(MmioOp::Read)), 1);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::PollUntil), 2);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)), 3);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::BusyWait), 4);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Sleep), 5);
+        assert_eq!(attr_data_tag(&AttrData::Intrinsic(IntrinsicKind::Sleep)), 0);
+        // `sleep_ex`/`sleep_until` reserve NAMEs only — no discriminants yet.
+        assert_eq!(IntrinsicKind::from_name(symbol("sleep_ex")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("sleep_until")), None);
+    }
+
+    #[test]
     fn attr_data_json_round_trips() {
         for level in levels() {
             assert_json_round_trip(attr(level));
@@ -647,6 +708,25 @@ mod tests {
         // IrqResult appends at 1 (device-interrupt construct #6) without
         // shifting RegseqError off 0.
         assert_eq!(FrameworkType::IrqResult as u8, 1);
+        // Duration appends at 2 (timed-cpu-delay-and-sleep construct) without
+        // shifting the prior two.
+        assert_eq!(FrameworkType::Duration as u8, 2);
+    }
+
+    #[test]
+    fn duration_framework_type_json_round_trips() {
+        // The Duration framework type (timed-cpu-delay-and-sleep construct)
+        // serializes by its pinned discriminant and round-trips, both bare and
+        // wrapped in an `AttrData::FrameworkType` marker.
+        assert_json_round_trip(FrameworkType::Duration);
+        assert_json_round_trip(AttrData::FrameworkType(FrameworkType::Duration));
+        // Wrapping it leaves the `FrameworkType` AttrData variant at 1...
+        assert_eq!(
+            attr_data_tag(&AttrData::FrameworkType(FrameworkType::Duration)),
+            1
+        );
+        // ...and does not shift Intrinsic off discriminant 0.
+        assert_eq!(attr_data_tag(&attr(LogLevel::Debug)), 0);
     }
 
     #[test]

@@ -960,6 +960,8 @@ fn seam_cx_and_body(m: &RegseqModel, dst_ty: TyId) -> (super::body::LowerCx<'_>,
         },
         width8_used: false,
         uses_pr: false,
+        uses_delay_busy: false,
+        uses_delay_sleep: false,
         elided_locals: std::collections::BTreeSet::new(),
     };
     let body = Body::default();
@@ -2244,4 +2246,39 @@ fn pci_shutdown_slot_is_omit_when_absent() {
         !without.contains(".shutdown"),
         "the .shutdown initializer must be omitted when on_system_shutdown is not overridden"
     );
+}
+
+#[test]
+fn delay_helpers_select_linux_bands_and_round_up() {
+    // Timed-cpu-delay-and-sleep (TCD construct, M2/T08): the busy_wait helper
+    // selects the atomic-safe *delay family by runtime magnitude
+    // (ndelay <1us / udelay <1ms / mdelay >=1ms) and rounds every conversion
+    // UP (minimum-wait, R06); sleep is msleep-only (D09).
+    let h = super::body::delay_helpers(true, true);
+    assert!(h.contains("static void regseq_linux_busy_wait_ns(uint64_t ns)"));
+    // The three magnitude bands at the spec-pinned boundaries.
+    assert!(h.contains("ns < 1000ULL"), "ndelay band cutoff: {h}");
+    assert!(h.contains("ndelay((unsigned long)ns)"), "ndelay arm: {h}");
+    assert!(h.contains("ns < 1000000ULL"), "udelay band cutoff: {h}");
+    // Overflow-safe round-UP ceilings (the naive `ns + scale-1` overflows near
+    // Duration::MAX = u64::MAX).
+    assert!(
+        h.contains("udelay((unsigned long)(1ULL + (ns - 1ULL) / 1000ULL))"),
+        "udelay round-up: {h}"
+    );
+    assert!(
+        h.contains("mdelay((unsigned long)(1ULL + (ns - 1ULL) / 1000000ULL))"),
+        "mdelay round-up: {h}"
+    );
+    // sleep: msleep-only, round up to ms, ns==0 guard.
+    assert!(h.contains("static void regseq_linux_sleep_ns(uint64_t ns)"));
+    assert!(
+        h.contains("msleep((unsigned int)(ns == 0ULL ? 0ULL : 1ULL + (ns - 1ULL) / 1000000ULL))"),
+        "msleep round-up: {h}"
+    );
+    // Demand-precise: each helper is emitted only when its kind is present.
+    let busy_only = super::body::delay_helpers(true, false);
+    assert!(busy_only.contains("busy_wait_ns") && !busy_only.contains("sleep_ns"));
+    let sleep_only = super::body::delay_helpers(false, true);
+    assert!(sleep_only.contains("sleep_ns") && !sleep_only.contains("busy_wait_ns"));
 }

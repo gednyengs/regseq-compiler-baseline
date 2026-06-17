@@ -275,6 +275,8 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         },
         width8_used: false,
         uses_pr: false,
+        uses_delay_busy: false,
+        uses_delay_sleep: false,
         elided_locals: std::collections::BTreeSet::new(),
     };
     let callbacks = [
@@ -443,6 +445,12 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     tu.push_str(&type_defs);
     tu.push('\n');
     tu.push_str(&scaffold.container);
+    // Timed-cpu-delay-and-sleep lowering helpers (TCD construct, M2/T08),
+    // injected before the bodies that call them, gated on the demand flags the
+    // body lowering set when a busy_wait/sleep was emitted.
+    if cx.uses_delay_busy || cx.uses_delay_sleep {
+        tu.push_str(&body::delay_helpers(cx.uses_delay_busy, cx.uses_delay_sleep));
+    }
     tu.push_str(&bodies);
     tu.push_str(&scaffold.text);
     tu.push('\n');

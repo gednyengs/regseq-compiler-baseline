@@ -91,6 +91,12 @@ fn intrinsic_kind_for_name(name: &str) -> Option<IntrinsicKind> {
         // Bus config-space intrinsics (bus-resource-management construct #3 M5).
         "read_config" => Some(IntrinsicKind::Config(ConfigOp::Read)),
         "write_config" => Some(IntrinsicKind::Config(ConfigOp::Write)),
+        // Timed-CPU-delay-and-sleep intrinsics (timed-cpu-delay-and-sleep
+        // construct): the `regseq::delay::{busy_wait,sleep}` facade, whose
+        // re-exports resolve to the attributed `intrinsics::timed_delay::*`
+        // originals.
+        "busy_wait" => Some(IntrinsicKind::BusyWait),
+        "sleep" => Some(IntrinsicKind::Sleep),
         _ => None,
     }
 }
@@ -122,6 +128,11 @@ fn fn_name_matches_kind(name: &str, kind: &IntrinsicKind) -> bool {
             (name, op),
             ("read_config", ConfigOp::Read) | ("write_config", ConfigOp::Write)
         ),
+        // The `regseq::delay::{busy_wait,sleep}` free functions
+        // (timed-cpu-delay-and-sleep construct); the `#[rseq::intrinsic]`
+        // attribute is the authority, the name a redundant gate.
+        IntrinsicKind::BusyWait => name == "busy_wait",
+        IntrinsicKind::Sleep => name == "sleep",
     }
 }
 
@@ -207,6 +218,37 @@ mod tests {
                 vec![AttrData::Intrinsic(kind)]
             );
         }
+    }
+
+    #[test]
+    fn recognises_timed_delay_intrinsics() {
+        // Timed-cpu-delay-and-sleep construct: the `regseq::delay::busy_wait`/
+        // `sleep` facade functions map to `IntrinsicKind::BusyWait`/`Sleep`,
+        // and the redundant fn-name gate accepts their leaf names (the
+        // re-export resolves to the attributed original, leaf `busy_wait` /
+        // `sleep`).
+        for (leaf, kind) in [
+            ("busy_wait", IntrinsicKind::BusyWait),
+            ("sleep", IntrinsicKind::Sleep),
+        ] {
+            assert_eq!(intrinsic_kind_for_name(leaf), Some(kind.clone()));
+            let mut model = model_with_item_attrs(1);
+            let def_path = def_path(&mut model, leaf);
+            assert!(callee_name_matches_kind(&model, &def_path, &kind));
+            record_intrinsic(&mut model, ItemId::from_u32(0), kind.clone());
+            assert_eq!(
+                model.domain_attrs.item_attrs[ItemId::from_u32(0)],
+                vec![AttrData::Intrinsic(kind)]
+            );
+        }
+        // A mismatched leaf name is rejected by the redundant gate.
+        let mut model = model_with_item_attrs(1);
+        let dp = def_path(&mut model, "sleep");
+        assert!(!callee_name_matches_kind(
+            &model,
+            &dp,
+            &IntrinsicKind::BusyWait
+        ));
     }
 
     #[test]

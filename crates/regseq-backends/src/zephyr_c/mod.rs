@@ -466,6 +466,8 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         },
         width8_used: false,
         uses_log: false,
+        uses_delay_busy: false,
+        uses_delay_sleep: false,
         elided_locals: std::collections::BTreeSet::new(),
     };
 
@@ -552,6 +554,8 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
             },
             width8_used: false,
             uses_log: false,
+            uses_delay_busy: false,
+            uses_delay_sleep: false,
             elided_locals: std::collections::BTreeSet::new(),
         };
         // Seed fn_symbols for the WHOLE absent closure before fn_head/emit_fn
@@ -1812,6 +1816,12 @@ fn emit_tu(
         );
     }
 
+    // Timed-cpu-delay-and-sleep lowering helpers (TCD construct, M2/T09),
+    // injected before the bodies that call them, gated on the demand flags the
+    // body lowering set when a busy_wait/sleep was emitted.
+    if cx.uses_delay_busy || cx.uses_delay_sleep {
+        tu.push_str(&body::delay_helpers(cx.uses_delay_busy, cx.uses_delay_sleep));
+    }
     // §1 items 5-7: lowered helper/callback bodies, then the init function
     // — the one runtime dispatch hub (§3).
     tu.push_str(bodies);

@@ -10,7 +10,11 @@
 //!   - a multiply-annotated enum is rejected (recognizer returns None);
 //!   - a wrong-string annotation is rejected;
 //!   - a model containing a synthetic Item (closure captures struct)
-//!     is processed without panic or mis-attribution.
+//!     is processed without panic or mis-attribution;
+//!   - a marked STRUCT (`#[rseq::framework_type("duration")]`,
+//!     timed-cpu-delay-and-sleep construct) is recognized just like a
+//!     marked enum — the materialization pass accepts both item kinds —
+//!     and an unmarked struct carries no marker.
 
 #![feature(rustc_private)]
 
@@ -25,7 +29,7 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use regseq_driver::bridge::{run_bridge, BridgeInput};
-use regseq_model::{AttrData, DefPathData, FrameworkType, ItemId, ItemKind, RegseqModel};
+use regseq_model::{AttrData, DefPathData, FrameworkType, ItemId, RegseqModel};
 use rustc_middle::ty::TyCtxt;
 
 static INIT: Once = Once::new();
@@ -180,6 +184,29 @@ pub fn returns_error() -> DriverError {
     loop {}
 }
 
+// A marked STRUCT (timed-cpu-delay-and-sleep `Duration`). Unlike the
+// enum framework types above, this exercises the struct arm of the
+// materialization pass. It appears only as a return type, mirroring
+// `DriverError`, so recognition is proven to be item/type-driven.
+#[rseq::framework_type("duration")]
+pub struct Duration {
+    ns: u64,
+}
+
+pub fn returns_duration() -> Duration {
+    loop {}
+}
+
+// An unmarked struct: the materialization pass now walks structs too,
+// so this must NOT pick up a marker.
+pub struct UnmarkedStruct {
+    field: u64,
+}
+
+pub fn returns_unmarked_struct() -> UnmarkedStruct {
+    loop {}
+}
+
 // Forces a synthetic closure-captures Item into the model so the
 // materialisation pass is exercised against a model that contains
 // synthetic Items.
@@ -191,18 +218,19 @@ pub fn use_closure() -> u32 {
 pub fn entry() {}
 "#;
 
-/// Count the `AttrData::FrameworkType(RegseqError)` markers on the enum
-/// Item whose terminal def-path segment is `leaf`.
-fn framework_type_markers(model: &RegseqModel, leaf: &str) -> usize {
+/// Count the `AttrData::FrameworkType(expected)` markers on the type
+/// Item (enum OR struct) whose terminal def-path segment is `leaf`.
+///
+/// The kind is intentionally not filtered: enum framework types
+/// (`RegseqError`/`IrqResult`) and the struct framework type
+/// (`Duration`) both name their type in `TypeNs`, and the materialization
+/// pass accepts both. Function names live in `ValueNs`, so the `TypeNs`
+/// filter still excludes them.
+fn framework_type_markers(model: &RegseqModel, leaf: &str, expected: FrameworkType) -> usize {
     let Some((idx, _)) = model.items.iter().enumerate().find(|(_, item)| {
-        if item.kind != ItemKind::Enum {
-            return false;
-        }
         let Some(segment) = item.def_path.segments.last() else {
             return false;
         };
-        // Enum type names live in the type namespace (`TypeNs`), unlike
-        // the function names the diag-log recognizer matches (`ValueNs`).
         let DefPathData::TypeNs(name) = segment.data else {
             return false;
         };
@@ -212,7 +240,7 @@ fn framework_type_markers(model: &RegseqModel, leaf: &str) -> usize {
     };
     model.domain_attrs.item_attrs[ItemId::from_u32(idx as u32)]
         .iter()
-        .filter(|attr| matches!(attr, AttrData::FrameworkType(FrameworkType::RegseqError)))
+        .filter(|attr| matches!(attr, AttrData::FrameworkType(ty) if *ty == expected))
         .count()
 }
 
@@ -231,7 +259,7 @@ fn total_framework_type_markers(model: &RegseqModel) -> usize {
 #[test]
 fn marked_return_type_only_enum_is_recognized() {
     let count = with_model("fwtype_marked", SOURCE, |model| {
-        framework_type_markers(model, "DriverError")
+        framework_type_markers(model, "DriverError", FrameworkType::RegseqError)
     });
     assert_eq!(count, 1, "the marked enum carries exactly one marker");
 }
@@ -239,7 +267,7 @@ fn marked_return_type_only_enum_is_recognized() {
 #[test]
 fn unmarked_enum_carries_no_marker() {
     let count = with_model("fwtype_unmarked", SOURCE, |model| {
-        framework_type_markers(model, "Unmarked")
+        framework_type_markers(model, "Unmarked", FrameworkType::RegseqError)
     });
     assert_eq!(count, 0);
 }
@@ -247,7 +275,7 @@ fn unmarked_enum_carries_no_marker() {
 #[test]
 fn doubly_annotated_enum_is_rejected() {
     let count = with_model("fwtype_doubled", SOURCE, |model| {
-        framework_type_markers(model, "DoublyMarked")
+        framework_type_markers(model, "DoublyMarked", FrameworkType::RegseqError)
     });
     assert_eq!(count, 0, "multiple framework_type attrs => None");
 }
@@ -255,7 +283,7 @@ fn doubly_annotated_enum_is_rejected() {
 #[test]
 fn wrong_string_enum_is_rejected() {
     let count = with_model("fwtype_wrong", SOURCE, |model| {
-        framework_type_markers(model, "WrongString")
+        framework_type_markers(model, "WrongString", FrameworkType::RegseqError)
     });
     assert_eq!(count, 0);
 }
@@ -263,16 +291,38 @@ fn wrong_string_enum_is_rejected() {
 #[test]
 fn typo_string_enum_is_rejected() {
     let count = with_model("fwtype_typo", SOURCE, |model| {
-        framework_type_markers(model, "Typo")
+        framework_type_markers(model, "Typo", FrameworkType::RegseqError)
     });
     assert_eq!(count, 0, "underscore typo => None");
 }
 
 #[test]
-fn marker_lands_on_exactly_one_item() {
-    // The only recognized enum in the fixture is `DriverError`, so the
-    // whole-model marker count must be exactly one: the pass tolerates
-    // the synthetic closure-captures Item without mis-attributing.
+fn marked_return_type_only_struct_is_recognized() {
+    // The struct arm of the materialization pass: a `Duration` struct
+    // marked `#[rseq::framework_type("duration")]`, appearing only as a
+    // return type, still receives exactly one `FrameworkType::Duration`
+    // marker (timed-cpu-delay-and-sleep construct). This is the channel
+    // by which backends later identify a Duration operand.
+    let count = with_model("fwtype_struct_marked", SOURCE, |model| {
+        framework_type_markers(model, "Duration", FrameworkType::Duration)
+    });
+    assert_eq!(count, 1, "the marked struct carries exactly one marker");
+}
+
+#[test]
+fn unmarked_struct_carries_no_marker() {
+    let count = with_model("fwtype_struct_unmarked", SOURCE, |model| {
+        framework_type_markers(model, "UnmarkedStruct", FrameworkType::Duration)
+    });
+    assert_eq!(count, 0, "an unmarked struct is never attributed");
+}
+
+#[test]
+fn markers_land_on_exactly_the_recognized_items() {
+    // Exactly two items are recognized across the whole model: the marked
+    // enum `DriverError` (RegseqError) and the marked struct `Duration`
+    // (Duration). The unmarked/doubly/wrong/typo enums, the unmarked
+    // struct, and the synthetic closure-captures Item all carry none.
     let total = with_model("fwtype_total", SOURCE, total_framework_type_markers);
-    assert_eq!(total, 1);
+    assert_eq!(total, 2);
 }

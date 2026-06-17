@@ -328,6 +328,14 @@ fn emit_generic_c_inner(
     {
         out.push_str(prelude::BUS_RESOURCE_HELPERS);
     }
+    // Timed-cpu-delay-and-sleep host fake-clock hooks (TCD construct, C06/D08):
+    // the extern declarations the `busy_wait`/`sleep` lowering calls. Emitted
+    // only for a TU that uses a delay intrinsic so a delay-less TU's `.c` is
+    // byte-unchanged (no golden churn). The recording implementation is linked
+    // by the test harness, NOT defined here.
+    if body_emit::model_has_delay_intrinsic(model) {
+        out.push_str(prelude::DELAY_HOOKS);
+    }
     out.push_str(&bank2);
     out.push_str(&bank3);
     out.push_str(&bank4);

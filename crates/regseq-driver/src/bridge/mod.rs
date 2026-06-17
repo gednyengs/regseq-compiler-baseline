@@ -29,6 +29,7 @@ pub(crate) mod intrinsic;
 mod opaque_handle;
 mod sort;
 pub mod synth;
+mod timed_delay;
 pub mod ty;
 
 pub use const_::ConstMemoryStaticHandle;
@@ -645,6 +646,11 @@ pub enum BridgeError {
     /// A device-interrupt frontend check failed (construct #6, contract C06).
     #[error("device-interrupt validation: {0}")]
     InterruptValidation(InterruptDiagnostic),
+
+    /// A timed-cpu-delay-and-sleep frontend check failed (TCD construct,
+    /// contracts C03/C05).
+    #[error("timed-cpu-delay-and-sleep validation: {0}")]
+    TimedCpuDelayValidation(TimedCpuDelayDiagnostic),
 }
 
 /// Per-construct device-lifecycle validation diagnostics (PLAN T16; GRILL I09;
@@ -801,6 +807,52 @@ pub enum InterruptDiagnostic {
     DriverCallableLineControl {
         /// The offending method name.
         method: String,
+    },
+}
+
+/// Per-construct timed-cpu-delay-and-sleep (TCD) frontend diagnostics (GRILL
+/// C03/C05/D11). Carried by [`BridgeError::TimedCpuDelayValidation`].
+///
+/// The first slice mints `TCD-ERR-02` (intrinsic argument-type mismatch). It is
+/// largely subsumed by Rust's own typechecking of the typed
+/// `regseq::delay::{busy_wait,sleep}` facade (a mistyped *call* fails before
+/// the bridge runs); the residual reachable case this catches is a
+/// **mis-declared** facade — a function tagged `#[rseq::intrinsic("busy_wait"/
+/// "sleep")]` whose parameter is not a `Duration` — mirroring device-interrupt's
+/// `IRQ-ERR-ISR-SIGNATURE`. `TCD-ERR-01` (sleep-in-IRQ-context, C05) is minted
+/// here when the frontend context check lands (M3/T10).
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum TimedCpuDelayDiagnostic {
+    /// `TCD-ERR-01`: a sleeping intrinsic (`regseq::delay::sleep`) called within
+    /// the marked IRQ-context region (the `#[rseq::isr]` handler body, D05
+    /// phase-1). The message is the **verbatim** GRILL C05 format; the
+    /// reject-fixture test matches it exactly. `busy_wait` is never rejected on
+    /// context grounds (I07).
+    #[error(
+        "TCD / Timed CPU Delay And Sleep: '{intrinsic}' is not legal in IRQ context \
+         (call site reachable from {context_kind} per the callback-context model); \
+         use 'regseq::delay::busy_wait' instead"
+    )]
+    SleepInIsr {
+        /// The sleeping intrinsic's facade path (`regseq::delay::sleep`).
+        intrinsic: String,
+        /// The context-marking source token the call site is reachable from
+        /// (`rseq::isr`), matching the device-interrupt marking's public shape.
+        context_kind: String,
+    },
+    /// `TCD-ERR-02`: a recognized `busy_wait`/`sleep` intrinsic facade whose
+    /// signature is not the contractual single by-value `regseq::Duration`
+    /// argument (R13/D11; C03).
+    #[error(
+        "TCD-ERR-02 / Timed CPU Delay And Sleep: timed-delay intrinsic `{intrinsic}` must take \
+         exactly one by-value `regseq::Duration` argument ({detail})"
+    )]
+    ArgTypeMismatch {
+        /// The offending intrinsic's facade path (`regseq::delay::busy_wait`
+        /// or `regseq::delay::sleep`).
+        intrinsic: String,
+        /// What is wrong with the declared signature.
+        detail: String,
     },
 }
 
@@ -1988,6 +2040,12 @@ fn construct_instances_and_resolve_cross_references(
     // has materialized their bodies — record the `AttrData::IsrBinding`
     // markers and compute the `IrqResult` arm-reachability facts.
     interrupt::finalise_isrs(ctxt, pending_isr_attrs)?;
+    // Timed-cpu-delay-and-sleep frontend context legality (TCD construct,
+    // C05/D05): reject a `sleep` intrinsic call lexically within a marked
+    // `#[rseq::isr]` handler body. Runs last — after the handler bodies are
+    // materialized AND `finalise_isrs` has recorded the `IsrBinding` markers
+    // this pass consults.
+    timed_delay::validate_isr_no_sleep(&ctxt.model)?;
     Ok(())
 }
 

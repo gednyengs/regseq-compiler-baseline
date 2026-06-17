@@ -51,6 +51,14 @@ pub(crate) struct LowerCx<'m> {
     /// Whether any `LOG_*` call was lowered (the TU then carries the
     /// demand-driven log-module block, scaffold §1 item 2).
     pub uses_log: bool,
+    /// Whether a `busy_wait` intrinsic was lowered (timed-cpu-delay-and-sleep
+    /// construct): the TU then carries the `regseq_zephyr_busy_wait_ns`
+    /// (k_busy_wait, round up to us) helper + `<zephyr/kernel.h>`.
+    pub uses_delay_busy: bool,
+    /// Whether a `sleep` intrinsic was lowered: the TU then carries the
+    /// `regseq_zephyr_sleep_ns` (k_msleep, round up to ms) helper +
+    /// `<zephyr/kernel.h>`.
+    pub uses_delay_sleep: bool,
     /// Per-function: locals holding elided trivial-accessor results.
     pub elided_locals: std::collections::BTreeSet<LocalId>,
 }
@@ -691,6 +699,16 @@ fn emit_call(
             IntrinsicKind::Config(op) => {
                 cx.emit_config(op, *instance, body, args, destination, out)
             }
+            // Timed-CPU-delay-and-sleep lowering (timed-cpu-delay-and-sleep
+            // construct, C04/D09). `busy_wait` lowers to the
+            // `regseq_zephyr_busy_wait_ns` helper (`k_busy_wait(us)`, round ns
+            // up to us); `sleep` to `regseq_zephyr_sleep_ns` (`k_msleep(ms)`,
+            // round ns up to ms — the kernel further rounds to the tick floor).
+            // Zephyr needs no magnitude bands (k_busy_wait always takes us), so
+            // the helper is just the overflow-safe ns->unit round-up.
+            IntrinsicKind::BusyWait | IntrinsicKind::Sleep => {
+                emit_delay(cx, kind, *instance, body, args, out)
+            }
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {
@@ -758,6 +776,74 @@ fn operand_expr(
     op: &Operand,
 ) -> Result<String, EmitError> {
     operand_expr_typed(cx, body, op, None)
+}
+
+/// Timed-cpu-delay-and-sleep lowering (TCD construct): lower a `busy_wait`/
+/// `sleep` Call to a call to the per-TU helper carrying the `Duration`
+/// argument's u64 nanoseconds (`regseq_zephyr_busy_wait_ns` /
+/// `regseq_zephyr_sleep_ns`). The `Duration` type comes from the callee's
+/// first PARAMETER, and its sole field name is recovered from the layout.
+/// Records the `<zephyr/kernel.h>` include and the `uses_delay_*` demand flags.
+fn emit_delay(
+    cx: &mut LowerCx<'_>,
+    kind: IntrinsicKind,
+    instance: InstanceId,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    out: &mut String,
+) -> Result<(), EmitError> {
+    let arg = args.first().ok_or_else(|| {
+        EmitError::Unsupported("delay intrinsic call without a Duration argument".into())
+    })?;
+    let param_tys: Vec<TyId> = match &cx.model.instances[instance].kind {
+        InstanceKind::Function(d) => cx.model.sigs.resolve(d.fn_sig).inputs.clone(),
+        _ => Vec::new(),
+    };
+    let duration_ty = param_tys.first().copied().ok_or_else(|| {
+        EmitError::Unsupported("delay intrinsic callee has no Duration parameter type".into())
+    })?;
+    let field = field_c_name(cx.model, duration_ty, 0)?;
+    let dur_expr = operand_expr_typed(cx, body, arg, Some(duration_ty))?;
+    let ns = format!("(uint64_t)({dur_expr}).{field}");
+    cx.extra_includes.insert("<zephyr/kernel.h>");
+    let helper = if matches!(kind, IntrinsicKind::Sleep) {
+        cx.uses_delay_sleep = true;
+        "regseq_zephyr_sleep_ns"
+    } else {
+        cx.uses_delay_busy = true;
+        "regseq_zephyr_busy_wait_ns"
+    };
+    out.push_str(&format!("\t{helper}({ns});\n"));
+    Ok(())
+}
+
+/// The timed-cpu-delay-and-sleep lowering helpers (TCD construct), emitted into
+/// the TU before the bodies that call them (gated on `uses_delay_*`).
+///
+/// `regseq_zephyr_busy_wait_ns` rounds the ns request UP to microseconds and
+/// calls `k_busy_wait(us)` (atomic-safe spin; no magnitude bands — k_busy_wait
+/// always takes us). `regseq_zephyr_sleep_ns` rounds UP to milliseconds and
+/// calls `k_msleep(ms)` (the kernel further rounds to the tick floor). Both
+/// preserve the minimum-wait guarantee (R06) via the overflow-safe
+/// `ns == 0 ? 0 : 1 + (ns-1)/scale` ceiling. The us/ms casts assume the
+/// duration fits the kernel primitive's argument width (`k_busy_wait`'s
+/// `uint32_t`, `k_msleep`'s `int32_t`) — true for any real driver delay.
+pub(crate) fn delay_helpers(busy: bool, sleep: bool) -> String {
+    let mut s = String::new();
+    s.push_str("/* timed-cpu-delay-and-sleep (TCD construct) lowering helpers. */\n");
+    if busy {
+        s.push_str(
+            "static void regseq_zephyr_busy_wait_ns(uint64_t ns)\n{\n\
+             \tk_busy_wait((uint32_t)(ns == 0ULL ? 0ULL : 1ULL + (ns - 1ULL) / 1000ULL));\n}\n\n",
+        );
+    }
+    if sleep {
+        s.push_str(
+            "static void regseq_zephyr_sleep_ns(uint64_t ns)\n{\n\
+             \tk_msleep((int32_t)(ns == 0ULL ? 0ULL : 1ULL + (ns - 1ULL) / 1000000ULL));\n}\n\n",
+        );
+    }
+    s
 }
 
 /// Render a constant as a C expression.

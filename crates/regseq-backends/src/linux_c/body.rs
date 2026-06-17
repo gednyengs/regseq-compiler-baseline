@@ -38,6 +38,13 @@ pub(crate) struct LowerCx<'m> {
     /// Whether any `pr_*` call was lowered (the TU then carries the
     /// `pr_fmt` module-prefix define + <linux/printk.h>).
     pub uses_pr: bool,
+    /// Whether a `busy_wait` intrinsic was lowered (timed-cpu-delay-and-sleep
+    /// construct): the TU then carries the `regseq_linux_busy_wait_ns`
+    /// magnitude-dispatch helper + `<linux/delay.h>`.
+    pub uses_delay_busy: bool,
+    /// Whether a `sleep` intrinsic was lowered: the TU then carries the
+    /// `regseq_linux_sleep_ns` (msleep-only) helper + `<linux/delay.h>`.
+    pub uses_delay_sleep: bool,
     /// Per-function: locals holding elided trivial-accessor results.
     pub elided_locals: std::collections::BTreeSet<LocalId>,
 }
@@ -682,6 +689,21 @@ fn emit_call(
                     out,
                 )
             }
+            // Timed-CPU-delay-and-sleep lowering (timed-cpu-delay-and-sleep
+            // construct, C04/D04/D09). `busy_wait` lowers to the
+            // `regseq_linux_busy_wait_ns` magnitude-dispatch helper
+            // (ndelay/udelay/mdelay by runtime magnitude, round up); `sleep`
+            // to the `regseq_linux_sleep_ns` helper (msleep-only, round up to
+            // ms). The helper is used for ALL durations because `Duration`
+            // reaches the call as a value-ref ns expression — the magnitude is
+            // never a compile-time constant in this compiler — so C04's
+            // const-static-primitive form collapses into the runtime arm
+            // uniformly; the minimum-wait guarantee (R06) holds via the helper's
+            // round-up. The helper definitions are injected once per TU
+            // (`emit_linux_c`, gated on `uses_delay_*`).
+            IntrinsicKind::BusyWait | IntrinsicKind::Sleep => {
+                emit_delay(cx, kind, *instance, body, args, out)
+            }
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {
@@ -780,6 +802,82 @@ fn operand_expr(
     op: &Operand,
 ) -> Result<String, EmitError> {
     operand_expr_typed(cx, body, op, None)
+}
+
+/// Timed-cpu-delay-and-sleep lowering (TCD construct): lower a `busy_wait`/
+/// `sleep` Call to a call to the per-TU helper carrying the `Duration`
+/// argument's u64 nanoseconds (`regseq_linux_busy_wait_ns` /
+/// `regseq_linux_sleep_ns`). The `Duration` type comes from the callee's first
+/// PARAMETER (known for both const and value-ref operands), and its sole field
+/// (`ns`) name is recovered from the layout rather than hard-coded. Records the
+/// `<linux/delay.h>` include and the `uses_delay_*` demand flags the TU
+/// assembly consults to inject the helper definitions.
+fn emit_delay(
+    cx: &mut LowerCx<'_>,
+    kind: IntrinsicKind,
+    instance: InstanceId,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    out: &mut String,
+) -> Result<(), EmitError> {
+    let arg = args.first().ok_or_else(|| {
+        EmitError::Unsupported("delay intrinsic call without a Duration argument".into())
+    })?;
+    let param_tys: Vec<TyId> = match &cx.model.instances[instance].kind {
+        InstanceKind::Function(d) => cx.model.sigs.resolve(d.fn_sig).inputs.clone(),
+        _ => Vec::new(),
+    };
+    let duration_ty = param_tys.first().copied().ok_or_else(|| {
+        EmitError::Unsupported("delay intrinsic callee has no Duration parameter type".into())
+    })?;
+    let field = field_c_name(cx.model, duration_ty, 0)?;
+    let dur_expr = operand_expr_typed(cx, body, arg, Some(duration_ty))?;
+    let ns = format!("(uint64_t)({dur_expr}).{field}");
+    cx.extra_includes.insert("<linux/delay.h>");
+    let helper = if matches!(kind, IntrinsicKind::Sleep) {
+        cx.uses_delay_sleep = true;
+        "regseq_linux_sleep_ns"
+    } else {
+        cx.uses_delay_busy = true;
+        "regseq_linux_busy_wait_ns"
+    };
+    out.push_str(&format!("\t{helper}({ns});\n"));
+    Ok(())
+}
+
+/// The timed-cpu-delay-and-sleep lowering helpers (TCD construct), emitted into
+/// the TU before the bodies that call them (gated on `uses_delay_*`).
+///
+/// `regseq_linux_busy_wait_ns` selects the atomic-safe `*delay` family by the
+/// runtime ns magnitude (ndelay <1us / udelay <1ms / mdelay >=1ms), rounding
+/// every unit conversion UP so the wait is never shorter than requested (R06).
+/// `regseq_linux_sleep_ns` is msleep-only (D09). The ceilings use the
+/// overflow-safe `1 + (ns-1)/scale` idiom (the naive `ns + scale-1` overflows
+/// near `Duration::MAX = u64::MAX`); the ndelay arm needs no guard (it takes ns
+/// directly) and the udelay/mdelay arms only run when `ns >= 1000`, so `ns - 1`
+/// never underflows. The ms/us casts assume the duration fits the kernel
+/// primitive's argument width (`msleep`'s `unsigned int`) — true for any real
+/// driver delay (the corpus tops out at a 4 s settle).
+pub(crate) fn delay_helpers(busy: bool, sleep: bool) -> String {
+    let mut s = String::new();
+    s.push_str(
+        "/* timed-cpu-delay-and-sleep (TCD construct) lowering helpers. */\n",
+    );
+    if busy {
+        s.push_str(
+            "static void regseq_linux_busy_wait_ns(uint64_t ns)\n{\n\
+             \tif (ns < 1000ULL)\n\t\tndelay((unsigned long)ns);\n\
+             \telse if (ns < 1000000ULL)\n\t\tudelay((unsigned long)(1ULL + (ns - 1ULL) / 1000ULL));\n\
+             \telse\n\t\tmdelay((unsigned long)(1ULL + (ns - 1ULL) / 1000000ULL));\n}\n\n",
+        );
+    }
+    if sleep {
+        s.push_str(
+            "static void regseq_linux_sleep_ns(uint64_t ns)\n{\n\
+             \tmsleep((unsigned int)(ns == 0ULL ? 0ULL : 1ULL + (ns - 1ULL) / 1000000ULL));\n}\n\n",
+        );
+    }
+    s
 }
 
 /// Render a constant as a C expression.

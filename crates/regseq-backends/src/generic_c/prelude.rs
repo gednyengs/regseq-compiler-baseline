@@ -400,6 +400,26 @@ __attribute__((unused)) static void regseq_bus_on_config_write(uint32_t off, uin
 }
 "#;
 
+/// Timed-cpu-delay-and-sleep host fake-clock hooks (TCD construct, C06/D08): the
+/// extern DECLARATIONS the `busy_wait`/`sleep` lowering (`emit_delay`) calls,
+/// emitted only for a TU that uses a delay intrinsic. Unlike the other host
+/// blocks above, this declares but does NOT define the hooks: the recording
+/// implementation (append `{kind, ns, seq}` to an event log and advance a
+/// VIRTUAL clock — no real time passes) is linked by the test harness, so the
+/// same emitted TU is host-faithfully observable without baking the fake clock
+/// into compiler output (the T05/T06 split). Intent is preserved as hook
+/// identity: a `busy_wait` only ever calls `regseq_delay_busy_wait_ns`, a
+/// `sleep` only `regseq_delay_sleep_ns` (I04).
+pub const DELAY_HOOKS: &str = r#"
+/* ---------------------------------------------------------------------------
+ * Timed-cpu-delay-and-sleep host fake-clock hooks (TCD construct). DECLARATIONS
+ * only; the recording implementation is linked by the test harness (C06/D08).
+ * `busy_wait` lowers to regseq_delay_busy_wait_ns, `sleep` to
+ * regseq_delay_sleep_ns -- the hook identity preserves author intent (I04). */
+extern void regseq_delay_busy_wait_ns(uint64_t ns);
+extern void regseq_delay_sleep_ns(uint64_t ns);
+"#;
+
 /// `(c_type, min_expr, max_expr)` for every primitive integer type in the
 /// fixed helper set (section 10 / section 11). The order is fixed so the
 /// emitted block is byte-stable. The 128-bit bounds reference the

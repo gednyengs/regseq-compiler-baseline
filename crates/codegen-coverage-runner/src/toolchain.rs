@@ -79,6 +79,54 @@ pub use regseq_backends::{generate_main_c, EntryShim};
 /// `cargo-regseq`'s linker).
 pub use regseq_config::CC_FLAGS;
 
+/// Record-only fake-clock implementation of the timed-cpu-delay-and-sleep host
+/// hooks (TCD construct, contract C06 / GRILL D08).
+///
+/// The backend emits only the extern DECLARATIONS + CALLS (see
+/// `generic_c::prelude::DELAY_HOOKS` / `emit_delay`); this harness owns the
+/// IMPLEMENTATION, so the fake clock is never baked into compiler output (the
+/// T05/T06 split). It is linked beside the emitted TU only when the TU
+/// references the hooks (a delay intrinsic was lowered).
+///
+/// Each hook records an ordered `{kind, ns, seq}` event by printing it at call
+/// time — so the events interleave with the `regseq_mmio_*` / IRQ trace by
+/// execution order, making "settle is after the reset write, before the
+/// restore" directly observable — and advances a VIRTUAL clock by `ns`. No real
+/// time passes. The stdout stream IS the event log; tests diff it against
+/// `expected.stdout`. Hook identity preserves author intent (`busy_wait`
+/// vs `sleep`), so the oracle proves the compiler never silently converts one
+/// to the other (I04).
+const DELAY_HARNESS_C: &str = r#"/* Timed-cpu-delay-and-sleep host fake clock (TCD construct, C06/D08).
+ * Harness-linked record-only implementation; no real time passes. */
+#include <stdint.h>
+#include <stdio.h>
+
+static uint64_t regseq_delay_clock_ns = 0;
+static uint64_t regseq_delay_seq = 0;
+
+void regseq_delay_busy_wait_ns(uint64_t ns) {
+    regseq_delay_clock_ns += ns;
+    printf("DELAY busy_wait ns=%llu seq=%llu t=%lluns\n",
+           (unsigned long long)ns,
+           (unsigned long long)regseq_delay_seq++,
+           (unsigned long long)regseq_delay_clock_ns);
+}
+
+void regseq_delay_sleep_ns(uint64_t ns) {
+    regseq_delay_clock_ns += ns;
+    printf("DELAY sleep ns=%llu seq=%llu t=%lluns\n",
+           (unsigned long long)ns,
+           (unsigned long long)regseq_delay_seq++,
+           (unsigned long long)regseq_delay_clock_ns);
+}
+"#;
+
+/// Whether the emitted TU references the timed-delay host hooks (i.e. a delay
+/// intrinsic was lowered), gating whether [`DELAY_HARNESS_C`] is linked.
+fn tu_uses_delay_hooks(tu_c: &str) -> bool {
+    tu_c.contains("regseq_delay_busy_wait_ns") || tu_c.contains("regseq_delay_sleep_ns")
+}
+
 /// Compile `tu_c` together with the generated `main.c` for the backend-resolved
 /// `shim` using the pinned flags, run the linked binary in a hermetic temp dir,
 /// and capture stdout / stderr / exit code.
@@ -100,13 +148,23 @@ pub fn compile_and_run(
     std::fs::write(&tu_path, tu_c)?;
     std::fs::write(&main_path, generate_main_c(shim))?;
 
-    let compile = Command::new(cc)
+    let mut compile = Command::new(cc);
+    compile
         .args(CC_FLAGS)
         .arg("-o")
         .arg(&bin_path)
         .arg(&tu_path)
-        .arg(&main_path)
-        .output()?;
+        .arg(&main_path);
+    // Timed-cpu-delay-and-sleep (TCD construct, C06/D08): when the TU lowered a
+    // delay intrinsic it references the extern delay hooks, so link the
+    // harness-owned record-only fake-clock implementation. Skipped otherwise so
+    // a delay-free fixture's build is unchanged.
+    let delay_path = dir.join("regseq_delay_harness.c");
+    if tu_uses_delay_hooks(tu_c) {
+        std::fs::write(&delay_path, DELAY_HARNESS_C)?;
+        compile.arg(&delay_path);
+    }
+    let compile = compile.output()?;
     if !compile.status.success() {
         return Err(ToolchainError::CompileFailed {
             stderr: String::from_utf8_lossy(&compile.stderr).into_owned(),
