@@ -97,16 +97,29 @@ its `ATOMIC-ERR-*` ID):
 | `ATOMIC-ERR-FENCE-RELAXED` | `atomic::fence(Relaxed)` | ✅ |
 | `ATOMIC-ERR-ORDERING-NONCONST` | a non-compile-time-constant `Ordering` arg (D14, O4) | ✅ |
 | `ATOMIC-ERR-MMIO-FENCE-COLLAPSE` | an MMIO-ordering op smuggled onto the atomic surface | **designed-in** (D02/O1; no live trigger until register-access lands `io_fence`) |
+| `ATOMIC-ERR-NESTED-ATOMIC` | an atomic op whose receiver is not a DIRECT driver-struct field (nested struct field / array index) — S01 (O6) | ✅ (frontend, target-agnostic) |
+| `ATOMIC-ERR-ORDERING-ENUM` | a recognized facade whose `Ordering` enum is not exactly `Relaxed, Acquire, Release, AcqRel, SeqCst` in that order (the const-discriminant ABI is positional) — O7 | ✅ (facade-signature) |
 
 The canonical-facade call-site missing-ordering is type-system-subsumed (a rustc error
 before the bridge runs — D15); the reachable check is the facade-signature obligation.
+The `NESTED-ATOMIC` check (`receiver_borrowed_place` + field-step count) runs in the
+shared frontend pass so the generic-c oracle and the OS backends reject identically — the
+frontend resolver mirrors the backends' `resolve_receiver_src` (it follows `Rvalue::Use`
+chains with the same depth/ambiguity rules) so it resolves exactly the receiver shapes the
+oracle would emit. The `ORDERING-ENUM` check makes the positional const-`Ordering` read
+sound, and runs at EVERY ordering position (not just the first) — `compare_exchange`
+declares two (success, failure), so a mixed facade with a canonical success enum and a
+same-named reordered failure enum (e.g. `core::sync::atomic::Ordering`, which swaps
+Release/Acquire) is rejected rather than positionally misreading the failure ordering.
 
 ## 5. Host harness (C05 — the emission/value oracle)
 
 A self-contained static `ATOMIC_HELPERS` prelude — the `regseq_mmio_*` DEFINE model (the
 hooks are defined inline, NOT harness-linked like the timed-delay `DELAY_HOOKS`), emitted
-for atomic-bearing TUs (gated on `model_has_atomic`): a cell table
-(sized per-TU to the `Atomic`-field count — no fixed cap), the six hooks applying value
+for any TU that uses an atomic OP (gated on `model_has_atomic_op` — a field-less
+`atomic::fence`-only TU still emits `regseq_atomic_fence` and so needs the prelude; #1):
+a cell table (sized per-TU to the `Atomic`-field count, `max(_, 1)` so a fence-only TU is
+not a zero-length array — no fixed cap), the six hooks applying value
 semantics + printing an `ATM <op>` line (the ordering NAME printed, so tag preservation
 is observable), and a runtime `bit < width` assert. The printed trace IS the behavioral
 oracle (value correctness, ordering-tag preservation, bit-test prior bit, CAS commit/
@@ -180,3 +193,28 @@ the as-built follows the corrected mapping (recorded here as taxonomy/spec feedb
 - §B 1–7: the Linux/Zephyr atomic-API rows in the taxonomy organized-spec should adopt
   the `fetch_or`/`_and` bit idiom + uniform width-keyed storage + the SeqCst/fence
   collapses + the `__atomic` Zephyr leg.
+- O5 (naming/scope, surfaced by the D02 fence-boundary call; recorded, NOT applied to
+  the frozen pages): assigning device-access ordering (`io_fence`/`ordered!`, §C O1) to
+  **register-access** makes that construct an access-*and-ordering* construct — the exact
+  structural parallel of `atomic-memory-access-**and-ordering**`. The name `register-access`
+  understates this; the precise label would be **`register-access-and-ordering`**. NOT
+  `device-access` — that would collide with `dma-management` / `device-interrupt-setup-and-handling`
+  / `bus-resource-management` (the name's "register" is load-bearing: the construct abstracts
+  MMIO *and* PIO register access, not all device interaction). Deciding principle (consistent
+  across the three "ordering" needs): ordering lives with the construct that models the
+  accesses being ordered — CPU↔CPU memory → atomicity; context↔context exclusion →
+  synchronization; CPU↔device accesses → register-access. **Mirror this note (and the O1
+  obligation) into register-access's own surface-convergence when its `io_fence`/`ordered!`
+  surface is built**, so a register-access reader finds it there.
+- O6 (new diagnostic, surfaced by a post-completion review): `ATOMIC-ERR-NESTED-ATOMIC` —
+  an atomic op's receiver must be a DIRECT driver-struct field (S01). Enforced in the
+  shared frontend pass so the generic-c oracle and the OS backends reject identically
+  (the oracle must not accept what the backends refuse).
+- O7 (new diagnostic, same review): `ATOMIC-ERR-ORDERING-ENUM` — the `Ordering` enum a
+  facade uses must declare exactly `Relaxed, Acquire, Release, AcqRel, SeqCst` in that
+  order, because the compile-time-constant `Ordering` is read by POSITIONAL discriminant
+  (the C05 ABI). A same-named reordered enum (notably `core::sync::atomic::Ordering`, which
+  swaps Release/Acquire) would otherwise silently remap orderings — a silent miscompile.
+  The check runs at EVERY ordering position, so `compare_exchange`'s failure ordering (a
+  second position) is covered as well as the success ordering. (The taxonomy could instead
+  mandate the canonical variant order in the surface spec.)

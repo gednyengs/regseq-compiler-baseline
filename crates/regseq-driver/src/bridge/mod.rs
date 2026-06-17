@@ -759,6 +759,42 @@ pub enum AtomicDiagnostic {
         /// The operation whose ordering argument was non-constant.
         op: String,
     },
+    /// `ATOMIC-ERR-NESTED-ATOMIC` (S01; O6 — taxonomy-feedback addition): an
+    /// atomic op whose receiver is NOT a direct driver-struct field (it reaches
+    /// the `Atomic<T>` through a nested struct field or an array index). The
+    /// generic-c oracle, Linux, and Zephyr all require a direct field — this
+    /// frontend reject keeps the behavioral oracle and the OS backends in lock-
+    /// step (an oracle that accepted nested would predict acceptance the OS
+    /// backends then refuse).
+    #[error(
+        "ATOMIC-ERR-NESTED-ATOMIC / Atomicity / Atomic Memory Access And Ordering: the {op} receiver \
+         is not a direct driver-struct field ({detail}); an Atomic<T> must be a direct field (S01)"
+    )]
+    NestedField {
+        /// The operation.
+        op: String,
+        /// Why the receiver is not a direct field.
+        detail: String,
+    },
+    /// `ATOMIC-ERR-ORDERING-ENUM` (O7 — taxonomy-feedback addition): a recognized
+    /// atomic facade whose `Ordering` parameter enum does not declare exactly
+    /// `Relaxed, Acquire, Release, AcqRel, SeqCst` in that order. The const
+    /// `Ordering` is read as its POSITIONAL discriminant (the C05 ABI:
+    /// `Relaxed=0 … SeqCst=4`), so a same-named enum with a different variant
+    /// order (e.g. `core::sync::atomic::Ordering`, which swaps Release/Acquire)
+    /// would SILENTLY remap orderings. Requiring the canonical order makes the
+    /// positional read sound.
+    #[error(
+        "ATOMIC-ERR-ORDERING-ENUM / Atomicity / Atomic Memory Access And Ordering: the `Ordering` enum \
+         used by `{facade}` must declare exactly Relaxed, Acquire, Release, AcqRel, SeqCst in that \
+         order ({detail}); the compile-time-constant ordering is read by positional discriminant"
+    )]
+    OrderingEnum {
+        /// The recognized facade.
+        facade: String,
+        /// What is wrong with the enum's variants.
+        detail: String,
+    },
 }
 
 /// Per-construct device-lifecycle validation diagnostics (PLAN T16; GRILL I09;

@@ -333,6 +333,77 @@ fn misdeclared_store_wrong_arity_is_rejected() {
 }
 
 #[test]
+fn nested_atomic_receiver_is_rejected() {
+    // M6/#2 (S01): an atomic op on a NESTED field (`s.inner.f`) is rejected at
+    // the frontend, so the generic-c oracle + Linux/Zephyr backends stay in
+    // lock-step (all require a direct driver-struct field).
+    let src = program(
+        "struct Inner { f: Atomic<u32> }\nstruct S { inner: Inner }",
+        "    let s = S { inner: Inner { f: Atomic::new(0) } };\n\tlet _ = s.inner.f.load(Ordering::Acquire);",
+    );
+    let err = bridge("atm_nested", &src).expect_err("nested atomic receiver must reject");
+    assert!(
+        err.contains("ATOMIC-ERR-NESTED-ATOMIC"),
+        "nested receiver must be NESTED-ATOMIC; got: {err}"
+    );
+}
+
+#[test]
+fn reordered_ordering_enum_is_rejected() {
+    // M6/#3: the const Ordering is read by POSITIONAL discriminant; a same-named
+    // enum with std's variant order (Release/Acquire swapped) would silently
+    // remap. The facade-signature check rejects a non-canonical Ordering enum.
+    let src = format!(
+        "#![no_std]\n#![feature(register_tool)]\n#![register_tool(rseq)]\n\
+         // std's order: Relaxed, Release, Acquire, AcqRel, SeqCst (swapped vs canonical).\n\
+         #[derive(Clone, Copy)] pub enum Ordering {{ Relaxed, Release, Acquire, AcqRel, SeqCst }}\n\
+         pub struct Atomic<T> {{ value: T }}\n\
+         impl<T: Copy> Atomic<T> {{\n\
+         \tpub const fn new(value: T) -> Self {{ Self {{ value }} }}\n\
+         \t#[inline(never)] #[rseq::intrinsic(\"atomic_load\")]\n\
+         \tpub fn load(&self, _o: Ordering) -> T {{ self.value }}\n}}\n\
+         struct S {{ f: Atomic<u32> }}\n\
+         #[no_mangle] pub extern \"C\" fn regseq_main() {{\n\
+         \tlet s = S {{ f: Atomic::new(0) }};\n\tlet _ = s.f.load(Ordering::Acquire);\n}}\n"
+    );
+    let err = bridge("atm_reordered_ord", &src).expect_err("reordered Ordering must reject");
+    assert!(
+        err.contains("ATOMIC-ERR-ORDERING-ENUM"),
+        "reordered Ordering must be ORDERING-ENUM; got: {err}"
+    );
+}
+
+#[test]
+fn cas_mixed_ordering_enum_failure_param_is_rejected() {
+    // M6/#3 completeness: `compare_exchange` has TWO ordering positions (success,
+    // failure). A mixed facade — canonical `Ordering` for SUCCESS but a std-shaped
+    // `Ordering` (Release/Acquire swapped) for FAILURE — would positionally misread
+    // the failure ordering. The signature check must canonicalize EVERY ordering
+    // position, not just the first; this rejects only if the failure param (pos 4)
+    // is checked.
+    let src = format!(
+        "#![no_std]\n#![feature(register_tool)]\n#![register_tool(rseq)]\n\
+         #[derive(Clone, Copy)] pub enum Ordering {{ Relaxed, Acquire, Release, AcqRel, SeqCst }}\n\
+         // std order (Release/Acquire swapped) — used ONLY for the failure ordering.\n\
+         pub mod bad {{ #[derive(Clone, Copy)] pub enum Ordering {{ Relaxed, Release, Acquire, AcqRel, SeqCst }} }}\n\
+         pub struct Atomic<T> {{ value: T }}\n\
+         impl<T: Copy> Atomic<T> {{\n\
+         \tpub const fn new(value: T) -> Self {{ Self {{ value }} }}\n\
+         \t#[inline(never)] #[rseq::intrinsic(\"atomic_compare_exchange\")]\n\
+         \tpub fn compare_exchange(&self, _c: T, _n: T, _s: Ordering, _f: bad::Ordering) -> Result<T, T> {{ Ok(_c) }}\n}}\n\
+         struct S {{ f: Atomic<u32> }}\n\
+         #[no_mangle] pub extern \"C\" fn regseq_main() {{\n\
+         \tlet s = S {{ f: Atomic::new(0) }};\n\
+         \tlet _ = s.f.compare_exchange(1, 2, Ordering::Acquire, bad::Ordering::Relaxed);\n}}\n"
+    );
+    let err = bridge("atm_cas_mixed_ord", &src).expect_err("mixed CAS Ordering must reject");
+    assert!(
+        err.contains("ATOMIC-ERR-ORDERING-ENUM"),
+        "mixed CAS failure-ordering enum must be ORDERING-ENUM; got: {err}"
+    );
+}
+
+#[test]
 fn mmio_fence_collapse_is_designed_in() {
     // M5/T19: `ATOMIC-ERR-MMIO-FENCE-COLLAPSE` is in the catalog (C02/I02) but
     // DESIGNED-IN with NO live trigger (D02/O1) — the trigger (an MMIO-ordering

@@ -26,8 +26,9 @@
 
 use regseq_model::{
     AtomicElement, AtomicOp, AttrData, Body, CallCallee, Const, FetchOp, FieldIdx, FieldPath,
-    GenericArg, Instance, InstanceKind, IntrinsicKind, ItemId, ItemKind, Operand, RegseqModel,
-    SyntheticItemKind, TerminatorKind, Ty as ModelTy, TyId, UintKind, VariantIdx,
+    GenericArg, Instance, InstanceKind, IntrinsicKind, ItemId, ItemKind, Operand, Place, PlaceElem,
+    RegseqModel, Rvalue, StatementKind, SyntheticItemKind, TerminatorKind, Ty as ModelTy, TyId,
+    UintKind, VariantIdx,
 };
 use rustc_ast::token::{Delimiter, LitKind as TokenLitKind, TokenKind};
 use rustc_ast::tokenstream::TokenTree;
@@ -324,6 +325,65 @@ fn function_body(instance: &Instance) -> Option<&Body> {
     }
 }
 
+/// The place an atomic wrapper-method `&self` receiver operand borrows — the
+/// driver-struct field place the op targets — for the S01 direct-field check.
+/// Handles a directly-projected receiver, the single-`Ref`-temp shape
+/// (`_t = &place; op(move _t, …)`), and a `Use`-of-temp chain — mirroring the
+/// per-backend `resolve_receiver_src` (same depth bound + ambiguity rule) so the
+/// frontend resolves EXACTLY the receiver shapes the generic-c oracle does. That
+/// parity is load-bearing for S01: a shape the oracle resolves to a nested field
+/// (and would emit) must also be one this check resolves and rejects — otherwise
+/// the hole reappears. `None` when the borrowed place is not recoverable (the
+/// oracle then cannot resolve it either, so it errors rather than silently
+/// emitting a nested access).
+fn receiver_borrowed_place<'b>(body: &'b Body, recv: &'b Operand) -> Option<&'b Place> {
+    receiver_borrowed_place_at(body, recv, 0)
+}
+
+fn receiver_borrowed_place_at<'b>(
+    body: &'b Body,
+    recv: &'b Operand,
+    depth: u32,
+) -> Option<&'b Place> {
+    if depth > 8 {
+        return None; // reaching-def chase exceeded the bound (matches the backend)
+    }
+    let place = match recv {
+        Operand::Copy(p) | Operand::Move(p) => p,
+        Operand::Constant(_) => return None,
+    };
+    // A receiver that already names a field (a directly-projected place).
+    if place
+        .projection
+        .iter()
+        .any(|e| matches!(e, PlaceElem::Field(..)))
+    {
+        return Some(place);
+    }
+    // A bare temp: chase its UNIQUE whole-local definition — a borrow
+    // (`Ref`/`RawPtr`) gives the place; a `Use` of another operand recurses (the
+    // backend resolver follows `Use`, so the frontend must too).
+    let local = place.local;
+    let mut def: Option<&Rvalue> = None;
+    for block in body.basic_blocks.iter() {
+        for stmt in block.statements.iter() {
+            if let StatementKind::Assign(dst, rhs) = &stmt.kind {
+                if dst.local == local && dst.projection.is_empty() {
+                    if def.is_some() {
+                        return None; // ambiguous
+                    }
+                    def = Some(rhs);
+                }
+            }
+        }
+    }
+    match def? {
+        Rvalue::Ref(_, src) | Rvalue::RawPtr(_, src) => Some(src),
+        Rvalue::Use(inner) => receiver_borrowed_place_at(body, inner, depth + 1),
+        _ => None,
+    }
+}
+
 /// The `Atomic<T>` element type named by a wrapper-method `&self` receiver
 /// operand — the receiver's place type, peeled of its reference, with the
 /// `Atomic` struct's first type argument. `None` when the operand is not a
@@ -440,6 +500,54 @@ pub(crate) fn validate_atomic_signatures(cx: &mut BridgeCtxt<'_>) -> Result<(), 
                     },
                 ));
             }
+            // The const `Ordering` is read by POSITIONAL discriminant (the C05
+            // ABI: Relaxed=0 .. SeqCst=4), so EACH ordering param's enum MUST
+            // declare exactly Relaxed, Acquire, Release, AcqRel, SeqCst in that
+            // order — else a same-named reordered enum (e.g.
+            // `core::sync::atomic::Ordering`, which swaps Release/Acquire) would
+            // SILENTLY remap (O7). EVERY position is checked, not just the first:
+            // `compare_exchange` declares two (success, failure), and a mixed
+            // facade (canonical success + std-shaped failure) would otherwise
+            // misread the failure ordering. The `is_ordering_ty` check above
+            // already confirmed this param is an `Ordering`-named enum.
+            if let Some(param) = inputs.get(pos) {
+                if let Err(detail) = ordering_enum_canonical(*param) {
+                    return Err(BridgeError::AtomicValidation(
+                        AtomicDiagnostic::OrderingEnum {
+                            facade: opname.to_string(),
+                            detail,
+                        },
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Verify an `Ordering` parameter enum declares exactly the canonical variants
+/// `Relaxed, Acquire, Release, AcqRel, SeqCst` in that order (so the positional
+/// const-discriminant ABI read is sound). Returns the mismatch detail otherwise.
+fn ordering_enum_canonical(ty: Ty<'_>) -> Result<(), String> {
+    const CANON: [&str; 5] = ["Relaxed", "Acquire", "Release", "AcqRel", "SeqCst"];
+    let adt = ty
+        .ty_adt_def()
+        .filter(|adt| adt.is_enum())
+        .ok_or_else(|| format!("`{ty}` is not an enum"))?;
+    let variants = adt.variants();
+    if variants.len() != CANON.len() {
+        return Err(format!(
+            "found {} variant(s), expected {}",
+            variants.len(),
+            CANON.len()
+        ));
+    }
+    for (variant, expected) in variants.iter().zip(CANON.iter()) {
+        if variant.name.as_str() != *expected {
+            return Err(format!(
+                "variant `{}` where `{expected}` was expected",
+                variant.name
+            ));
         }
     }
     Ok(())
@@ -482,6 +590,39 @@ fn validate_atomic_call(
     args: &[Operand],
 ) -> Result<(), BridgeError> {
     let name = atomic_op_name(op);
+    // S01 (#2 fix): a receiver op must target a DIRECT driver-struct field. This
+    // target-agnostic frontend reject keeps the generic-c oracle in lock-step
+    // with the Linux/Zephyr backends (which only address a direct field) — an
+    // oracle that accepted a nested receiver would predict acceptance the OS
+    // backends then refuse. `fence` has no receiver.
+    if !matches!(op, AtomicOp::Fence) {
+        if let Some(recv) = args.first() {
+            if let Some(place) = receiver_borrowed_place(body, recv) {
+                let field_steps = place
+                    .projection
+                    .iter()
+                    .filter(|e| matches!(e, PlaceElem::Field(..)))
+                    .count();
+                let indexed = place
+                    .projection
+                    .iter()
+                    .any(|e| matches!(e, PlaceElem::Index(_) | PlaceElem::ConstantIndex { .. }));
+                if field_steps != 1 || indexed {
+                    let detail = if indexed {
+                        "the receiver indexes an array of atomics".to_string()
+                    } else {
+                        format!("the Atomic field is reached through {field_steps} field step(s)")
+                    };
+                    return Err(BridgeError::AtomicValidation(
+                        AtomicDiagnostic::NestedField {
+                            op: name.to_string(),
+                            detail,
+                        },
+                    ));
+                }
+            }
+        }
+    }
     match op {
         // `load`: Relaxed/Acquire/SeqCst (Release/AcqRel ⇒ degenerate). arg 1.
         AtomicOp::Load => check_ordering(model, body, args, 1, name, &[0, 1, 4], "Relaxed/Acquire/SeqCst"),

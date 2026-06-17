@@ -59,6 +59,14 @@ fn cases() -> Vec<(&'static str, Vec<&'static str>, Vec<&'static str>)> {
                 "ATM fence ord=SeqCst",
             ],
         ),
+        // M6/#1 regression: a FENCE-ONLY TU (no Atomic field) still emits the
+        // prelude (gated on the atomic OP) + a size-1 cell table — so the
+        // regseq_atomic_fence call is defined and the TU compiles + runs.
+        (
+            "atomic-fence-only",
+            vec!["#define REGSEQ_ATOMIC_CELLS 1u", "regseq_atomic_fence("],
+            vec!["ATM fence ord=Release", "ATM fence ord=SeqCst"],
+        ),
         // M5/T18 coverage: element-type / width / signedness (i32 wrap; u64/i64
         // 64-bit width). cells: si=0 (w32), wu=1 (w64), wi=2 (w64).
         (

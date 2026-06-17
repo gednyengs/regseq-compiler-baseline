@@ -5397,17 +5397,18 @@ pub(crate) fn model_has_delay_intrinsic(model: &RegseqModel) -> bool {
     })
 }
 
-/// Whether the model contains any `Atomic<T>` field marker
-/// (atomic-memory-access-and-ordering construct) — the demand gate for emitting
-/// the always-on [`super::prelude::ATOMIC_HELPERS`] host oracle + the per-TU
-/// cell-init constructor. An atomic op lowers (via `emit_atomic`) to the
-/// `regseq_atomic_*` host hooks, so the helper block MUST be present whenever an
-/// `Atomic` field is. Gating on the field marker (not the op) keeps a TU that
-/// declares an `Atomic` field but performs no op still self-consistent (the
-/// cells exist). No existing fixture uses an atomic field, so this churns no
-/// committed golden.
-pub(crate) fn model_has_atomic(model: &RegseqModel) -> bool {
+/// Whether the model uses ANY atomic operation — an `Atomic<T>` field OR a
+/// recognized atomic intrinsic (the field-less `atomic::fence` free fn included).
+/// This is the demand gate for the `ATOMIC_HELPERS` prelude: a fence-only TU has
+/// no `Atomic` field but DOES emit `regseq_atomic_fence(...)`, so it still needs
+/// the prelude definitions (else the lowered call references an undefined hook).
+pub(crate) fn model_has_atomic_op(model: &RegseqModel) -> bool {
     atomic_cell_count(model) > 0
+        || model.domain_attrs.item_attrs.iter().any(|attrs| {
+            attrs
+                .iter()
+                .any(|a| matches!(a, AttrData::Intrinsic(IntrinsicKind::Atomic(_))))
+        })
 }
 
 /// The number of `Atomic<T>` field markers in the model — the count of cell ids
