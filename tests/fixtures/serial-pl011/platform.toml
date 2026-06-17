@@ -1,0 +1,25 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "raspberry-pi-4"
+arch = "aarch64"
+
+[bus]
+type = "amba"
+amba_id = 0x00041011
+revision = 3
+
+[properties]
+current-speed = 115200
+uart-clock-hz = 48000000
+
+[mmio.uart_regs]
+base = 0x09000000
+size = 4096
+
+[interrupt.uart_irq]
+irq_number = 37
+trigger_type = "level"
+trigger_polarity = "active_high"
+shared = false

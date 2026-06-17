@@ -1,0 +1,27 @@
+{
+  "target": "linux_c",
+  "os_version_pin": "v6.6",
+  "delivered_slots": [
+    {"slot": "uart_ops.startup", "row": null},
+    {"slot": "uart_ops.shutdown", "row": null},
+    {"slot": "uart_ops.start_tx", "row": null},
+    {"slot": "uart_ops.stop_tx", "row": null},
+    {"slot": "uart_ops.stop_rx", "row": null},
+    {"slot": "uart_ops.set_termios", "row": null},
+    {"slot": "uart_ops.tx_empty", "row": null},
+    {"slot": "serial.irq_source_set@startup:RxData->Armed", "row": null},
+    {"slot": "serial.irq_source_set@startup:LineError->Armed", "row": null},
+    {"slot": "serial.irq_source_set@start_tx:TxReady->Armed", "row": null},
+    {"slot": "serial.irq_source_set@stop_tx:TxReady->Disarmed", "row": null},
+    {"slot": "serial.irq_source_set@stop_rx:RxData->Disarmed", "row": null},
+    {"slot": "serial.irq_source_set@shutdown:TxReady->Disarmed", "row": null},
+    {"slot": "serial.irq_source_set@shutdown:RxData->Disarmed", "row": null},
+    {"slot": "serial.irq_source_set@shutdown:LineError->Disarmed", "row": null}
+  ],
+  "absent_dispatch_slots": [],
+  "structurally_absent_slots": [],
+  "rejected_slots": [],
+  "ignored_match_entries": [
+    {"entry": "devicetree compatible=\"regseq,serialpl011\"", "reason": "foreign transport: not consumed by the ratified amba_driver registration form; >=1 native entry present", "license": "spec-convergence-pl011 GRILL D08 (D03(a) rule)", "native_on": ["zephyr_c"]}
+  ]
+}

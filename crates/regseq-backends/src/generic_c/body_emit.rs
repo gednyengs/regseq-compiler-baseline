@@ -5860,6 +5860,22 @@ pub(crate) fn emit_lifecycle_synthesis(
     // share a logical `name` (the `__rseq_lc_` prefix already precludes a clash
     // with an author symbol, which sanitizes to `<crate>_…`).
     for (idx, (driver_item, driver)) in model.device_lifecycle.drivers.iter().enumerate() {
+        // Serial device-class (construct #7): a serial-class driver with a
+        // recognized serial op-set gets a SELF-CONTAINED serial choreography
+        // helper (bring-up → arm → TX → fire/ISR → RX → teardown), driving the
+        // line + the synthesized ISR via the regseq_irq_*/regseq_mmio_* prelude.
+        // It does NOT use the lifecycle/interrupt scenario machinery below (the
+        // serial line handler is the compiler-synthesized ISR, not an authored
+        // one), so the two paths stay decoupled.
+        if matches!(driver.descriptor.device_class, regseq_model::ClassTag::Serial) {
+            if let Some(serial) = model.serial.drivers.get(driver_item) {
+                let (defs, runner_call) =
+                    emit_serial_synthesis(model, names, syms, idx, *driver_item, driver, serial)?;
+                out.push_str(&defs);
+                runner_calls.push(runner_call);
+                continue;
+            }
+        }
         let driver_ty = driver_struct_ty(model, *driver_item).ok_or(EmitError::Unsupported(
             "device-lifecycle driver struct has no emitted type",
         ))?;
@@ -6217,6 +6233,262 @@ pub(crate) fn emit_lifecycle_synthesis(
     }
     out.push_str("}\n");
     Ok(out)
+}
+
+/// Emit the self-contained serial device-class choreography (construct #7, T06):
+/// the target morph struct, the synthesized serial ISR wrapper, and one
+/// `__rseq_serial_<idx>` helper that brings the port up (disable → line-format →
+/// enable, PL011 §3.3.8 order), arms RX+line-error, pumps one TX byte (arm
+/// TxReady → ready-query → write → fire TX cause → ISR decodes + disarms
+/// TxReady), receives one RX byte (poke DR + fire RX cause → ISR decodes + reads
+/// it), and tears down (disarm RX+error → disable). The per-source mask writes
+/// (via `irq_source_set` → IMSC) trace as `regseq_mmio_write`, DISTINCT from the
+/// line-level `regseq_irq_enable`. Returns (definitions+helper, runner call).
+fn emit_serial_synthesis(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    idx: usize,
+    driver_item: regseq_model::ItemId,
+    driver: &regseq_model::DriverLifecycle,
+    serial: &regseq_model::DriverSerial,
+) -> Result<(String, String), EmitError> {
+    use crate::serial_scatter::{generic_scatter, GenericSerialPhase};
+    use regseq_model::{Const, IrqSourceKind, IrqStateKind, SerialCause, UintKind, VariantIdx};
+
+    let unsup = |m: &'static str| EmitError::Unsupported(m);
+
+    let driver_ty = driver_struct_ty(model, driver_item)
+        .ok_or(unsup("serial driver struct has no emitted type"))?;
+    let driver_cty = types::c_type(model, names, driver_ty);
+    let name = c_escape(model.strings.resolve(driver.descriptor.name).as_bytes());
+    let match_str = c_escape(render_match_trace(model, &driver.descriptor.match_set).as_bytes());
+    let label = naming::sanitize(model.strings.resolve(driver.descriptor.name));
+    let target_name = format!("__rseq_serial_{idx}_{label}_target");
+    let helper = format!("__rseq_serial_{idx}_{label}");
+    let isr = format!("rseq_serial_isr_{label}");
+
+    // The interrupt line (the uart_irq resource); 0 when unresolved.
+    let line: u32 = model
+        .interrupt
+        .drivers
+        .get(&driver_item)
+        .and_then(|d| d.resources.first())
+        .and_then(|r| r.binding.irq_number)
+        .unwrap_or(0);
+
+    let irqd = serial
+        .interrupt_driven
+        .as_ref()
+        .ok_or(unsup("serial M1 requires the SerialInterruptDriven plane"))?;
+    let lc = serial
+        .line_config
+        .as_ref()
+        .ok_or(unsup("serial M1 requires the SerialRuntimeLineConfig plane"))?;
+
+    // Resolve an op InstanceRef → (C symbol, FnSig input TyIds, output TyId).
+    let sym_of = |op: &Option<InstanceRef>| -> Result<(String, Vec<TyId>, TyId), EmitError> {
+        let iref = op.ok_or(unsup("serial op not materialized"))?;
+        let id = resolve_reloc(model, iref).ok_or(unsup("serial op InstanceRef does not resolve"))?;
+        let data = model.instances[id]
+            .kind
+            .as_function()
+            .ok_or(unsup("serial op is not a function instance"))?;
+        let sig = model.sigs.resolve(data.fn_sig);
+        Ok((syms.symbol(id).to_string(), sig.inputs.clone(), sig.output))
+    };
+
+    let (pss_sym, pss_in, _) = sym_of(&serial.base.port_service_set)?;
+    let (drq_sym, drq_in, _) = sym_of(&serial.base.data_ready_query)?;
+    let (duw_sym, duw_in, _) = sym_of(&serial.base.data_unit_write)?;
+    let (dur_sym, _, _) = sym_of(&serial.base.data_unit_read)?;
+    let (lfa_sym, lfa_in, _) = sym_of(&lc.line_format_apply)?;
+    let (iss_sym, iss_in, _) = sym_of(&irqd.irq_source_set)?;
+    let (icd_sym, _, icd_out) = sym_of(&irqd.irq_cause_decode)?;
+
+    // A fieldless enum literal of `ty` at `variant_idx` (no interning needed).
+    let enum_lit = |vidx: VariantIdx, ty: TyId| -> Result<String, EmitError> {
+        const_expr(
+            model,
+            names,
+            syms,
+            &Const::EnumValue {
+                variant_idx: vidx,
+                payload: vec![],
+            },
+            Some(ty),
+            false,
+        )
+    };
+    let var = |b: &Option<regseq_model::EnumBinding>, ord: usize| -> Result<VariantIdx, EmitError> {
+        b.as_ref()
+            .and_then(|e| e.variants.get(ord).copied())
+            .ok_or(unsup("serial support enum variant map missing"))
+    };
+
+    // Literals from the IR variant maps (canonical order).
+    let scope_block = enum_lit(var(&serial.types.port_scope, 0)?, pss_in[1])?; // Block
+    let on_true = const_expr(model, names, syms, &Const::Bool(true), Some(pss_in[2]), false)?;
+    let on_false = const_expr(model, names, syms, &Const::Bool(false), Some(pss_in[2]), false)?;
+    let dir_txspace = enum_lit(var(&serial.types.ready_dir, 0)?, drq_in[1])?; // TxSpace
+    let byte_lit = const_expr(
+        model,
+        names,
+        syms,
+        &Const::Uint(UintKind::U32, 0x41),
+        Some(duw_in[1]),
+        false,
+    )?;
+
+    // irq_source_set call with a `(source, state)` literal at receiver `recv`.
+    let iss_call = |recv: &str, src: IrqSourceKind, st: IrqStateKind| -> Result<String, EmitError> {
+        let s = enum_lit(var(&serial.types.irq_source, src as usize)?, iss_in[1])?;
+        let t = enum_lit(var(&serial.types.irq_state, st as usize)?, iss_in[2])?;
+        Ok(format!("    {iss_sym}({recv}, {s}, {t});\n"))
+    };
+
+    // The LineFormat aggregate (positional): baud=115200, 8N1.
+    let lf_ty = lfa_in[1];
+    let lf_cty = types::c_type(model, names, lf_ty);
+    let lf_fields =
+        agg_field_layouts(model, lf_ty).ok_or(unsup("LineFormat has no field layout"))?;
+    if lf_fields.len() < 4 {
+        return Err(unsup("LineFormat does not have the expected 4 fields"));
+    }
+    let baud_lit = const_expr(
+        model,
+        names,
+        syms,
+        &Const::Uint(UintKind::U32, 115_200),
+        Some(lf_fields[0].ty),
+        false,
+    )?;
+    let db_lit = enum_lit(var(&serial.types.data_bits, 3)?, lf_fields[1].ty)?; // Eight
+    let par_lit = enum_lit(var(&serial.types.parity, 0)?, lf_fields[2].ty)?; // None
+    let sb_lit = enum_lit(var(&serial.types.stop_bits, 0)?, lf_fields[3].ty)?; // One
+    let line_format = format!("({lf_cty}){{ {baud_lit}, {db_lit}, {par_lit}, {sb_lit} }}");
+
+    // The synthesized ISR: decode (traces MIS read + error W1C), then dispatch on
+    // the decoded cause bits — rx_data → read one datum; tx_ready → disarm
+    // TxReady (the M1 TX pump has nothing more to send).
+    let icd_cty = types::c_type(model, names, icd_out);
+    let cause_fields =
+        agg_field_layouts(model, icd_out).ok_or(unsup("CauseSet has no field layout"))?;
+    let cause_field = c_escape(
+        model
+            .strings
+            .resolve(cause_fields.first().ok_or(unsup("CauseSet has no bits field"))?.name)
+            .as_bytes(),
+    );
+    // RX service fires on RxData OR RxTimeout — the timeout couples into the RX
+    // source (Zephyr Z11), so the synthesized ISR must drain on both (Codex M1
+    // finding 1: a decoded-but-unserviced timeout would otherwise do nothing).
+    let rx_bit =
+        (1u32 << (SerialCause::RxData as u32)) | (1u32 << (SerialCause::RxTimeout as u32));
+    let tx_bit = 1u32 << (SerialCause::TxReady as u32);
+    let isr_disarm_tx = iss_call("&__t->inner", IrqSourceKind::TxReady, IrqStateKind::Disarmed)?;
+
+    let mut defs = String::new();
+    // Target morph container (the op receiver is `&inst.inner`).
+    defs.push_str(&format!("struct {target_name} {{\n"));
+    defs.push_str("    void *__rseq_dev;\n");
+    defs.push_str(&format!("    {driver_cty} inner;\n"));
+    defs.push_str("    uint32_t __rseq_state;\n");
+    defs.push_str("};\n\n");
+    // Serial ISR wrapper.
+    defs.push_str(&format!("static void {isr}(void *__ctx) {{\n"));
+    defs.push_str(&format!(
+        "    struct {target_name} *__t = (struct {target_name} *)__ctx;\n"
+    ));
+    defs.push_str(&format!("    {icd_cty} __c = {icd_sym}(&__t->inner);\n"));
+    defs.push_str(&format!(
+        "    if ((__c.{cause_field} & {rx_bit}u) != 0u) {{ {dur_sym}(&__t->inner); }}\n"
+    ));
+    defs.push_str(&format!(
+        "    if ((__c.{cause_field} & {tx_bit}u) != 0u) {{\n    {isr_disarm_tx}    }}\n"
+    ));
+    defs.push_str("}\n\n");
+
+    // Lifecycle callbacks (the serial fixture impls Lifecycle).
+    let on_init_sym = match &driver.ops.on_init {
+        Some(iref) => Some(
+            syms.symbol(resolve_reloc(model, *iref).ok_or(unsup("on_init does not resolve"))?)
+                .to_string(),
+        ),
+        None => None,
+    };
+    let on_deinit_sym = match &driver.ops.on_deinit {
+        Some(iref) => Some(
+            syms.symbol(resolve_reloc(model, *iref).ok_or(unsup("on_deinit does not resolve"))?)
+                .to_string(),
+        ),
+        None => None,
+    };
+
+    let mut h = String::new();
+    h.push_str(&format!("static void {helper}(void) {{\n"));
+    h.push_str(&format!("    struct {target_name} inst = {{0}};\n"));
+    h.push_str(&format!(
+        "    regseq_lc_register(\"{name}\", \"{match_str}\");\n"
+    ));
+    h.push_str("    regseq_lc_create();\n");
+    h.push_str("    regseq_lc_associate();\n");
+    for rf in &driver.handle.resource_fields {
+        let res = c_escape(model.strings.resolve(rf.name).as_bytes());
+        h.push_str(&format!("    regseq_lc_preamble(\"{res}\");\n"));
+    }
+    // Register the line DISABLED with the synthesized serial ISR (C01 placement).
+    h.push_str(&format!(
+        "    regseq_irq_register({line}u, {isr}, (void *)&inst);\n"
+    ));
+    // on_init, then enable the line after it (D02/R05).
+    h.push_str("    regseq_lc_call(\"on_init\");\n");
+    if let Some(s) = &on_init_sym {
+        h.push_str(&format!("    {s}(&inst.inner);\n"));
+    }
+    h.push_str(&format!("    regseq_irq_enable({line}u);\n"));
+    // Bring-up: disable → line-format (while disabled) → enable (PL011 §3.3.8).
+    h.push_str(&format!("    {pss_sym}(&inst.inner, {scope_block}, {on_false});\n"));
+    h.push_str(&format!("    {lfa_sym}(&inst.inner, {line_format});\n"));
+    h.push_str(&format!("    {pss_sym}(&inst.inner, {scope_block}, {on_true});\n"));
+    // Arm RX + line-error (generic_scatter Startup).
+    for it in generic_scatter(GenericSerialPhase::Startup) {
+        h.push_str(&iss_call("&inst.inner", it.source, it.state)?);
+    }
+    // TX leg: arm TxReady, query space, write one byte, fire the TX cause.
+    for it in generic_scatter(GenericSerialPhase::TxKick) {
+        h.push_str(&iss_call("&inst.inner", it.source, it.state)?);
+    }
+    h.push_str(&format!("    {drq_sym}(&inst.inner, {dir_txspace});\n"));
+    h.push_str(&format!("    {duw_sym}(&inst.inner, {byte_lit});\n"));
+    // MIS TXMIS (bit5 = 0x20) at 0x040 → ISR decodes tx_ready → disarms TxReady.
+    h.push_str("    regseq_irq_dev_poke(0x040u, 0x20u);\n");
+    h.push_str(&format!("    regseq_irq_fire({line}u);\n"));
+    // RX leg: stage a byte in DR (0x000) + MIS RXMIS (bit4 = 0x10) → ISR reads it.
+    h.push_str("    regseq_irq_dev_poke(0x000u, 0x55u);\n");
+    h.push_str("    regseq_irq_dev_poke(0x040u, 0x10u);\n");
+    h.push_str(&format!("    regseq_irq_fire({line}u);\n"));
+    // RX-timeout leg (Codex M1 finding 1): MIS RTMIS (bit6 = 0x40) decodes to the
+    // RX-coupled timeout cause → the synthesized ISR drains it on the same RX path.
+    h.push_str("    regseq_irq_dev_poke(0x000u, 0x56u);\n");
+    h.push_str("    regseq_irq_dev_poke(0x040u, 0x40u);\n");
+    h.push_str(&format!("    regseq_irq_fire({line}u);\n"));
+    // Teardown: disarm RX + line-error, then disable the port.
+    for it in generic_scatter(GenericSerialPhase::Teardown) {
+        h.push_str(&iss_call("&inst.inner", it.source, it.state)?);
+    }
+    h.push_str(&format!("    {pss_sym}(&inst.inner, {scope_block}, {on_false});\n"));
+    // on_deinit, then disable + unregister the line (D09/R06).
+    h.push_str("    regseq_lc_call(\"on_deinit\");\n");
+    if let Some(s) = &on_deinit_sym {
+        h.push_str(&format!("    {s}(&inst.inner);\n"));
+    }
+    h.push_str(&format!("    regseq_irq_disable({line}u);\n"));
+    h.push_str(&format!("    regseq_irq_unregister({line}u);\n"));
+    h.push_str("}\n\n");
+
+    defs.push_str(&h);
+    Ok((defs, format!("    {helper}();\n")))
 }
 
 /// Emit a teardown-dispatch suffix shared by the orderly (M2) and surprise (M4)

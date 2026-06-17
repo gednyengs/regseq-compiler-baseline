@@ -1,0 +1,10 @@
+name   = "serial-console-reject"
+kind   = "rust"
+# T04/R10/C08: a serial-class driver implements the v1-deferred companion trait
+# `SerialConsole` — that plane is out of v1.
+covers = ["SER-T04-R10"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "SER-ERR-DEFERRED-TRAIT"

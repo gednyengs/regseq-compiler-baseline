@@ -1,0 +1,11 @@
+name   = "serial-bitset-mut-borrow-reject"
+kind   = "rust"
+# O2 body-provenance (Codex hole): the accumulator is mutated through a `&mut`
+# alias the const-bit slice cannot follow. The traced local is mutably borrowed,
+# so it is treated as foreign and rejected.
+covers = ["SER-O2-BODY-PROVENANCE"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "SER-ERR-BITSET-PROVENANCE"

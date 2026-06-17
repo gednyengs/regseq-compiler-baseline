@@ -36,6 +36,7 @@ mod place;
 mod place_validator;
 mod pretty;
 pub mod rvalue;
+mod serial;
 mod source;
 mod statement;
 mod string_interner;
@@ -106,6 +107,11 @@ pub use place_validator::{
 };
 pub use pretty::{PrettyPrintOptions, PrettyPrinter};
 pub use rvalue::{AggregateKind, BinOp, CastKind, PointerCoercion, Rvalue, UnOp};
+pub use serial::{
+    CauseEntry, CauseSetRepr, DriverSerial, EnumBinding, IrqSourceKind, IrqStateKind, RxErrorRepr,
+    SerialBaseOps, SerialCause, SerialInterruptOps, SerialLineConfigOps, SerialQueueControlOps,
+    SerialRxErrorKind, SerialTables, SerialTypeBindings,
+};
 pub use source::{Position, SourceFile, Span};
 pub use statement::{CopyNonOverlapping, NonDivergingIntrinsic, Statement, StatementKind};
 pub use string_interner::StringInterner;
