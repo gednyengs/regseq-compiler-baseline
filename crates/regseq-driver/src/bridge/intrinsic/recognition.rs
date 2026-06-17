@@ -8,7 +8,8 @@
 //! family-specific logic lives in each construct's bridge module.
 
 use regseq_model::{
-    AttrData, ConfigOp, DefPathData, IntrinsicKind, ItemId, LogLevel, MmioOp, RegseqModel,
+    AtomicOp, AttrData, ConfigOp, DefPathData, FetchOp, IntrinsicKind, ItemId, LogLevel, MmioOp,
+    RegseqModel,
 };
 use rustc_span::{def_id::DefId, Symbol as RustcSymbol};
 
@@ -91,6 +92,27 @@ fn intrinsic_kind_for_name(name: &str) -> Option<IntrinsicKind> {
         // Bus config-space intrinsics (bus-resource-management construct #3 M5).
         "read_config" => Some(IntrinsicKind::Config(ConfigOp::Read)),
         "write_config" => Some(IntrinsicKind::Config(ConfigOp::Write)),
+        // Timed-CPU-delay-and-sleep intrinsics (timed-cpu-delay-and-sleep
+        // construct): the `regseq::delay::{busy_wait,sleep}` facade, whose
+        // re-exports resolve to the attributed `intrinsics::timed_delay::*`
+        // originals.
+        "busy_wait" => Some(IntrinsicKind::BusyWait),
+        "sleep" => Some(IntrinsicKind::Sleep),
+        // Atomic-memory-access-and-ordering intrinsics (atomicity construct):
+        // the `Atomic<T>` wrapper methods + the `regseq::atomic::fence` free
+        // function. Keep in sync with `regseq_model::IntrinsicKind::from_name`.
+        "atomic_load" => Some(IntrinsicKind::Atomic(AtomicOp::Load)),
+        "atomic_store" => Some(IntrinsicKind::Atomic(AtomicOp::Store)),
+        "atomic_fetch_add" => Some(IntrinsicKind::Atomic(AtomicOp::FetchModify(FetchOp::Add))),
+        "atomic_fetch_sub" => Some(IntrinsicKind::Atomic(AtomicOp::FetchModify(FetchOp::Sub))),
+        "atomic_fetch_or" => Some(IntrinsicKind::Atomic(AtomicOp::FetchModify(FetchOp::Or))),
+        "atomic_fetch_and" => Some(IntrinsicKind::Atomic(AtomicOp::FetchModify(FetchOp::And))),
+        "atomic_fetch_xor" => Some(IntrinsicKind::Atomic(AtomicOp::FetchModify(FetchOp::Xor))),
+        "atomic_swap" => Some(IntrinsicKind::Atomic(AtomicOp::FetchModify(FetchOp::Swap))),
+        "atomic_compare_exchange" => Some(IntrinsicKind::Atomic(AtomicOp::CompareExchange)),
+        "atomic_bit_test_set" => Some(IntrinsicKind::Atomic(AtomicOp::BitTestSet)),
+        "atomic_bit_test_clear" => Some(IntrinsicKind::Atomic(AtomicOp::BitTestClear)),
+        "atomic_fence" => Some(IntrinsicKind::Atomic(AtomicOp::Fence)),
         _ => None,
     }
 }
@@ -122,6 +144,29 @@ fn fn_name_matches_kind(name: &str, kind: &IntrinsicKind) -> bool {
             (name, op),
             ("read_config", ConfigOp::Read) | ("write_config", ConfigOp::Write)
         ),
+        // The `regseq::delay::{busy_wait,sleep}` free functions
+        // (timed-cpu-delay-and-sleep construct); the `#[rseq::intrinsic]`
+        // attribute is the authority, the name a redundant gate.
+        IntrinsicKind::BusyWait => name == "busy_wait",
+        IntrinsicKind::Sleep => name == "sleep",
+        // The `Atomic<T>` wrapper methods + the `regseq::atomic::fence` free
+        // function (atomicity construct). The `#[rseq::intrinsic("atomic_*")]`
+        // attribute is the authority; the leaf method/fn name is a redundant
+        // gate (the leaf is the short form: `load`, `fetch_add`, `fence`, …).
+        IntrinsicKind::Atomic(op) => match op {
+            AtomicOp::Load => name == "load",
+            AtomicOp::Store => name == "store",
+            AtomicOp::FetchModify(FetchOp::Add) => name == "fetch_add",
+            AtomicOp::FetchModify(FetchOp::Sub) => name == "fetch_sub",
+            AtomicOp::FetchModify(FetchOp::Or) => name == "fetch_or",
+            AtomicOp::FetchModify(FetchOp::And) => name == "fetch_and",
+            AtomicOp::FetchModify(FetchOp::Xor) => name == "fetch_xor",
+            AtomicOp::FetchModify(FetchOp::Swap) => name == "swap",
+            AtomicOp::CompareExchange => name == "compare_exchange",
+            AtomicOp::BitTestSet => name == "bit_test_set",
+            AtomicOp::BitTestClear => name == "bit_test_clear",
+            AtomicOp::Fence => name == "fence",
+        },
     }
 }
 
@@ -207,6 +252,89 @@ mod tests {
                 vec![AttrData::Intrinsic(kind)]
             );
         }
+    }
+
+    #[test]
+    fn recognises_timed_delay_intrinsics() {
+        // Timed-cpu-delay-and-sleep construct: the `regseq::delay::busy_wait`/
+        // `sleep` facade functions map to `IntrinsicKind::BusyWait`/`Sleep`,
+        // and the redundant fn-name gate accepts their leaf names (the
+        // re-export resolves to the attributed original, leaf `busy_wait` /
+        // `sleep`).
+        for (leaf, kind) in [
+            ("busy_wait", IntrinsicKind::BusyWait),
+            ("sleep", IntrinsicKind::Sleep),
+        ] {
+            assert_eq!(intrinsic_kind_for_name(leaf), Some(kind.clone()));
+            let mut model = model_with_item_attrs(1);
+            let def_path = def_path(&mut model, leaf);
+            assert!(callee_name_matches_kind(&model, &def_path, &kind));
+            record_intrinsic(&mut model, ItemId::from_u32(0), kind.clone());
+            assert_eq!(
+                model.domain_attrs.item_attrs[ItemId::from_u32(0)],
+                vec![AttrData::Intrinsic(kind)]
+            );
+        }
+        // A mismatched leaf name is rejected by the redundant gate.
+        let mut model = model_with_item_attrs(1);
+        let dp = def_path(&mut model, "sleep");
+        assert!(!callee_name_matches_kind(
+            &model,
+            &dp,
+            &IntrinsicKind::BusyWait
+        ));
+    }
+
+    #[test]
+    fn recognises_atomic_intrinsics() {
+        // Atomicity construct: the `atomic_*` tags map to `IntrinsicKind::Atomic`
+        // and the redundant fn-name gate accepts each op's short leaf name
+        // (`load`, `fetch_add`, `compare_exchange`, `bit_test_clear`, `fence`, …).
+        let cases = [
+            ("atomic_load", "load", AtomicOp::Load),
+            ("atomic_store", "store", AtomicOp::Store),
+            (
+                "atomic_fetch_add",
+                "fetch_add",
+                AtomicOp::FetchModify(FetchOp::Add),
+            ),
+            ("atomic_swap", "swap", AtomicOp::FetchModify(FetchOp::Swap)),
+            (
+                "atomic_compare_exchange",
+                "compare_exchange",
+                AtomicOp::CompareExchange,
+            ),
+            ("atomic_bit_test_set", "bit_test_set", AtomicOp::BitTestSet),
+            (
+                "atomic_bit_test_clear",
+                "bit_test_clear",
+                AtomicOp::BitTestClear,
+            ),
+            ("atomic_fence", "fence", AtomicOp::Fence),
+        ];
+        for (tag, leaf, op) in cases {
+            let kind = IntrinsicKind::Atomic(op);
+            assert_eq!(intrinsic_kind_for_name(tag), Some(kind.clone()), "tag {tag}");
+            let mut model = model_with_item_attrs(1);
+            let def_path = def_path(&mut model, leaf);
+            assert!(
+                callee_name_matches_kind(&model, &def_path, &kind),
+                "leaf {leaf}"
+            );
+            record_intrinsic(&mut model, ItemId::from_u32(0), kind.clone());
+            assert_eq!(
+                model.domain_attrs.item_attrs[ItemId::from_u32(0)],
+                vec![AttrData::Intrinsic(kind)]
+            );
+        }
+        // A mismatched leaf name is rejected by the redundant gate.
+        let mut model = model_with_item_attrs(1);
+        let dp = def_path(&mut model, "store");
+        assert!(!callee_name_matches_kind(
+            &model,
+            &dp,
+            &IntrinsicKind::Atomic(AtomicOp::Load)
+        ));
     }
 
     #[test]

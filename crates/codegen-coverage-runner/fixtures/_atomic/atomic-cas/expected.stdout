@@ -1,0 +1,4 @@
+ATM cmpxchg cell=0 w=32 succ=AcqRel fail=Acquire expected=0xa desired=0x14 observed=0xa outcome=Ok
+ATM store cell=0 w=32 ord=Release val=0xa
+ATM cmpxchg cell=0 w=32 succ=SeqCst fail=Relaxed expected=0x63 desired=0x1e observed=0xa outcome=Err
+ATM add cell=0 w=32 ord=Relaxed val=0xa prior=0xa

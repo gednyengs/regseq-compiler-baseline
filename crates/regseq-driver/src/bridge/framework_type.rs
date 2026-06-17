@@ -4,9 +4,12 @@
 //! fires at the Call terminator, see `bridge::diag_log`), a framework
 //! type such as `RegseqError` is a *type*: recognition is therefore
 //! item/type-driven. [`materialise_framework_types`] walks the
-//! interned enum Items, reads the `#[rseq::framework_type("...")]`
-//! tool attribute carried by each enum's source definition, and
-//! records `AttrData::FrameworkType(..)` onto the matching `ItemId`.
+//! interned enum and struct Items, reads the
+//! `#[rseq::framework_type("...")]` tool attribute carried by each
+//! type's source definition, and records `AttrData::FrameworkType(..)`
+//! onto the matching `ItemId`. (The original framework types
+//! `RegseqError`/`IrqResult` are enums; `Duration`, from the
+//! timed-cpu-delay-and-sleep construct, is a struct.)
 //!
 //! The split mirrors the diag-log precedent: a pure recognizer
 //! ([`recognise_framework_type_attr`] / [`framework_type_for_name`])
@@ -62,6 +65,12 @@ fn framework_type_for_name(name: &str) -> Option<FrameworkType> {
         // The ISR dispatch-result type (device-interrupt construct #6):
         // `#[rseq::framework_type("irq-result")]`.
         "irq-result" => Some(FrameworkType::IrqResult),
+        // The opaque u64-nanosecond Duration value type
+        // (timed-cpu-delay-and-sleep construct):
+        // `#[rseq::framework_type("duration")]`. Unlike the other two
+        // framework types this is a *struct*, not an enum (see the
+        // materialization pass, which accepts both).
+        "duration" => Some(FrameworkType::Duration),
         _ => None,
     }
 }
@@ -99,16 +108,22 @@ pub(crate) fn recover_source_def_id(
     tcx.def_path_hash_to_def_id(rustc_hash)
 }
 
-/// Item/type-driven materialization pass: walk every enum Item, read
-/// its `#[rseq::framework_type("...")]` tool attribute, and record the
-/// recognized [`FrameworkType`] onto its `ItemId`.
+/// Item/type-driven materialization pass: walk every enum or struct
+/// Item, read its `#[rseq::framework_type("...")]` tool attribute, and
+/// record the recognized [`FrameworkType`] onto its `ItemId`.
 ///
 /// Mirrors `intrinsic::materialise_intrinsics` in shape, but is
-/// item-driven (walking `model.items` enum entries) rather than
-/// call-driven. Recognition fires for any marked enum regardless of
-/// how it is used -- including an enum that appears only as a
-/// function return type -- so the authored-internal boundary
+/// item-driven (walking `model.items` enum/struct entries) rather than
+/// call-driven. Recognition fires for any marked type regardless of
+/// how it is used -- including a type that appears only as a function
+/// argument or return type -- so the authored-internal boundary
 /// distinction (R02/I01) is preserved.
+///
+/// Both enum and struct Items are eligible: the original framework
+/// types (`RegseqError`/`IrqResult`) are enums, while `Duration`
+/// (timed-cpu-delay-and-sleep) is a struct. The `#[rseq::framework_type]`
+/// attribute -- not the item shape -- is the authority, so unmarked
+/// structs/enums are never attributed.
 ///
 /// Synthetic and non-source Items are skipped per the PLAN's T04
 /// rule. Synthetic Items carry the reserved `StableCrateId(0)`, whose
@@ -127,7 +142,10 @@ pub(crate) fn materialise_framework_types(cx: &mut BridgeCtxt<'_>) {
         .enumerate()
         .filter_map(|(idx, item)| {
             let item_id = ItemId::from_u32(idx as u32);
-            if !matches!(item.kind, ItemKind::Enum) {
+            // Enums (`RegseqError`/`IrqResult`) and structs (`Duration`,
+            // timed-cpu-delay-and-sleep) are both eligible; the
+            // `#[rseq::framework_type]` attribute is the authority.
+            if !matches!(item.kind, ItemKind::Enum | ItemKind::Struct) {
                 return None;
             }
             if !matches!(
@@ -180,6 +198,20 @@ mod tests {
         );
         // Underscore typo stays outside the closed vocabulary.
         assert_eq!(framework_type_for_name("irq_result"), None);
+    }
+
+    #[test]
+    fn recognises_duration_name() {
+        // The Duration value type (timed-cpu-delay-and-sleep construct) maps
+        // from its dash-form NAME. It is a struct, but the name vocabulary is
+        // shape-agnostic.
+        assert_eq!(
+            framework_type_for_name("duration"),
+            Some(FrameworkType::Duration)
+        );
+        // Underscore/plural typos stay outside the closed vocabulary.
+        assert_eq!(framework_type_for_name("durations"), None);
+        assert_eq!(framework_type_for_name("Duration"), None);
     }
 
     #[test]

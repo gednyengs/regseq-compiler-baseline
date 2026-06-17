@@ -275,6 +275,8 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         },
         width8_used: false,
         uses_pr: false,
+        uses_delay_busy: false,
+        uses_delay_sleep: false,
         elided_locals: std::collections::BTreeSet::new(),
     };
     let callbacks = [
@@ -443,6 +445,12 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     tu.push_str(&type_defs);
     tu.push('\n');
     tu.push_str(&scaffold.container);
+    // Timed-cpu-delay-and-sleep lowering helpers (TCD construct, M2/T08),
+    // injected before the bodies that call them, gated on the demand flags the
+    // body lowering set when a busy_wait/sleep was emitted.
+    if cx.uses_delay_busy || cx.uses_delay_sleep {
+        tu.push_str(&body::delay_helpers(cx.uses_delay_busy, cx.uses_delay_sleep));
+    }
     tu.push_str(&bodies);
     tu.push_str(&scaffold.text);
     tu.push('\n');
@@ -875,6 +883,10 @@ fn emit_scaffold(
             name = c_ident(&irq.dev_name),
         ));
     }
+    // Atomicity (R10/S10): seed the Atomic fields before any callback, regardless
+    // of whether on_init is authored (the fields live in the private struct, so
+    // a non-zero initial must be applied even with no on_init).
+    out.push_str(&emit_atomic_init(cx));
     if let Some(id) = on_init {
         let sym = cx.fn_symbols[&id].clone();
         let mut hook = String::new();
@@ -1072,6 +1084,10 @@ fn emit_scaffold_pci(
             );
         }
     }
+    // Atomicity (R10/S10): seed the Atomic fields before any callback, regardless
+    // of whether on_init is authored (the fields live in the private struct, so
+    // a non-zero initial must be applied even with no on_init).
+    out.push_str(&emit_atomic_init(cx));
     if let Some(id) = on_init {
         let sym = cx.fn_symbols[&id].clone();
         let failure_hook = on_init_failure.map(|fid| {
@@ -1341,6 +1357,35 @@ fn result_carrier_facts(model: &RegseqModel, result_ty: TyId) -> Result<CarrierF
 /// Emit every named aggregate's definition, dependency-ordered (by-value
 /// struct containment first). The driver struct's resource fields are
 /// substituted with their Linux carrier (`void __iomem *`, §C.7).
+/// Seed each `Atomic<T>` driver field from its `#[rseq::atomic(initial = N)]`
+/// literal at probe time, before `on_init` (atomicity R10/S10). The private
+/// struct is `devm_kzalloc`'d (zero), so only non-zero initials are emitted, via
+/// the width-correct `atomic{,64,_long}_set`. The initial is masked to the
+/// element width (two's-complement low bits for a negative signed initial).
+fn emit_atomic_init(cx: &LowerCx<'_>) -> String {
+    let mut s = String::new();
+    for (name, element, initial) in cx.model.atomic_fields_of(cx.driver.driver_ty) {
+        let Some(init) = initial else {
+            continue;
+        };
+        let (_, api, valty) = body::linux_atomic(element);
+        let raw = init as u64;
+        let masked = if element.width_bits() == 32 {
+            raw & 0xffff_ffff
+        } else {
+            raw
+        };
+        if masked == 0 {
+            continue;
+        }
+        s.push_str(&format!(
+            "\t{api}_set(&priv->inner.{}, ({valty})0x{masked:x}ULL);\n",
+            c_ident(&name)
+        ));
+    }
+    s
+}
+
 fn emit_type_defs(
     cx: &mut LowerCx<'_>,
     driver_ty: TyId,
@@ -1370,18 +1415,41 @@ fn emit_type_defs(
                 }
                 other => other,
             };
+            // Atomicity (construct #7): override each `Atomic<T>` field's storage
+            // to the Linux kernel-atomic type by width (C07), for EVERY struct
+            // that has atomic fields (not only the driver struct — a nested
+            // struct's atomic fields must be overridden too, else its receiver
+            // recovery would point at the un-overridden facade type). The include
+            // is required whenever an `atomic_t`/etc. declaration is emitted.
+            let atomic_fields: Vec<(String, &'static str)> = model
+                .atomic_fields_of(ty)
+                .into_iter()
+                .map(|(name, element, _)| (c_ident(&name), body::linux_atomic(element).0))
+                .collect();
+            if !atomic_fields.is_empty() {
+                cx.extra_includes.insert("<linux/atomic.h>");
+            }
             let chunk = if ty == driver_ty {
                 let rn = resource_names.to_vec();
+                let af = atomic_fields;
                 types::emit_aggregate_def(model, &mut cx.names, ty, &move |fname: &str| {
                     if rn.iter().any(|r| r == fname) {
                         Some(format!("void __iomem *{fname}"))
+                    } else if let Some((_, storage)) = af.iter().find(|(n, _)| n == fname) {
+                        Some(format!("{storage} {fname}"))
                     } else {
                         None
                     }
                 })
                 .map_err(with_ctx)?
             } else {
-                types::emit_aggregate_def(model, &mut cx.names, ty, &|_| None).map_err(with_ctx)?
+                let af = atomic_fields;
+                types::emit_aggregate_def(model, &mut cx.names, ty, &move |fname: &str| {
+                    af.iter()
+                        .find(|(n, _)| n == fname)
+                        .map(|(_, storage)| format!("{storage} {fname}"))
+                })
+                .map_err(with_ctx)?
             };
             out_chunks.insert(ty, chunk);
             emitted.push(ty);

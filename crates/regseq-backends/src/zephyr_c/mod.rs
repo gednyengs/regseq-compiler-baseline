@@ -466,6 +466,8 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         },
         width8_used: false,
         uses_log: false,
+        uses_delay_busy: false,
+        uses_delay_sleep: false,
         elided_locals: std::collections::BTreeSet::new(),
     };
 
@@ -552,6 +554,8 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
             },
             width8_used: false,
             uses_log: false,
+            uses_delay_busy: false,
+            uses_delay_sleep: false,
             elided_locals: std::collections::BTreeSet::new(),
         };
         // Seed fn_symbols for the WHOLE absent closure before fn_head/emit_fn
@@ -746,6 +750,32 @@ struct PciePreamble {
 /// I10 is enforced structurally here: an authored `RegseqError` crosses the
 /// adapter at this boundary ONLY; native preamble failures (the C01 rungs)
 /// return unwrapped negative errnos directly — the two-channel rule (I09).
+/// The Zephyr `Atomic`-field seeding lines (R10/S10): `__atomic_store_n` over the
+/// `data->inner.<field>` cell for each non-zero `#[rseq::atomic(initial = N)]`
+/// (the data struct is zero-filled by the device model, so 0/None need no init).
+/// Empty when no field needs seeding.
+fn zephyr_atomic_init(cx: &body::LowerCx<'_>) -> String {
+    let mut s = String::new();
+    for (name, element, initial) in cx.model.atomic_fields_of(cx.driver.driver_ty) {
+        let Some(init) = initial else { continue };
+        let cty = body::zephyr_atomic_cty(element);
+        let raw = init as u64;
+        let masked = if element.width_bits() == 32 {
+            raw & 0xffff_ffff
+        } else {
+            raw
+        };
+        if masked == 0 {
+            continue;
+        }
+        s.push_str(&format!(
+            "\t__atomic_store_n(&data->inner.{}, ({cty})0x{masked:x}ULL, __ATOMIC_RELAXED);\n",
+            c_ident(&name)
+        ));
+    }
+    s
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_init_fn(
     cx: &mut body::LowerCx<'_>,
@@ -761,7 +791,12 @@ fn emit_init_fn(
     out.push_str(&format!(
         "/* the one runtime dispatch hub (scaffold §3) */\nstatic int {drv}_init(const struct device *dev)\n{{\n"
     ));
-    let uses_data = pcie.is_some() || on_init.is_some() || on_init_failure.is_some();
+    // Atomicity (R10/S10): seed each Atomic field from #[rseq::atomic(initial=N)]
+    // before any callback, regardless of whether on_init is authored. Computed
+    // up front so `data` is declared when a non-zero initial needs it.
+    let atomic_init = zephyr_atomic_init(cx);
+    let uses_data =
+        pcie.is_some() || on_init.is_some() || on_init_failure.is_some() || !atomic_init.is_empty();
     if uses_data {
         out.push_str(&format!("\tstruct {drv}_data *data = dev->data;\n\n"));
     }
@@ -832,6 +867,8 @@ fn emit_init_fn(
             "\tIRQ_CONNECT(DT_INST_IRQN(0), {priority}, rseq_isr_{drv},\n\t\t    DEVICE_DT_INST_GET(0), 0);\n\n"
         ));
     }
+    // Seed the Atomic fields before on_init (runs regardless of on_init).
+    out.push_str(&atomic_init);
     if let Some(init_id) = on_init {
         let sym = cx.fn_symbols[&init_id].clone();
         let failure_hook = on_init_failure.map(|fid| {
@@ -1251,6 +1288,16 @@ fn emit_type_defs(cx: &mut body::LowerCx<'_>, driver_ty: TyId) -> Result<String,
                 }
                 other => other,
             };
+            // Atomicity (construct #7): override each `Atomic<T>` field's storage
+            // to the plain width-`T` cell the `__atomic_*` builtins operate on
+            // (C07), for EVERY struct with atomic fields (not just the driver —
+            // a nested struct's atomic fields must be overridden too). Unlike the
+            // dead `mm_reg_t` MMIO carrier, this is REAL storage.
+            let atomic_fields: Vec<(String, &'static str)> = model
+                .atomic_fields_of(ty)
+                .into_iter()
+                .map(|(name, element, _)| (c_ident(&name), body::zephyr_atomic_cty(element)))
+                .collect();
             let chunk = if ty == driver_ty {
                 let rn: Vec<String> = cx
                     .driver
@@ -1258,18 +1305,27 @@ fn emit_type_defs(cx: &mut body::LowerCx<'_>, driver_ty: TyId) -> Result<String,
                     .iter()
                     .map(|(n, _, _)| n.clone())
                     .collect();
+                let af = atomic_fields;
                 types::emit_aggregate_def(model, &mut cx.names, ty, &move |fname: &str| {
                     if rn.iter().any(|r| r == fname) {
                         Some(format!(
                             "mm_reg_t {fname} /* dead under the TU-static base carrier (A-2) */"
                         ))
+                    } else if let Some((_, cty)) = af.iter().find(|(n, _)| n == fname) {
+                        Some(format!("{cty} {fname}"))
                     } else {
                         None
                     }
                 })
                 .map_err(with_ctx)?
             } else {
-                types::emit_aggregate_def(model, &mut cx.names, ty, &|_| None).map_err(with_ctx)?
+                let af = atomic_fields;
+                types::emit_aggregate_def(model, &mut cx.names, ty, &move |fname: &str| {
+                    af.iter()
+                        .find(|(n, _)| n == fname)
+                        .map(|(_, cty)| format!("{cty} {fname}"))
+                })
+                .map_err(with_ctx)?
             };
             out_chunks.insert(ty, chunk);
             emitted.push(ty);
@@ -1812,6 +1868,12 @@ fn emit_tu(
         );
     }
 
+    // Timed-cpu-delay-and-sleep lowering helpers (TCD construct, M2/T09),
+    // injected before the bodies that call them, gated on the demand flags the
+    // body lowering set when a busy_wait/sleep was emitted.
+    if cx.uses_delay_busy || cx.uses_delay_sleep {
+        tu.push_str(&body::delay_helpers(cx.uses_delay_busy, cx.uses_delay_sleep));
+    }
     // §1 items 5-7: lowered helper/callback bodies, then the init function
     // — the one runtime dispatch hub (§3).
     tu.push_str(bodies);

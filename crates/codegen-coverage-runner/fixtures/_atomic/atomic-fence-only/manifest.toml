@@ -1,0 +1,5 @@
+name   = "atomic-fence-only"
+kind   = "rust"
+entry  = "regseq_main"
+covers = ["ATM-S04", "ATM-C05", "ATM-I03"]
+expect = "pass"

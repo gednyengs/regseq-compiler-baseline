@@ -2499,6 +2499,8 @@ fn lower_cx<'m>(m: &'m RegseqModel, driver_ty: TyId, resolved: bool) -> LowerCx<
         },
         width8_used: false,
         uses_log: false,
+        uses_delay_busy: false,
+        uses_delay_sleep: false,
         elided_locals: std::collections::BTreeSet::new(),
     }
 }
@@ -3074,4 +3076,26 @@ fn log_non_static_str_arg_is_rejected_citing_a5_on_the_public_path() {
         panic!("expected Rejected, got {err:?}");
     };
     assert!(s.contains("A-5") && s.contains("non-static"), "{s}");
+}
+
+#[test]
+fn delay_helpers_emit_zephyr_kernel_primitives_and_round_up() {
+    // Timed-cpu-delay-and-sleep (TCD construct, M2/T09): busy_wait ->
+    // k_busy_wait(us) (round up to us, no magnitude bands); sleep ->
+    // k_msleep(ms) (round up to ms). Minimum-wait (R06) via the overflow-safe
+    // `ns == 0 ? 0 : 1 + (ns-1)/scale` ceiling.
+    let h = super::body::delay_helpers(true, true);
+    assert!(h.contains("static void regseq_zephyr_busy_wait_ns(uint64_t ns)"));
+    assert!(
+        h.contains("k_busy_wait((uint32_t)(ns == 0ULL ? 0ULL : 1ULL + (ns - 1ULL) / 1000ULL))"),
+        "k_busy_wait round-up: {h}"
+    );
+    assert!(h.contains("static void regseq_zephyr_sleep_ns(uint64_t ns)"));
+    assert!(
+        h.contains("k_msleep((int32_t)(ns == 0ULL ? 0ULL : 1ULL + (ns - 1ULL) / 1000000ULL))"),
+        "k_msleep round-up: {h}"
+    );
+    // Demand-precise gating.
+    let busy_only = super::body::delay_helpers(true, false);
+    assert!(busy_only.contains("busy_wait_ns") && !busy_only.contains("sleep_ns"));
 }

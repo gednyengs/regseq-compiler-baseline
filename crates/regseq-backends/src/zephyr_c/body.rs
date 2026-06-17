@@ -25,9 +25,9 @@
 use std::collections::BTreeMap;
 
 use regseq_model::{
-    AggregateKind, AttrData, BinOp, CallCallee, CastKind, Const, EnumShape, InstanceId,
-    InstanceKind, IntrinsicKind, LayoutKind, LocalId, Operand, Place, PlaceElem, RegseqModel,
-    Rvalue, StatementKind, TerminatorKind, Ty, TyId, UnOp,
+    AggregateKind, AtomicElement, AtomicOp, AttrData, BinOp, CallCallee, CastKind, Const, EnumShape,
+    FetchOp, FieldIdx, InstanceId, InstanceKind, IntrinsicKind, ItemId, LayoutKind, LocalId, Operand,
+    Place, PlaceElem, RegseqModel, Rvalue, StatementKind, TerminatorKind, Ty, TyId, UnOp,
 };
 
 use super::types::{self, TypeNames};
@@ -51,6 +51,14 @@ pub(crate) struct LowerCx<'m> {
     /// Whether any `LOG_*` call was lowered (the TU then carries the
     /// demand-driven log-module block, scaffold §1 item 2).
     pub uses_log: bool,
+    /// Whether a `busy_wait` intrinsic was lowered (timed-cpu-delay-and-sleep
+    /// construct): the TU then carries the `regseq_zephyr_busy_wait_ns`
+    /// (k_busy_wait, round up to us) helper + `<zephyr/kernel.h>`.
+    pub uses_delay_busy: bool,
+    /// Whether a `sleep` intrinsic was lowered: the TU then carries the
+    /// `regseq_zephyr_sleep_ns` (k_msleep, round up to ms) helper +
+    /// `<zephyr/kernel.h>`.
+    pub uses_delay_sleep: bool,
     /// Per-function: locals holding elided trivial-accessor results.
     pub elided_locals: std::collections::BTreeSet<LocalId>,
 }
@@ -691,6 +699,23 @@ fn emit_call(
             IntrinsicKind::Config(op) => {
                 cx.emit_config(op, *instance, body, args, destination, out)
             }
+            // Timed-CPU-delay-and-sleep lowering (timed-cpu-delay-and-sleep
+            // construct, C04/D09). `busy_wait` lowers to the
+            // `regseq_zephyr_busy_wait_ns` helper (`k_busy_wait(us)`, round ns
+            // up to us); `sleep` to `regseq_zephyr_sleep_ns` (`k_msleep(ms)`,
+            // round ns up to ms — the kernel further rounds to the tick floor).
+            // Zephyr needs no magnitude bands (k_busy_wait always takes us), so
+            // the helper is just the overflow-safe ns->unit round-up.
+            IntrinsicKind::BusyWait | IntrinsicKind::Sleep => {
+                emit_delay(cx, kind, *instance, body, args, out)
+            }
+            // Atomic-memory-access-and-ordering lowering (atomicity construct):
+            // the per-target Zephyr atomics emission lands in M4/T16. The
+            // generic-c host oracle (M1) is the only backend exercised before
+            // then; route here so the dispatch is exhaustive.
+            IntrinsicKind::Atomic(op) => {
+                emit_atomic(cx, op, *instance, body, args, destination, out)
+            }
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {
@@ -758,6 +783,315 @@ fn operand_expr(
     op: &Operand,
 ) -> Result<String, EmitError> {
     operand_expr_typed(cx, body, op, None)
+}
+
+/// Timed-cpu-delay-and-sleep lowering (TCD construct): lower a `busy_wait`/
+/// `sleep` Call to a call to the per-TU helper carrying the `Duration`
+/// argument's u64 nanoseconds (`regseq_zephyr_busy_wait_ns` /
+/// `regseq_zephyr_sleep_ns`). The `Duration` type comes from the callee's
+/// first PARAMETER, and its sole field name is recovered from the layout.
+/// Records the `<zephyr/kernel.h>` include and the `uses_delay_*` demand flags.
+fn emit_delay(
+    cx: &mut LowerCx<'_>,
+    kind: IntrinsicKind,
+    instance: InstanceId,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    out: &mut String,
+) -> Result<(), EmitError> {
+    let arg = args.first().ok_or_else(|| {
+        EmitError::Unsupported("delay intrinsic call without a Duration argument".into())
+    })?;
+    let param_tys: Vec<TyId> = match &cx.model.instances[instance].kind {
+        InstanceKind::Function(d) => cx.model.sigs.resolve(d.fn_sig).inputs.clone(),
+        _ => Vec::new(),
+    };
+    let duration_ty = param_tys.first().copied().ok_or_else(|| {
+        EmitError::Unsupported("delay intrinsic callee has no Duration parameter type".into())
+    })?;
+    let field = field_c_name(cx.model, duration_ty, 0)?;
+    let dur_expr = operand_expr_typed(cx, body, arg, Some(duration_ty))?;
+    let ns = format!("(uint64_t)({dur_expr}).{field}");
+    cx.extra_includes.insert("<zephyr/kernel.h>");
+    let helper = if matches!(kind, IntrinsicKind::Sleep) {
+        cx.uses_delay_sleep = true;
+        "regseq_zephyr_sleep_ns"
+    } else {
+        cx.uses_delay_busy = true;
+        "regseq_zephyr_busy_wait_ns"
+    };
+    out.push_str(&format!("\t{helper}({ns});\n"));
+    Ok(())
+}
+
+/// The plain width-`T` C storage type for an `Atomic<T>` element (atomicity
+/// C07). Zephyr lowers the whole atomic surface to the GCC/Clang `__atomic_*`
+/// builtins over this cell (Codex M4 review): width-parametric (no 32-bit
+/// `atomic_t` ceiling), native dual-ordering CAS, and the exact memory order is
+/// carried on every op — strictly more faithful than the full-order-only Zephyr
+/// `atomic_t` API.
+pub(crate) fn zephyr_atomic_cty(element: AtomicElement) -> &'static str {
+    match element {
+        AtomicElement::U32 => "uint32_t",
+        AtomicElement::I32 => "int32_t",
+        AtomicElement::U64 => "uint64_t",
+        AtomicElement::I64 => "int64_t",
+        AtomicElement::Ptr => "uintptr_t",
+    }
+}
+
+/// The GCC `__ATOMIC_*` memory order for an `Ordering` discriminant.
+fn zephyr_memorder(variant: u32) -> &'static str {
+    match variant {
+        0 => "__ATOMIC_RELAXED",
+        1 => "__ATOMIC_ACQUIRE",
+        2 => "__ATOMIC_RELEASE",
+        3 => "__ATOMIC_ACQ_REL",
+        _ => "__ATOMIC_SEQ_CST",
+    }
+}
+
+/// Recover the `(field address lvalue, element)` named by an `Atomic<T>`
+/// receiver (mirrors `linux_c::recover_atomic_field`): chase to the borrowed
+/// driver-struct field place, take its address, read the element from the
+/// `AttrData::Atomic` marker.
+fn recover_atomic_field(
+    cx: &mut LowerCx<'_>,
+    body: &regseq_model::Body,
+    recv: &Operand,
+) -> Result<(String, AtomicElement), EmitError> {
+    let src = cx.resolve_receiver_src(body, recv, 0)?;
+    let mut ty = body.local_decls[src.local].ty;
+    let mut field: Option<(ItemId, FieldIdx)> = None;
+    for elem in src.projection.iter() {
+        match elem {
+            PlaceElem::Deref => {
+                ty = match &cx.model.types[ty] {
+                    Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                    _ => return Err(EmitError::Unsupported("atomic receiver deref of non-pointer".into())),
+                };
+            }
+            PlaceElem::Field(idx, fty) => {
+                if let Ty::Struct { item, .. } = &cx.model.types[ty] {
+                    field = Some((*item, *idx));
+                }
+                ty = *fty;
+            }
+            PlaceElem::Index(_) | PlaceElem::ConstantIndex { .. } => {
+                ty = match &cx.model.types[ty] {
+                    Ty::Array(elem, _) => *elem,
+                    _ => return Err(EmitError::Unsupported("atomic receiver index of non-array".into())),
+                };
+                field = None;
+            }
+            _ => return Err(EmitError::Unsupported("atomic receiver unsupported projection".into())),
+        }
+    }
+    let (item, fidx) = field.ok_or_else(|| {
+        EmitError::Unsupported("atomic receiver does not resolve to a driver field".into())
+    })?;
+    // S01: atomic ops are supported only on a DIRECT driver-struct field; a
+    // nested atomic field is rejected loud (the init seeds only the driver
+    // struct).
+    let driver_item = match &cx.model.types[cx.driver.driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => return Err(EmitError::Unsupported("driver type is not a struct".into())),
+    };
+    if item != driver_item {
+        return Err(EmitError::Unsupported(
+            "atomic op on a nested Atomic field is unsupported; place Atomic state \
+             directly in the driver struct (S01)"
+                .into(),
+        ));
+    }
+    let (element, _) = cx.model.atomic_field_at(item, fidx).ok_or_else(|| {
+        EmitError::Unsupported("atomic receiver field has no recorded Atomic marker".into())
+    })?;
+    let lv = place_lvalue(cx, body, &src)?;
+    Ok((format!("&{lv}"), element))
+}
+
+/// The const-`Ordering` discriminant at `args[i]` (D14).
+fn atomic_ordering(
+    cx: &LowerCx<'_>,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    i: usize,
+) -> Result<u32, EmitError> {
+    let op = args
+        .get(i)
+        .ok_or_else(|| EmitError::Unsupported("atomic call missing the Ordering argument".into()))?;
+    cx.model
+        .resolve_operand_enum_variant(body, op)
+        .ok_or_else(|| EmitError::Unsupported("atomic Ordering is not a compile-time constant".into()))
+}
+
+/// Atomic-memory-access-and-ordering lowering (atomicity construct) — Zephyr via
+/// the GCC `__atomic_*` builtins (C03/C04/C07). Width-parametric over a plain
+/// width-`T` cell; the exact `__ATOMIC_*` memory order rides every op; CAS is
+/// native dual-ordering (no collapse, I07/C04); bit ops via `__atomic_fetch_or`/
+/// `_and`; fence via `__atomic_thread_fence`.
+fn emit_atomic(
+    cx: &mut LowerCx<'_>,
+    op: AtomicOp,
+    _instance: InstanceId,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    destination: &Place,
+    out: &mut String,
+) -> Result<(), EmitError> {
+    // `atomic::fence` — free fn, no receiver; order at args[0].
+    if matches!(op, AtomicOp::Fence) {
+        let v = atomic_ordering(cx, body, args, 0)?;
+        out.push_str(&format!("\t__atomic_thread_fence({});\n", zephyr_memorder(v)));
+        return Ok(());
+    }
+    let recv = args
+        .first()
+        .ok_or_else(|| EmitError::Unsupported("atomic op call without a receiver".into()))?;
+    let (faddr, element) = recover_atomic_field(cx, body, recv)?;
+    let cty = zephyr_atomic_cty(element);
+    let dst_cty = |cx: &mut LowerCx<'_>| -> Result<String, EmitError> {
+        let ty = place_ty(cx.model, body, destination)?;
+        types::c_type(cx.model, &mut cx.names, ty)
+    };
+    match op {
+        AtomicOp::Load => {
+            let mo = zephyr_memorder(atomic_ordering(cx, body, args, 1)?);
+            let dst = place_lvalue(cx, body, destination)?;
+            let dcty = dst_cty(cx)?;
+            out.push_str(&format!("\t{dst} = ({dcty})__atomic_load_n({faddr}, {mo});\n"));
+        }
+        AtomicOp::Store => {
+            let mo = zephyr_memorder(atomic_ordering(cx, body, args, 2)?);
+            let val = operand_expr(cx, body, &args[1])?;
+            out.push_str(&format!("\t__atomic_store_n({faddr}, ({cty})({val}), {mo});\n"));
+        }
+        AtomicOp::FetchModify(fop) => {
+            let mo = zephyr_memorder(atomic_ordering(cx, body, args, 2)?);
+            let val = operand_expr(cx, body, &args[1])?;
+            let dst = place_lvalue(cx, body, destination)?;
+            let dcty = dst_cty(cx)?;
+            let stmt = match fop {
+                FetchOp::Add => format!("__atomic_fetch_add({faddr}, ({cty})({val}), {mo})"),
+                FetchOp::Sub => format!("__atomic_fetch_sub({faddr}, ({cty})({val}), {mo})"),
+                FetchOp::Or => format!("__atomic_fetch_or({faddr}, ({cty})({val}), {mo})"),
+                FetchOp::And => format!("__atomic_fetch_and({faddr}, ({cty})({val}), {mo})"),
+                FetchOp::Xor => format!("__atomic_fetch_xor({faddr}, ({cty})({val}), {mo})"),
+                FetchOp::Swap => format!("__atomic_exchange_n({faddr}, ({cty})({val}), {mo})"),
+            };
+            out.push_str(&format!("\t{dst} = ({dcty}){stmt};\n"));
+        }
+        AtomicOp::BitTestSet | AtomicOp::BitTestClear => {
+            let mo = zephyr_memorder(atomic_ordering(cx, body, args, 2)?);
+            let bit = operand_expr(cx, body, &args[1])?;
+            let dst = place_lvalue(cx, body, destination)?;
+            let dcty = dst_cty(cx)?;
+            // Mask the shift amount to width-1 so it is never UB for a runtime
+            // out-of-range bit (the const out-of-range case is a frontend
+            // reject; the runtime case is an author error the host oracle
+            // catches). The cell cty is unsigned for the unsigned-only bit_test
+            // element, so the shift itself is unsigned.
+            let smask = if cty == "uint64_t" { 63 } else { 31 };
+            let sh = format!("(({bit}) & {smask})");
+            let rmw = match op {
+                AtomicOp::BitTestSet => {
+                    format!("__atomic_fetch_or({faddr}, ({cty})1 << {sh}, {mo})")
+                }
+                _ => format!("__atomic_fetch_and({faddr}, ~(({cty})1 << {sh}), {mo})"),
+            };
+            out.push_str(&format!("\t{dst} = ({dcty})((({rmw}) >> {sh}) & 1);\n"));
+        }
+        AtomicOp::CompareExchange => {
+            // args = [recv, current, new, success, failure]. Native dual-ordering
+            // (no collapse): __atomic_compare_exchange_n writes the observed prior
+            // into `expected`, returns whether it committed. Build Result<T,T>.
+            let succ = zephyr_memorder(atomic_ordering(cx, body, args, 3)?);
+            let fail = zephyr_memorder(atomic_ordering(cx, body, args, 4)?);
+            let cur = operand_expr(cx, body, &args[1])?;
+            let new = operand_expr(cx, body, &args[2])?;
+            let dst = place_lvalue(cx, body, destination)?;
+            let dst_ty = place_ty(cx.model, body, destination)?;
+            out.push_str(&format!("\t{{ {cty} __cas_exp = ({cty})({cur});\n"));
+            out.push_str(&format!(
+                "\t  bool __cas_ok = __atomic_compare_exchange_n({faddr}, &__cas_exp, ({cty})({new}), false, {succ}, {fail});\n"
+            ));
+            out.push_str("\t  if (__cas_ok) {\n");
+            cx_emit_cas_result(cx, &dst, dst_ty, 0, "__cas_exp", out)?;
+            out.push_str("\t  } else {\n");
+            cx_emit_cas_result(cx, &dst, dst_ty, 1, "__cas_exp", out)?;
+            out.push_str("\t  } }\n");
+        }
+        AtomicOp::Fence => unreachable!("fence handled before receiver recovery"),
+    }
+    Ok(())
+}
+
+/// Build a `Result<T,T>` variant (Ok=0/Err=1) carrying `payload_expr` into the
+/// opaque enum carrier `dst` (the `emit_aggregate` enum pattern).
+fn cx_emit_cas_result(
+    cx: &mut LowerCx<'_>,
+    dst: &str,
+    dst_ty: TyId,
+    variant_idx: u32,
+    payload_expr: &str,
+    out: &mut String,
+) -> Result<(), EmitError> {
+    use regseq_model::VariantIdx;
+    cx.extra_includes.insert("<string.h>");
+    let variant = VariantIdx::from_u32(variant_idx);
+    out.push_str(&format!("\t\tmemset(&{dst}, 0, sizeof({dst}));\n"));
+    emit_enum_tag_write(cx, dst_ty, dst, variant, out)?;
+    let layout = types::layout_of(cx.model, dst_ty)
+        .ok_or_else(|| EmitError::Unsupported("compare_exchange destination has no layout".into()))?;
+    let LayoutKind::Enum {
+        shape: EnumShape::Multiple { variants, .. },
+    } = &layout.kind
+    else {
+        return Err(EmitError::Unsupported(
+            "compare_exchange destination is not a tagged Result enum".into(),
+        ));
+    };
+    let vlayout = &variants[variant_idx as usize];
+    let f = vlayout
+        .fields
+        .first()
+        .ok_or_else(|| EmitError::Unsupported("Result variant has no payload field".into()))?;
+    let fty = types::c_type(cx.model, &mut cx.names, f.ty)?;
+    out.push_str(&format!(
+        "\t\t{{ {fty} __v = ({fty})({payload_expr}); memcpy(&{dst}._raw[{}], &__v, sizeof(__v)); }}\n",
+        f.offset
+    ));
+    Ok(())
+}
+
+/// The timed-cpu-delay-and-sleep lowering helpers (TCD construct), emitted into
+/// the TU before the bodies that call them (gated on `uses_delay_*`).
+///
+/// `regseq_zephyr_busy_wait_ns` rounds the ns request UP to microseconds and
+/// calls `k_busy_wait(us)` (atomic-safe spin; no magnitude bands — k_busy_wait
+/// always takes us). `regseq_zephyr_sleep_ns` rounds UP to milliseconds and
+/// calls `k_msleep(ms)` (the kernel further rounds to the tick floor). Both
+/// preserve the minimum-wait guarantee (R06) via the overflow-safe
+/// `ns == 0 ? 0 : 1 + (ns-1)/scale` ceiling. The us/ms casts assume the
+/// duration fits the kernel primitive's argument width (`k_busy_wait`'s
+/// `uint32_t`, `k_msleep`'s `int32_t`) — true for any real driver delay.
+pub(crate) fn delay_helpers(busy: bool, sleep: bool) -> String {
+    let mut s = String::new();
+    s.push_str("/* timed-cpu-delay-and-sleep (TCD construct) lowering helpers. */\n");
+    if busy {
+        s.push_str(
+            "static void regseq_zephyr_busy_wait_ns(uint64_t ns)\n{\n\
+             \tk_busy_wait((uint32_t)(ns == 0ULL ? 0ULL : 1ULL + (ns - 1ULL) / 1000ULL));\n}\n\n",
+        );
+    }
+    if sleep {
+        s.push_str(
+            "static void regseq_zephyr_sleep_ns(uint64_t ns)\n{\n\
+             \tk_msleep((int32_t)(ns == 0ULL ? 0ULL : 1ULL + (ns - 1ULL) / 1000000ULL));\n}\n\n",
+        );
+    }
+    s
 }
 
 /// Render a constant as a C expression.

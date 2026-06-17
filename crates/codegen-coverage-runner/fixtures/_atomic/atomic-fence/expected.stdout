@@ -1,0 +1,4 @@
+ATM store cell=0 w=32 ord=Relaxed val=0x1
+ATM fence ord=Release
+ATM load cell=0 w=32 ord=Relaxed => 0x1
+ATM fence ord=SeqCst

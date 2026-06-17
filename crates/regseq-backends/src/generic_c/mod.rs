@@ -328,6 +328,35 @@ fn emit_generic_c_inner(
     {
         out.push_str(prelude::BUS_RESOURCE_HELPERS);
     }
+    // Timed-cpu-delay-and-sleep host fake-clock hooks (TCD construct, C06/D08):
+    // the extern declarations the `busy_wait`/`sleep` lowering calls. Emitted
+    // only for a TU that uses a delay intrinsic so a delay-less TU's `.c` is
+    // byte-unchanged (no golden churn). The recording implementation is linked
+    // by the test harness, NOT defined here.
+    if body_emit::model_has_delay_intrinsic(model) {
+        out.push_str(prelude::DELAY_HOOKS);
+    }
+    // Atomic-memory-access-and-ordering host oracle (atomicity construct, C05):
+    // the always-on `regseq_atomic_*` cell table + six hooks, plus the per-TU
+    // cell-init constructor (R10/S10) that seeds the non-zero initials. Emitted
+    // for any TU that uses an atomic OP — including a field-less `atomic::fence`-
+    // only TU, which still calls `regseq_atomic_fence` and so needs the prelude
+    // definitions. An atomic-less TU's `.c` is byte-unchanged (no golden churn).
+    if body_emit::model_has_atomic_op(model) {
+        // Size the cell table to the TU's exact Atomic-field count (no fixed
+        // cap): the `#define` precedes the prelude block, which declares
+        // `regseq_atomic_cells[REGSEQ_ATOMIC_CELLS]`. Cell ids run 0..count-1.
+        // A fence-only TU has zero cells; size at least 1 so the table is not a
+        // zero-length array (which is not standard C).
+        out.push_str(&format!(
+            "#define REGSEQ_ATOMIC_CELLS {}u\n",
+            body_emit::atomic_cell_count(model).max(1)
+        ));
+        out.push_str(prelude::ATOMIC_HELPERS);
+        if let Some(init) = body_emit::emit_atomic_cell_init(model) {
+            out.push_str(&init);
+        }
+    }
     out.push_str(&bank2);
     out.push_str(&bank3);
     out.push_str(&bank4);

@@ -907,6 +907,9 @@ fn validate_attr_data_payload(
         // The framework-type marker carries a closed enum with no nested
         // model IDs, so there is nothing to range-check here.
         AttrData::FrameworkType(_) => Ok(()),
+        // The atomic field marker carries a closed `AtomicElement` enum and an
+        // optional `i128` literal — no nested model IDs to range-check.
+        AttrData::Atomic { .. } => Ok(()),
         // The interrupt-resource marker carries the interned resource id;
         // range-check it against the string table.
         AttrData::InterruptResource { id, .. } => {

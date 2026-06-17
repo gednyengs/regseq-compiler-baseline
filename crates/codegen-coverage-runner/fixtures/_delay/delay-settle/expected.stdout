@@ -1,0 +1,7 @@
+[INFO] reset assert
+DELAY busy_wait ns=10000 seq=0 t=10000ns
+[INFO] reset deassert
+DELAY busy_wait ns=500000 seq=1 t=510000ns
+[INFO] eeprom ready
+DELAY sleep ns=5000000 seq=2 t=5510000ns
+[INFO] link up

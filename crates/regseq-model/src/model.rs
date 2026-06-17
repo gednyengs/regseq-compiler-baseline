@@ -2020,6 +2020,156 @@ impl RegseqModel {
         None
     }
 
+    /// The enum variant index of a **compile-time-constant** enum operand, or
+    /// `None` if the operand is not such a constant.
+    ///
+    /// This is the shared D14/I08 read for the atomicity construct's
+    /// compile-time-constant `Ordering` argument: the const `Ordering` interns as
+    /// a `Const::EnumValue` operand that survives in `Call.args` (the model
+    /// `Call` terminator has no metadata slot), and BOTH consumers recover the
+    /// discriminant from that same operand — the frontend legality passes
+    /// (`ATOMIC-ERR-DEGENERATE-ACQREL`/`FENCE-RELAXED`/`ORDERING-NONCONST`, C01/
+    /// C02) and the per-target backend selectors (intrinsic + strengthening,
+    /// C03/C04). Routing both through this one helper is what keeps them
+    /// consuming the *same* per-call ordering. A non-constant `Ordering` (a
+    /// runtime value reaching as `Operand::Copy`/`Move`) returns `None`, which
+    /// the frontend turns into `ATOMIC-ERR-ORDERING-NONCONST`.
+    ///
+    /// The enum's source declaration order is the variant index, so for
+    /// `Ordering { Relaxed, Acquire, Release, AcqRel, SeqCst }` this yields the
+    /// C05 ABI integers `Relaxed=0 … SeqCst=4` directly.
+    pub fn operand_const_enum_variant(&self, operand: &Operand) -> Option<u32> {
+        match operand {
+            Operand::Constant(id) => match self.consts.resolve(*id) {
+                Const::EnumValue { variant_idx, .. } => Some(variant_idx.as_u32()),
+                _ => None,
+            },
+            Operand::Copy(_) | Operand::Move(_) => None,
+        }
+    }
+
+    /// The enum variant index of a compile-time-constant enum operand,
+    /// **chasing a reaching-def temp** in `body` when the operand is not a
+    /// direct constant.
+    ///
+    /// At `mir_opt_level = 0` a constant enum value reaches a call argument
+    /// through a single-assignment temp rather than inline: `_5 =
+    /// Ordering::Acquire; f(move _5)`. The temp's defining rvalue is either a
+    /// `Use(Operand::Constant(Const::EnumValue))` or a fieldless
+    /// `Aggregate(AggregateKind::Enum(_, variant), [])`; both are compile-time
+    /// constants and yield the same discriminant. This is the D14/I08 read both
+    /// the atomicity frontend legality passes and the per-target backend
+    /// selectors use, so they agree on each call's `Ordering` (C06). A
+    /// non-constant (runtime) ordering — a temp with a non-constant defining
+    /// rvalue, an ambiguous/missing def, or a projected place — returns `None`,
+    /// which the frontend turns into `ATOMIC-ERR-ORDERING-NONCONST`.
+    pub fn resolve_operand_enum_variant(&self, body: &Body, operand: &Operand) -> Option<u32> {
+        self.resolve_operand_enum_variant_inner(body, operand, 0)
+    }
+
+    fn resolve_operand_enum_variant_inner(
+        &self,
+        body: &Body,
+        operand: &Operand,
+        depth: u32,
+    ) -> Option<u32> {
+        // Bound the reaching-def chase (matches the receiver-chase bound).
+        if depth > 8 {
+            return None;
+        }
+        if let Some(variant) = self.operand_const_enum_variant(operand) {
+            return Some(variant);
+        }
+        let place = match operand {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            Operand::Constant(_) => return None,
+        };
+        if !place.projection.is_empty() {
+            return None;
+        }
+        let local = place.local;
+        // The unique whole-local definition (single-assignment at opt-level 0).
+        let mut def: Option<&Rvalue> = None;
+        for block in body.basic_blocks.iter() {
+            for stmt in block.statements.iter() {
+                if let StatementKind::Assign(dst, rhs) = &stmt.kind {
+                    if dst.local == local && dst.projection.is_empty() {
+                        if def.is_some() {
+                            return None; // ambiguous: not a clean constant
+                        }
+                        def = Some(rhs);
+                    }
+                }
+            }
+        }
+        match def? {
+            Rvalue::Use(inner) => self.resolve_operand_enum_variant_inner(body, inner, depth + 1),
+            Rvalue::Aggregate(AggregateKind::Enum(_, variant), fields) if fields.is_empty() => {
+                Some(variant.as_u32())
+            }
+            _ => None,
+        }
+    }
+
+    /// The recognized atomic element + initial value of the `Atomic<T>` field at
+    /// `FieldPath { item, variant: 0, field }`, or `None` if that field carries
+    /// no `AttrData::Atomic` marker. The shared per-target read for the
+    /// atomicity construct (atomic-memory-access-and-ordering): the generic-c /
+    /// linux-c / zephyr-c backends recover the element (storage width +
+    /// signedness) + the `#[rseq::atomic(initial = N)]` value from the marker
+    /// `bridge::atomic::materialise_atomics` recorded, keeping all three targets
+    /// consistent.
+    pub fn atomic_field_at(
+        &self,
+        item: ItemId,
+        field: crate::ids::FieldIdx,
+    ) -> Option<(crate::domain_attr::AtomicElement, Option<i128>)> {
+        let path = crate::domain_attr::FieldPath {
+            item,
+            variant: crate::ids::VariantIdx::ZERO,
+            field,
+        };
+        self.domain_attrs
+            .field_attrs
+            .get(&path)?
+            .iter()
+            .find_map(|a| match a {
+                AttrData::Atomic {
+                    element,
+                    initial_value,
+                } => Some((*element, *initial_value)),
+                _ => None,
+            })
+    }
+
+    /// Every `Atomic<T>` field of the struct type `struct_ty`, as
+    /// `(field name, element, initial value)` in declaration order. Used by the
+    /// per-target backends to (a) override each field's storage type in the
+    /// emitted driver struct (`atomic_t`/`atomic64_t`/… ) and (b) emit the
+    /// `#[rseq::atomic(initial = N)]` field-init. The struct's layout `fields`
+    /// vector is indexed by `FieldIdx` (declaration order), so position `i`
+    /// matches `FieldPath { …, field: i }`.
+    pub fn atomic_fields_of(
+        &self,
+        struct_ty: crate::ids::TyId,
+    ) -> Vec<(String, crate::domain_attr::AtomicElement, Option<i128>)> {
+        let crate::ty::Ty::Struct { item, layout, .. } = &self.types[struct_ty] else {
+            return Vec::new();
+        };
+        let crate::layout::LayoutKind::Struct { fields } = &layout.kind else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (i, f) in fields.iter().enumerate() {
+            if let Some((element, initial)) =
+                self.atomic_field_at(*item, crate::ids::FieldIdx::from_u32(i as u32))
+            {
+                out.push((self.strings.resolve(f.name).to_string(), element, initial));
+            }
+        }
+        out
+    }
+
     fn instance_item(&self, id: InstanceId) -> &Item {
         &self.items[self.instances[id].item]
     }

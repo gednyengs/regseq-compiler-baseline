@@ -41,9 +41,11 @@
 use std::cell::RefCell;
 
 use regseq_model::{
-    args_key_for_generic_args, AggregateKind, ArmReachability, AssertKind, BinOp, Byte,
+    args_key_for_generic_args, AggregateKind, ArmReachability, AssertKind, AtomicElement, AtomicOp,
+    AttrData, BinOp, Byte,
     CallCallee, CastKind, ConfigOp, Const,
-    ConstId, DriverInterrupts, Endian, EnumShape, FloatKind, GenericArg, InstanceId, InstanceKind,
+    ConstId, DriverInterrupts, Endian, EnumShape, FetchOp, FieldIdx, FieldPath, FloatKind,
+    GenericArg, InstanceId, InstanceKind,
     InstanceRef, InterruptForm, IntKind, IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel,
     MatchEntry, MmioOp, NonDivergingIntrinsic,
     Operand, Place, PlaceElem, PointerCoercion, RegseqModel, Rvalue, StatementKind, SwitchTargets,
@@ -2126,6 +2128,32 @@ impl BodyEmit<'_> {
                 let op = *op;
                 return self.emit_config(op, callee, args, destination, target);
             }
+            // Timed-CPU-delay-and-sleep interception (TCD construct): a Direct
+            // callee carrying `IntrinsicKind::BusyWait`/`Sleep` (the
+            // `regseq::delay::{busy_wait,sleep}` facade) lowers to a call to the
+            // host fake-clock extern hook (`regseq_delay_busy_wait_ns` /
+            // `regseq_delay_sleep_ns`) carrying the `Duration` argument's u64
+            // nanoseconds — never a real C delay (the recording impl is
+            // harness-side, C06/D08).
+            if let Some(kind @ (IntrinsicKind::BusyWait | IntrinsicKind::Sleep)) =
+                self.model.instance_intrinsic(*inst)
+            {
+                let kind = kind.clone();
+                return self.emit_delay(kind, callee, args, target);
+            }
+            // Atomic-memory-access-and-ordering interception (atomicity
+            // construct): a Direct callee carrying `IntrinsicKind::Atomic(op)`
+            // (the `Atomic<T>` wrapper methods + the `regseq::atomic::fence` free
+            // function) lowers to the always-on `regseq_atomic_*` host hooks
+            // (the `regseq_mmio_*` oracle model) instead of a C call. The cell id
+            // comes from the receiver's `Atomic` field (deterministic FieldPath
+            // order, C07); the const `Ordering` discriminant is recovered from
+            // the const `Call.args` operand at emit (the register-access emit-
+            // time-const-read precedent, C06/D14).
+            if let Some(IntrinsicKind::Atomic(op)) = self.model.instance_intrinsic(*inst) {
+                let op = *op;
+                return self.emit_atomic(op, callee, args, destination, target);
+            }
             // (Device-lifecycle is no longer call-intercepted: the harness verbs
             // were removed, RD-1; the synthesized `main` drives the lifecycle —
             // see `emit_lifecycle_synthesis`.)
@@ -2220,6 +2248,310 @@ impl BodyEmit<'_> {
                 Ok(format!("{assign} goto bb_{};", t.as_u32()))
             }
         }
+    }
+
+    /// Timed-CPU-delay-and-sleep lowering (TCD construct): lower a
+    /// `busy_wait`/`sleep` Call to a call to the host fake-clock extern hook
+    /// `regseq_delay_busy_wait_ns` / `regseq_delay_sleep_ns`, passing the single
+    /// `Duration` argument's `u64` nanoseconds.
+    ///
+    /// The generic-C oracle emits the extern CALL only; the recording
+    /// implementation (record `{kind, ns, seq}`, advance a virtual clock) is
+    /// linked by the test harness (C06/D08). Intent is preserved as hook
+    /// identity (I04): a `busy_wait` never lowers to the sleep hook or vice
+    /// versa. The `ns` value is read off the `Duration` operand's sole field;
+    /// a const-folded `Duration` aggregate and the result place of a runtime
+    /// `Duration::from_*` call both yield the same `(expr).ns` access (I05 is
+    /// trivial here — ns passes through unconverted).
+    fn emit_delay(
+        &self,
+        kind: IntrinsicKind,
+        callee: &CallCallee,
+        args: &[Operand],
+        target: Option<regseq_model::BlockId>,
+    ) -> Result<String, EmitError> {
+        let hook = match kind {
+            IntrinsicKind::BusyWait => "regseq_delay_busy_wait_ns",
+            IntrinsicKind::Sleep => "regseq_delay_sleep_ns",
+            // The interception only routes the two delay kinds here.
+            _ => return Err(EmitError::Unsupported("emit_delay on a non-delay intrinsic")),
+        };
+        let arg = args.first().ok_or(EmitError::Unsupported(
+            "delay intrinsic call without a Duration argument",
+        ))?;
+        // The `Duration` type comes from the callee's first PARAMETER, not from
+        // `operand_ty(arg)`: `operand_ty` is `None` for an `Operand::Constant`
+        // (a const-folded `Duration` aggregate), so reading it from the operand
+        // would fail the const path. The parameter type is known from the
+        // signature for both the const-aggregate and the value-ref operand —
+        // and it is the consumer type `operand_expr` needs to render a const
+        // aggregate.
+        let param_tys = super::callee_param_tys(self.model, self.body, callee);
+        let duration_ty = param_tys.first().copied().ok_or(EmitError::Unsupported(
+            "delay intrinsic callee has no recoverable Duration parameter type",
+        ))?;
+        // The `Duration`'s sole field carries the u64 ns. Recover its C field
+        // name from the layout (rather than hard-coding `ns`) so the access
+        // matches the emitted struct definition.
+        let (field, _) = layout_emit::field_c_name_ty(self.model, duration_ty, 0).ok_or(
+            EmitError::Unsupported("Duration argument is not a single-field struct"),
+        )?;
+        let dur_expr = self.operand_expr(arg, Some(duration_ty))?;
+        let call = format!("{hook}((uint64_t)({dur_expr}).{field})");
+        match target {
+            None => Ok(format!("{call}; __builtin_unreachable();")),
+            Some(t) => Ok(format!("{call}; goto bb_{};", t.as_u32())),
+        }
+    }
+
+    /// Atomic-memory-access-and-ordering lowering (atomicity construct): lower an
+    /// `IntrinsicKind::Atomic(op)` call to the always-on `regseq_atomic_*` host
+    /// hooks (the `regseq_mmio_*` oracle model — [`super::prelude::ATOMIC_HELPERS`]).
+    ///
+    /// The atomic state lives in the host cell table indexed by a deterministic
+    /// per-`Atomic`-field cell id (C07/OR-1); the in-struct value is unused. The
+    /// const `Ordering` discriminant rides in the `Call.args` operand and is
+    /// re-read at emit (`atomic_ordering`, the register-access emit-time-const-
+    /// read precedent, C06/D14). M1 covers `load`/`store`/`bit_test_set`/
+    /// `bit_test_clear`; `fetch_*`/`swap`/`compare_exchange`/`fence` land in M3.
+    ///
+    /// Argument layout (`args[0]` is the `&self` receiver, except `fence`):
+    /// - `load(order)`               : args = [recv, order]      -> dest = value
+    /// - `store(value, order)`       : args = [recv, value, order]
+    /// - `bit_test_{set,clear}(bit, order)` : args = [recv, bit, order] -> dest = prior bit
+    fn emit_atomic(
+        &self,
+        op: AtomicOp,
+        callee: &CallCallee,
+        args: &[Operand],
+        destination: &Place,
+        target: Option<regseq_model::BlockId>,
+    ) -> Result<String, EmitError> {
+        let target = target.ok_or(EmitError::Unsupported("atomic call with no target"))?;
+        let param_tys = super::callee_param_tys(self.model, self.body, callee);
+        // `atomic::fence` is the only op with no receiver (a free fn): order at
+        // args[0]. Lower to the CPU-only host fence hook (never MMIO — D02/I03).
+        if matches!(op, AtomicOp::Fence) {
+            let ord = self.atomic_ordering(args, 0)?;
+            return Ok(format!(
+                "regseq_atomic_fence({ord}); goto bb_{};",
+                target.as_u32()
+            ));
+        }
+        let recv = args
+            .first()
+            .ok_or(EmitError::Unsupported("atomic op call without a receiver"))?;
+        let (cell, element) = self.recover_atomic_cell(recv)?;
+        let width = element.width_bits();
+        let stmt = match op {
+            AtomicOp::Load => {
+                // args = [recv, order]
+                let ord = self.atomic_ordering(args, 1)?;
+                let dst = self.place_lvalue(destination)?;
+                let dst_cty = types::c_type(self.model, self.names, self.place_ty(destination));
+                format!("{dst} = ({dst_cty})regseq_atomic_load({cell}, {width}, {ord});")
+            }
+            AtomicOp::Store => {
+                // args = [recv, value, order]
+                let val_op = args.get(1).ok_or(EmitError::Unsupported(
+                    "atomic store call missing the value argument",
+                ))?;
+                let val = self.operand_expr(val_op, param_tys.get(1).copied())?;
+                let ord = self.atomic_ordering(args, 2)?;
+                format!("regseq_atomic_store({cell}, {width}, (uint64_t)({val}), {ord});")
+            }
+            AtomicOp::BitTestSet | AtomicOp::BitTestClear => {
+                // args = [recv, bit, order]; set_or_clear ABI: Set=0, Clear=1 (C05).
+                let set_or_clear = u32::from(matches!(op, AtomicOp::BitTestClear));
+                let bit_op = args.get(1).ok_or(EmitError::Unsupported(
+                    "atomic bit_test call missing the bit argument",
+                ))?;
+                let bit = self.operand_expr(bit_op, param_tys.get(1).copied())?;
+                let ord = self.atomic_ordering(args, 2)?;
+                let dst = self.place_lvalue(destination)?;
+                let dst_cty = types::c_type(self.model, self.names, self.place_ty(destination));
+                format!(
+                    "{dst} = ({dst_cty})regseq_atomic_bittest({cell}, {width}, {set_or_clear}, (uint32_t)({bit}), {ord});"
+                )
+            }
+            AtomicOp::FetchModify(fop) => {
+                // args = [recv, value, order]; the host RMW hook returns the
+                // prior value. FetchOp ABI: Add=0, Sub=1, Or=2, And=3, Xor=4,
+                // Swap=5 (C05).
+                let fop_disc = match fop {
+                    FetchOp::Add => 0u32,
+                    FetchOp::Sub => 1,
+                    FetchOp::Or => 2,
+                    FetchOp::And => 3,
+                    FetchOp::Xor => 4,
+                    FetchOp::Swap => 5,
+                };
+                let val_op = args.get(1).ok_or(EmitError::Unsupported(
+                    "atomic fetch_*/swap call missing the value argument",
+                ))?;
+                let val = self.operand_expr(val_op, param_tys.get(1).copied())?;
+                let ord = self.atomic_ordering(args, 2)?;
+                let dst = self.place_lvalue(destination)?;
+                let dst_cty = types::c_type(self.model, self.names, self.place_ty(destination));
+                format!(
+                    "{dst} = ({dst_cty})regseq_atomic_rmw({cell}, {width}, {fop_disc}, (uint64_t)({val}), {ord});"
+                )
+            }
+            AtomicOp::CompareExchange => {
+                // args = [recv, current(expected), new(desired), success, failure].
+                // The host CAS hook writes the observed prior into a temp and
+                // returns whether it committed; we build the `Result<T, T>`
+                // destination (Ok = committed, Err = contention; I07/C04) by
+                // replicating the enum-construction the assign-site uses
+                // (`assign_enum`): a discriminant write + the payload field. std
+                // `Result` is Ok=variant 0, Err=variant 1.
+                let cur_op = args.get(1).ok_or(EmitError::Unsupported(
+                    "compare_exchange call missing the current argument",
+                ))?;
+                let new_op = args.get(2).ok_or(EmitError::Unsupported(
+                    "compare_exchange call missing the new argument",
+                ))?;
+                let expected = self.operand_expr(cur_op, param_tys.get(1).copied())?;
+                let desired = self.operand_expr(new_op, param_tys.get(2).copied())?;
+                let succ = self.atomic_ordering(args, 3)?;
+                let fail = self.atomic_ordering(args, 4)?;
+                let dst = self.place_lvalue(destination)?;
+                let dst_ty = self.place_ty(destination);
+                let shape = enum_emit::enum_shape(self.model, dst_ty).ok_or(
+                    EmitError::Unsupported(
+                        "compare_exchange destination is not an enum (expected Result<T, T>)",
+                    ),
+                )?;
+                // Ok=0 / Err=1 tag writes + payload field paths.
+                let ok_tag = self.emit_set_discriminant(&dst, shape, 0)?.unwrap_or_default();
+                let err_tag = self.emit_set_discriminant(&dst, shape, 1)?.unwrap_or_default();
+                let (ok_field, ok_fty) = enum_emit::enum_variant_field(self.model, dst_ty, 0, 0)
+                    .ok_or(EmitError::Unsupported(
+                        "compare_exchange Result Ok payload field navigation failed",
+                    ))?;
+                let (err_field, err_fty) = enum_emit::enum_variant_field(self.model, dst_ty, 1, 0)
+                    .ok_or(EmitError::Unsupported(
+                        "compare_exchange Result Err payload field navigation failed",
+                    ))?;
+                let ok_cty = types::c_type(self.model, self.names, ok_fty);
+                let err_cty = types::c_type(self.model, self.names, err_fty);
+                let obs = self.fresh_temp_name("_cas_obs");
+                let committed = self.fresh_temp_name("_cas_ok");
+                format!(
+                    "{{ uint64_t {obs}; int {committed} = regseq_atomic_cmpxchg({cell}, {width}, \
+                     (uint64_t)({expected}), (uint64_t)({desired}), &{obs}, {succ}, {fail}); \
+                     if ({committed}) {{ {ok_tag} {dst}.{ok_field} = ({ok_cty}){obs}; }} \
+                     else {{ {err_tag} {dst}.{err_field} = ({err_cty}){obs}; }} }}"
+                )
+            }
+            // Handled above.
+            AtomicOp::Fence => unreachable!("fence handled before cell recovery"),
+        };
+        Ok(format!("{stmt} goto bb_{};", target.as_u32()))
+    }
+
+    /// The const-`Ordering` discriminant (C05 ABI: `Relaxed=0 … SeqCst=4`) at
+    /// `args[i]`. The const `Ordering` rides in the `Call.args` operand (D14/
+    /// C06); a non-const operand is a frontend bug (it should have been rejected
+    /// with `ATOMIC-ERR-ORDERING-NONCONST`), so fail loud rather than guess.
+    fn atomic_ordering(&self, args: &[Operand], i: usize) -> Result<u32, EmitError> {
+        let op = args
+            .get(i)
+            .ok_or(EmitError::Unsupported("atomic call missing the Ordering argument"))?;
+        self.model
+            .resolve_operand_enum_variant(self.body, op)
+            .ok_or(EmitError::Unsupported(
+                "atomic Ordering argument is not a compile-time constant \
+                 (frontend ATOMIC-ERR-ORDERING-NONCONST should reject this)",
+            ))
+    }
+
+    /// The deterministic per-`Atomic`-field cell id + element type for `target`,
+    /// numbering the recorded `AttrData::Atomic` field markers in `FieldPath`
+    /// (BTreeMap, i.e. `(item, variant, field)` lex) order so goldens are
+    /// byte-stable (C07/OR-1).
+    fn atomic_cell_lookup(&self, target: &FieldPath) -> Result<(u32, AtomicElement), EmitError> {
+        let mut cell = 0u32;
+        for (path, attrs) in self.model.domain_attrs.field_attrs.iter() {
+            let Some(element) = attrs.iter().find_map(|a| match a {
+                AttrData::Atomic { element, .. } => Some(*element),
+                _ => None,
+            }) else {
+                continue;
+            };
+            if path == target {
+                return Ok((cell, element));
+            }
+            cell += 1;
+        }
+        Err(EmitError::Unsupported(
+            "atomic receiver field has no recorded Atomic marker (cell id)",
+        ))
+    }
+
+    /// Recover the (cell id, element type) named by the `&self` receiver of an
+    /// `Atomic<T>` wrapper-method call. Chases the receiver to the place that
+    /// borrows the `Atomic` field (the shared `resolve_receiver_src`), walks the
+    /// projection to the final struct-field — its (parent struct `ItemId`, field
+    /// index) is the `Atomic` field's `FieldPath` — then looks up the cell id.
+    /// (An array-indexed `Atomic` element is M5/coverage work.)
+    fn recover_atomic_cell(&self, recv: &Operand) -> Result<(u32, AtomicElement), EmitError> {
+        let src = self.resolve_receiver_src(recv, 0)?;
+        let mut ty = self.body.local_decls[src.local].ty;
+        let mut field_path: Option<FieldPath> = None;
+        for elem in src.projection.iter() {
+            match elem {
+                PlaceElem::Deref => {
+                    ty = match &self.model.types[ty] {
+                        Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                        _ => {
+                            return Err(EmitError::Unsupported(
+                                "atomic receiver deref of a non-pointer type",
+                            ))
+                        }
+                    };
+                }
+                PlaceElem::Field(idx, field_ty) => {
+                    let item = match &self.model.types[ty] {
+                        Ty::Struct { item, .. } => *item,
+                        _ => {
+                            return Err(EmitError::Unsupported(
+                                "atomic receiver field projection of a non-struct type",
+                            ))
+                        }
+                    };
+                    field_path = Some(FieldPath {
+                        item,
+                        variant: VariantIdx::ZERO,
+                        field: FieldIdx::from_u32(idx.index() as u32),
+                    });
+                    ty = *field_ty;
+                }
+                PlaceElem::Index(_) | PlaceElem::ConstantIndex { .. } => {
+                    // Array-of-Atomics (M5/coverage): step through the element
+                    // type; a single-`FieldPath` cell id for an array element is
+                    // not assigned here.
+                    ty = match &self.model.types[ty] {
+                        Ty::Array(elem, _) => *elem,
+                        _ => {
+                            return Err(EmitError::Unsupported(
+                                "atomic receiver index of a non-array type",
+                            ))
+                        }
+                    };
+                    field_path = None;
+                }
+                PlaceElem::Downcast(_) | PlaceElem::Subslice { .. } => {
+                    return Err(EmitError::Unsupported(
+                        "atomic receiver has an unsupported projection element",
+                    ));
+                }
+            }
+        }
+        let field_path = field_path.ok_or(EmitError::Unsupported(
+            "atomic receiver does not resolve to a single Atomic field",
+        ))?;
+        self.atomic_cell_lookup(&field_path)
     }
 
     /// Register-access MMIO lowering (register-access construct, Form B): lower
@@ -5043,6 +5375,106 @@ pub(crate) fn model_has_config_intrinsic(model: &RegseqModel) -> bool {
             .iter()
             .any(|a| matches!(a, regseq_model::AttrData::Intrinsic(IntrinsicKind::Config(_))))
     })
+}
+
+/// Whether the model contains a `busy_wait`/`sleep` intrinsic
+/// (timed-cpu-delay-and-sleep construct) — the demand gate for emitting the
+/// [`super::prelude::DELAY_HOOKS`] extern declarations. A delay call lowers
+/// (via `emit_delay`) to the `regseq_delay_busy_wait_ns`/`regseq_delay_sleep_ns`
+/// host hooks, so the declarations MUST be present whenever a delay intrinsic
+/// is — otherwise the lowered call would reference an undeclared function. No
+/// existing fixture uses a delay intrinsic, so this churns no committed golden.
+pub(crate) fn model_has_delay_intrinsic(model: &RegseqModel) -> bool {
+    model.domain_attrs.item_attrs.iter().any(|attrs| {
+        attrs.iter().any(|a| {
+            matches!(
+                a,
+                regseq_model::AttrData::Intrinsic(
+                    IntrinsicKind::BusyWait | IntrinsicKind::Sleep
+                )
+            )
+        })
+    })
+}
+
+/// Whether the model uses ANY atomic operation — an `Atomic<T>` field OR a
+/// recognized atomic intrinsic (the field-less `atomic::fence` free fn included).
+/// This is the demand gate for the `ATOMIC_HELPERS` prelude: a fence-only TU has
+/// no `Atomic` field but DOES emit `regseq_atomic_fence(...)`, so it still needs
+/// the prelude definitions (else the lowered call references an undefined hook).
+pub(crate) fn model_has_atomic_op(model: &RegseqModel) -> bool {
+    atomic_cell_count(model) > 0
+        || model.domain_attrs.item_attrs.iter().any(|attrs| {
+            attrs
+                .iter()
+                .any(|a| matches!(a, AttrData::Intrinsic(IntrinsicKind::Atomic(_))))
+        })
+}
+
+/// The number of `Atomic<T>` field markers in the model — the count of cell ids
+/// `emit_atomic` assigns (one per `AttrData::Atomic` in `FieldPath` order). The
+/// caller sizes the host cell table to exactly this (a `#define
+/// REGSEQ_ATOMIC_CELLS <n>` before the prelude), so the table never overflows
+/// regardless of how many `Atomic` fields a driver declares — no fixed cap.
+pub(crate) fn atomic_cell_count(model: &RegseqModel) -> usize {
+    model
+        .domain_attrs
+        .field_attrs
+        .values()
+        .flat_map(|attrs| attrs.iter())
+        .filter(|a| matches!(a, AttrData::Atomic { .. }))
+        .count()
+}
+
+/// The per-TU `Atomic`-cell initializer (R10/S10): a `constructor`-attributed
+/// function that seeds each cell from its field's `#[rseq::atomic(initial = N)]`
+/// literal before `main`. Cells default to 0 (static zero-init), so only the
+/// non-zero initials are emitted; if every `Atomic` field default-inits to 0 the
+/// function is omitted entirely (no golden churn). The cell id is the field's
+/// position in `FieldPath` (BTreeMap) order — the same numbering `emit_atomic`
+/// uses — and the initial is masked to the element width (two's-complement low
+/// bits for a negative signed initial). Returns `None` when there is nothing to
+/// initialize.
+pub(crate) fn emit_atomic_cell_init(model: &RegseqModel) -> Option<String> {
+    let mut lines = String::new();
+    let mut cell = 0u32;
+    for attrs in model.domain_attrs.field_attrs.values() {
+        let Some((element, initial)) = attrs.iter().find_map(|a| match a {
+            AttrData::Atomic {
+                element,
+                initial_value,
+            } => Some((*element, *initial_value)),
+            _ => None,
+        }) else {
+            continue;
+        };
+        if let Some(value) = initial {
+            // i128 -> u64 two's-complement low bits, then mask to the element
+            // width so a negative signed initial stores its width-correct bit
+            // pattern.
+            let raw = value as u64;
+            let masked = if element.width_bits() == 32 {
+                raw & 0xffff_ffff
+            } else {
+                raw
+            };
+            if masked != 0 {
+                lines.push_str(&format!(
+                    "    regseq_atomic_cells[{cell}] = 0x{masked:x}ull;\n"
+                ));
+            }
+        }
+        cell += 1;
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "/* atomicity construct: seed the Atomic cells from the \
+         #[rseq::atomic(initial = N)] literals (R10/S10). */\n\
+         __attribute__((constructor)) static void regseq_atomic_init(void) {{\n\
+         {lines}}}\n"
+    ))
 }
 
 /// The bus-path selector token bus-resource supplies to device-lifecycle's

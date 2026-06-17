@@ -1,0 +1,5 @@
+name   = "delay-settle"
+kind   = "rust"
+entry  = "regseq_main"
+covers = ["TCD-S05", "TCD-C06", "TCD-I04", "TCD-I08"]
+expect = "pass"

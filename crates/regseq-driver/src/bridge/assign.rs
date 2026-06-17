@@ -1,6 +1,9 @@
 //! Phase 4 final `ItemId` assignment and side-table population.
 
-use super::{device_lifecycle, framework_type, interrupt, intrinsic, BridgeCtxt, BridgeError};
+use super::{
+    atomic, device_lifecycle, framework_type, interrupt, intrinsic, timed_delay, BridgeCtxt,
+    BridgeError,
+};
 
 /// Assigns dense `ItemId`s and populates item side tables in lock-step.
 pub(crate) fn assign_item_ids_and_populate_sidetables(
@@ -9,6 +12,22 @@ pub(crate) fn assign_item_ids_and_populate_sidetables(
     assign_pending_items(&mut ctxt.model, &mut ctxt.handles, &mut ctxt.pending_items);
     intrinsic::materialise_intrinsics(ctxt);
     framework_type::materialise_framework_types(ctxt);
+    // Timed-cpu-delay-and-sleep (TCD construct): validate the signature of
+    // every recognized busy_wait/sleep facade (TCD-ERR-02). Runs after
+    // `materialise_intrinsics` records the markers it walks.
+    timed_delay::validate_delay_signatures(ctxt)?;
+    // Atomic-memory-access-and-ordering (atomicity construct): record the
+    // `AttrData::Atomic` field marker for every `Atomic<T>` struct field
+    // (element type + optional initial value), rejecting an unsupported element
+    // type (ATOMIC-ERR-ELEMENT-TYPE, T09/C07). Item-driven (scans every
+    // struct), so it needs neither the driver map nor a `#[rseq::driver]` host
+    // (D05/D11).
+    atomic::materialise_atomics(ctxt)?;
+    // Atomicity facade-signature obligation (D15/R13): every recognized
+    // `atomic_*` callee must declare its trailing `Ordering` parameter(s)
+    // (ATOMIC-ERR-MISSING-ORDERING). Runs after `materialise_intrinsics`
+    // recorded the markers it walks.
+    atomic::validate_atomic_signatures(ctxt)?;
     device_lifecycle::materialise_drivers(ctxt)?;
     // Device-interrupt (construct #6): walks the driver map materialised by
     // the device-lifecycle pass above, so it must run after it.

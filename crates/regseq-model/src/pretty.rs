@@ -1921,6 +1921,31 @@ impl<'a> PrettyPrinter<'a> {
                     };
                     out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
                 }
+                // Timed-CPU-delay-and-sleep intrinsics (timed-cpu-delay-and-sleep construct).
+                AttrData::Intrinsic(IntrinsicKind::BusyWait) => {
+                    out.push_str("#[rseq::intrinsic(\"busy_wait\")]\n");
+                }
+                AttrData::Intrinsic(IntrinsicKind::Sleep) => {
+                    out.push_str("#[rseq::intrinsic(\"sleep\")]\n");
+                }
+                // Atomic-memory-access-and-ordering intrinsics (atomicity construct).
+                AttrData::Intrinsic(IntrinsicKind::Atomic(op)) => {
+                    let label = match op {
+                        crate::AtomicOp::Load => "atomic_load",
+                        crate::AtomicOp::Store => "atomic_store",
+                        crate::AtomicOp::FetchModify(crate::FetchOp::Add) => "atomic_fetch_add",
+                        crate::AtomicOp::FetchModify(crate::FetchOp::Sub) => "atomic_fetch_sub",
+                        crate::AtomicOp::FetchModify(crate::FetchOp::Or) => "atomic_fetch_or",
+                        crate::AtomicOp::FetchModify(crate::FetchOp::And) => "atomic_fetch_and",
+                        crate::AtomicOp::FetchModify(crate::FetchOp::Xor) => "atomic_fetch_xor",
+                        crate::AtomicOp::FetchModify(crate::FetchOp::Swap) => "atomic_swap",
+                        crate::AtomicOp::CompareExchange => "atomic_compare_exchange",
+                        crate::AtomicOp::BitTestSet => "atomic_bit_test_set",
+                        crate::AtomicOp::BitTestClear => "atomic_bit_test_clear",
+                        crate::AtomicOp::Fence => "atomic_fence",
+                    };
+                    out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
+                }
                 // The framework-type marker has no DSL attribute render
                 // form in this phase; its render rule (if any) lands with
                 // the bridge/backend stages that consume it. Emit nothing.
@@ -1938,6 +1963,10 @@ impl<'a> PrettyPrinter<'a> {
                 // (`field_attrs`); it never appears in the item-attr stream.
                 // Emit nothing if it does.
                 AttrData::InterruptResource { .. } => {}
+                // The atomic field marker (atomicity construct) is a field
+                // attribute (`field_attrs`); it never appears in the item-attr
+                // stream. Emit nothing if it does.
+                AttrData::Atomic { .. } => {}
             }
         }
         out

@@ -279,6 +279,8 @@ fn item_log_levels(model: &RegseqModel, leaf: &str) -> Vec<LogLevel> {
             // Interrupt-construct markers (#6) are not log levels; skip them.
             AttrData::InterruptResource { .. } => None,
             AttrData::IsrBinding { .. } => None,
+            // Atomicity field markers (#7) are not log levels; skip them.
+            AttrData::Atomic { .. } => None,
         })
         .collect()
 }
