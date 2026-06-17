@@ -25,9 +25,9 @@
 use std::collections::BTreeMap;
 
 use regseq_model::{
-    AggregateKind, AtomicOp, AttrData, BinOp, CallCallee, CastKind, Const, EnumShape, InstanceId,
-    InstanceKind, IntrinsicKind, LayoutKind, LocalId, Operand, Place, PlaceElem, RegseqModel,
-    Rvalue, StatementKind, TerminatorKind, Ty, TyId, UnOp,
+    AggregateKind, AtomicElement, AtomicOp, AttrData, BinOp, CallCallee, CastKind, Const, EnumShape,
+    FetchOp, FieldIdx, InstanceId, InstanceKind, IntrinsicKind, ItemId, LayoutKind, LocalId, Operand,
+    Place, PlaceElem, RegseqModel, Rvalue, StatementKind, TerminatorKind, Ty, TyId, UnOp,
 };
 
 use super::types::{self, TypeNames};
@@ -824,26 +824,245 @@ fn emit_delay(
     Ok(())
 }
 
-/// Atomic-memory-access-and-ordering lowering (atomicity construct) — Zephyr
-/// atomics.
-///
-/// **M1 stub:** the real per-target emission (`atomic_*`/`__atomic_*`/BUILTIN
-/// fence + native dual-ordering CAS, reading the CTFE'd `Ordering` discriminant
-/// from the const `Call.args` operand) lands in M4/T16. The generic-c host
-/// oracle (M1) is the only backend exercised before then, so this returns a loud
-/// error rather than mis-emitting.
+/// The plain width-`T` C storage type for an `Atomic<T>` element (atomicity
+/// C07). Zephyr lowers the whole atomic surface to the GCC/Clang `__atomic_*`
+/// builtins over this cell (Codex M4 review): width-parametric (no 32-bit
+/// `atomic_t` ceiling), native dual-ordering CAS, and the exact memory order is
+/// carried on every op — strictly more faithful than the full-order-only Zephyr
+/// `atomic_t` API.
+pub(crate) fn zephyr_atomic_cty(element: AtomicElement) -> &'static str {
+    match element {
+        AtomicElement::U32 => "uint32_t",
+        AtomicElement::I32 => "int32_t",
+        AtomicElement::U64 => "uint64_t",
+        AtomicElement::I64 => "int64_t",
+        AtomicElement::Ptr => "uintptr_t",
+    }
+}
+
+/// The GCC `__ATOMIC_*` memory order for an `Ordering` discriminant.
+fn zephyr_memorder(variant: u32) -> &'static str {
+    match variant {
+        0 => "__ATOMIC_RELAXED",
+        1 => "__ATOMIC_ACQUIRE",
+        2 => "__ATOMIC_RELEASE",
+        3 => "__ATOMIC_ACQ_REL",
+        _ => "__ATOMIC_SEQ_CST",
+    }
+}
+
+/// Recover the `(field address lvalue, element)` named by an `Atomic<T>`
+/// receiver (mirrors `linux_c::recover_atomic_field`): chase to the borrowed
+/// driver-struct field place, take its address, read the element from the
+/// `AttrData::Atomic` marker.
+fn recover_atomic_field(
+    cx: &mut LowerCx<'_>,
+    body: &regseq_model::Body,
+    recv: &Operand,
+) -> Result<(String, AtomicElement), EmitError> {
+    let src = cx.resolve_receiver_src(body, recv, 0)?;
+    let mut ty = body.local_decls[src.local].ty;
+    let mut field: Option<(ItemId, FieldIdx)> = None;
+    for elem in src.projection.iter() {
+        match elem {
+            PlaceElem::Deref => {
+                ty = match &cx.model.types[ty] {
+                    Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                    _ => return Err(EmitError::Unsupported("atomic receiver deref of non-pointer".into())),
+                };
+            }
+            PlaceElem::Field(idx, fty) => {
+                if let Ty::Struct { item, .. } = &cx.model.types[ty] {
+                    field = Some((*item, *idx));
+                }
+                ty = *fty;
+            }
+            PlaceElem::Index(_) | PlaceElem::ConstantIndex { .. } => {
+                ty = match &cx.model.types[ty] {
+                    Ty::Array(elem, _) => *elem,
+                    _ => return Err(EmitError::Unsupported("atomic receiver index of non-array".into())),
+                };
+                field = None;
+            }
+            _ => return Err(EmitError::Unsupported("atomic receiver unsupported projection".into())),
+        }
+    }
+    let (item, fidx) = field.ok_or_else(|| {
+        EmitError::Unsupported("atomic receiver does not resolve to a driver field".into())
+    })?;
+    // S01: atomic ops are supported only on a DIRECT driver-struct field; a
+    // nested atomic field is rejected loud (the init seeds only the driver
+    // struct).
+    let driver_item = match &cx.model.types[cx.driver.driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => return Err(EmitError::Unsupported("driver type is not a struct".into())),
+    };
+    if item != driver_item {
+        return Err(EmitError::Unsupported(
+            "atomic op on a nested Atomic field is unsupported; place Atomic state \
+             directly in the driver struct (S01)"
+                .into(),
+        ));
+    }
+    let (element, _) = cx.model.atomic_field_at(item, fidx).ok_or_else(|| {
+        EmitError::Unsupported("atomic receiver field has no recorded Atomic marker".into())
+    })?;
+    let lv = place_lvalue(cx, body, &src)?;
+    Ok((format!("&{lv}"), element))
+}
+
+/// The const-`Ordering` discriminant at `args[i]` (D14).
+fn atomic_ordering(
+    cx: &LowerCx<'_>,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    i: usize,
+) -> Result<u32, EmitError> {
+    let op = args
+        .get(i)
+        .ok_or_else(|| EmitError::Unsupported("atomic call missing the Ordering argument".into()))?;
+    cx.model
+        .resolve_operand_enum_variant(body, op)
+        .ok_or_else(|| EmitError::Unsupported("atomic Ordering is not a compile-time constant".into()))
+}
+
+/// Atomic-memory-access-and-ordering lowering (atomicity construct) — Zephyr via
+/// the GCC `__atomic_*` builtins (C03/C04/C07). Width-parametric over a plain
+/// width-`T` cell; the exact `__ATOMIC_*` memory order rides every op; CAS is
+/// native dual-ordering (no collapse, I07/C04); bit ops via `__atomic_fetch_or`/
+/// `_and`; fence via `__atomic_thread_fence`.
 fn emit_atomic(
-    _cx: &mut LowerCx<'_>,
-    _op: AtomicOp,
+    cx: &mut LowerCx<'_>,
+    op: AtomicOp,
     _instance: InstanceId,
-    _body: &regseq_model::Body,
-    _args: &[Operand],
-    _destination: &Place,
-    _out: &mut String,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    destination: &Place,
+    out: &mut String,
 ) -> Result<(), EmitError> {
-    Err(EmitError::Unsupported(
-        "atomic-memory-access-and-ordering Zephyr lowering (M4/T16)".into(),
-    ))
+    // `atomic::fence` — free fn, no receiver; order at args[0].
+    if matches!(op, AtomicOp::Fence) {
+        let v = atomic_ordering(cx, body, args, 0)?;
+        out.push_str(&format!("\t__atomic_thread_fence({});\n", zephyr_memorder(v)));
+        return Ok(());
+    }
+    let recv = args
+        .first()
+        .ok_or_else(|| EmitError::Unsupported("atomic op call without a receiver".into()))?;
+    let (faddr, element) = recover_atomic_field(cx, body, recv)?;
+    let cty = zephyr_atomic_cty(element);
+    let dst_cty = |cx: &mut LowerCx<'_>| -> Result<String, EmitError> {
+        let ty = place_ty(cx.model, body, destination)?;
+        types::c_type(cx.model, &mut cx.names, ty)
+    };
+    match op {
+        AtomicOp::Load => {
+            let mo = zephyr_memorder(atomic_ordering(cx, body, args, 1)?);
+            let dst = place_lvalue(cx, body, destination)?;
+            let dcty = dst_cty(cx)?;
+            out.push_str(&format!("\t{dst} = ({dcty})__atomic_load_n({faddr}, {mo});\n"));
+        }
+        AtomicOp::Store => {
+            let mo = zephyr_memorder(atomic_ordering(cx, body, args, 2)?);
+            let val = operand_expr(cx, body, &args[1])?;
+            out.push_str(&format!("\t__atomic_store_n({faddr}, ({cty})({val}), {mo});\n"));
+        }
+        AtomicOp::FetchModify(fop) => {
+            let mo = zephyr_memorder(atomic_ordering(cx, body, args, 2)?);
+            let val = operand_expr(cx, body, &args[1])?;
+            let dst = place_lvalue(cx, body, destination)?;
+            let dcty = dst_cty(cx)?;
+            let stmt = match fop {
+                FetchOp::Add => format!("__atomic_fetch_add({faddr}, ({cty})({val}), {mo})"),
+                FetchOp::Sub => format!("__atomic_fetch_sub({faddr}, ({cty})({val}), {mo})"),
+                FetchOp::Or => format!("__atomic_fetch_or({faddr}, ({cty})({val}), {mo})"),
+                FetchOp::And => format!("__atomic_fetch_and({faddr}, ({cty})({val}), {mo})"),
+                FetchOp::Xor => format!("__atomic_fetch_xor({faddr}, ({cty})({val}), {mo})"),
+                FetchOp::Swap => format!("__atomic_exchange_n({faddr}, ({cty})({val}), {mo})"),
+            };
+            out.push_str(&format!("\t{dst} = ({dcty}){stmt};\n"));
+        }
+        AtomicOp::BitTestSet | AtomicOp::BitTestClear => {
+            let mo = zephyr_memorder(atomic_ordering(cx, body, args, 2)?);
+            let bit = operand_expr(cx, body, &args[1])?;
+            let dst = place_lvalue(cx, body, destination)?;
+            let dcty = dst_cty(cx)?;
+            // Mask the shift amount to width-1 so it is never UB for a runtime
+            // out-of-range bit (the const out-of-range case is a frontend
+            // reject; the runtime case is an author error the host oracle
+            // catches). The cell cty is unsigned for the unsigned-only bit_test
+            // element, so the shift itself is unsigned.
+            let smask = if cty == "uint64_t" { 63 } else { 31 };
+            let sh = format!("(({bit}) & {smask})");
+            let rmw = match op {
+                AtomicOp::BitTestSet => {
+                    format!("__atomic_fetch_or({faddr}, ({cty})1 << {sh}, {mo})")
+                }
+                _ => format!("__atomic_fetch_and({faddr}, ~(({cty})1 << {sh}), {mo})"),
+            };
+            out.push_str(&format!("\t{dst} = ({dcty})((({rmw}) >> {sh}) & 1);\n"));
+        }
+        AtomicOp::CompareExchange => {
+            // args = [recv, current, new, success, failure]. Native dual-ordering
+            // (no collapse): __atomic_compare_exchange_n writes the observed prior
+            // into `expected`, returns whether it committed. Build Result<T,T>.
+            let succ = zephyr_memorder(atomic_ordering(cx, body, args, 3)?);
+            let fail = zephyr_memorder(atomic_ordering(cx, body, args, 4)?);
+            let cur = operand_expr(cx, body, &args[1])?;
+            let new = operand_expr(cx, body, &args[2])?;
+            let dst = place_lvalue(cx, body, destination)?;
+            let dst_ty = place_ty(cx.model, body, destination)?;
+            out.push_str(&format!("\t{{ {cty} __cas_exp = ({cty})({cur});\n"));
+            out.push_str(&format!(
+                "\t  bool __cas_ok = __atomic_compare_exchange_n({faddr}, &__cas_exp, ({cty})({new}), false, {succ}, {fail});\n"
+            ));
+            out.push_str("\t  if (__cas_ok) {\n");
+            cx_emit_cas_result(cx, &dst, dst_ty, 0, "__cas_exp", out)?;
+            out.push_str("\t  } else {\n");
+            cx_emit_cas_result(cx, &dst, dst_ty, 1, "__cas_exp", out)?;
+            out.push_str("\t  } }\n");
+        }
+        AtomicOp::Fence => unreachable!("fence handled before receiver recovery"),
+    }
+    Ok(())
+}
+
+/// Build a `Result<T,T>` variant (Ok=0/Err=1) carrying `payload_expr` into the
+/// opaque enum carrier `dst` (the `emit_aggregate` enum pattern).
+fn cx_emit_cas_result(
+    cx: &mut LowerCx<'_>,
+    dst: &str,
+    dst_ty: TyId,
+    variant_idx: u32,
+    payload_expr: &str,
+    out: &mut String,
+) -> Result<(), EmitError> {
+    use regseq_model::VariantIdx;
+    cx.extra_includes.insert("<string.h>");
+    let variant = VariantIdx::from_u32(variant_idx);
+    out.push_str(&format!("\t\tmemset(&{dst}, 0, sizeof({dst}));\n"));
+    emit_enum_tag_write(cx, dst_ty, dst, variant, out)?;
+    let layout = types::layout_of(cx.model, dst_ty)
+        .ok_or_else(|| EmitError::Unsupported("compare_exchange destination has no layout".into()))?;
+    let LayoutKind::Enum {
+        shape: EnumShape::Multiple { variants, .. },
+    } = &layout.kind
+    else {
+        return Err(EmitError::Unsupported(
+            "compare_exchange destination is not a tagged Result enum".into(),
+        ));
+    };
+    let vlayout = &variants[variant_idx as usize];
+    let f = vlayout
+        .fields
+        .first()
+        .ok_or_else(|| EmitError::Unsupported("Result variant has no payload field".into()))?;
+    let fty = types::c_type(cx.model, &mut cx.names, f.ty)?;
+    out.push_str(&format!(
+        "\t\t{{ {fty} __v = ({fty})({payload_expr}); memcpy(&{dst}._raw[{}], &__v, sizeof(__v)); }}\n",
+        f.offset
+    ));
+    Ok(())
 }
 
 /// The timed-cpu-delay-and-sleep lowering helpers (TCD construct), emitted into

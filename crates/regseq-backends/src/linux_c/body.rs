@@ -14,9 +14,9 @@
 use std::collections::BTreeMap;
 
 use regseq_model::{
-    AggregateKind, AtomicOp, AttrData, BinOp, CallCallee, CastKind, Const, EnumShape, InstanceId,
-    InstanceKind, IntrinsicKind, LayoutKind, LocalId, Operand, Place, PlaceElem, RegseqModel,
-    Rvalue, StatementKind, TerminatorKind, Ty, TyId, UnOp,
+    AggregateKind, AtomicElement, AtomicOp, AttrData, BinOp, CallCallee, CastKind, Const, EnumShape,
+    FetchOp, FieldIdx, InstanceId, InstanceKind, IntrinsicKind, ItemId, LayoutKind, LocalId, Operand,
+    Place, PlaceElem, RegseqModel, Rvalue, StatementKind, TerminatorKind, Ty, TyId, UnOp,
 };
 
 use super::types::{self, TypeNames};
@@ -852,26 +852,294 @@ fn emit_delay(
     Ok(())
 }
 
+/// The Linux kernel-atomic family + value type for an element (atomicity C03/
+/// C07). Bit-tested-vs-not no longer splits storage: bit ops lower to
+/// `atomic_fetch_or`/`atomic_fetch_and` (Codex M4 review — idiomatic + avoids the
+/// `atomic_long_t`/`test_and_set_bit` aliasing hack), so storage is uniform by
+/// width: `atomic_t`(32)/`atomic64_t`(64)/`atomic_long_t`(pointer).
+pub(crate) fn linux_atomic(element: AtomicElement) -> (&'static str, &'static str, &'static str) {
+    // (storage ctype, api prefix, api value type)
+    match element {
+        AtomicElement::U32 | AtomicElement::I32 => ("atomic_t", "atomic", "int"),
+        AtomicElement::U64 | AtomicElement::I64 => ("atomic64_t", "atomic64", "s64"),
+        AtomicElement::Ptr => ("atomic_long_t", "atomic_long", "long"),
+    }
+}
+
+/// The Linux ordering suffix for the suffixed RMW/CAS API (Relaxed/Acquire/
+/// Release/full). AcqRel + SeqCst collapse to the unsuffixed full-barrier form
+/// (correctness-safe strengthening, C03).
+fn linux_rmw_suffix(variant: u32) -> &'static str {
+    match variant {
+        0 => "_relaxed",
+        1 => "_acquire",
+        2 => "_release",
+        _ => "", // AcqRel(3) / SeqCst(4) -> full
+    }
+}
+
+/// The least-upper-bound ordering of two orderings in the lattice
+/// `Relaxed ⊏ {Acquire,Release} ⊏ AcqRel ⊏ SeqCst` — the single CAS suffix the
+/// `try_cmpxchg` collapse uses (over-strengthening the success path to cover
+/// both success + failure; Linux `try_cmpxchg` orders only on success, so the
+/// failure ordering is best-effort — a documented per-target limitation, C04).
+fn ordering_lub(a: u32, b: u32) -> u32 {
+    let caps = |o: u32| match o {
+        1 => (true, false, false),
+        2 => (false, true, false),
+        3 => (true, true, false),
+        4 => (true, true, true),
+        _ => (false, false, false),
+    };
+    let (aa, ar, asq) = caps(a);
+    let (ba, br, bsq) = caps(b);
+    match (aa || ba, ar || br, asq || bsq) {
+        (_, _, true) => 4,
+        (true, true, false) => 3,
+        (true, false, false) => 1,
+        (false, true, false) => 2,
+        _ => 0,
+    }
+}
+
+/// Recover the `(field address lvalue, element)` named by an `Atomic<T>`
+/// wrapper-method `&self` receiver: chase the receiver to the borrowed
+/// driver-struct field place, take its address, and read the field's element
+/// from the `AttrData::Atomic` marker (the shared `model.atomic_field_at`).
+fn recover_atomic_field(
+    cx: &mut LowerCx<'_>,
+    body: &regseq_model::Body,
+    recv: &Operand,
+) -> Result<(String, AtomicElement), EmitError> {
+    let src = cx.resolve_receiver_src(body, recv, 0)?;
+    let mut ty = body.local_decls[src.local].ty;
+    let mut field: Option<(ItemId, FieldIdx)> = None;
+    for elem in src.projection.iter() {
+        match elem {
+            PlaceElem::Deref => {
+                ty = match &cx.model.types[ty] {
+                    Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                    _ => return Err(EmitError::Unsupported("atomic receiver deref of non-pointer".into())),
+                };
+            }
+            PlaceElem::Field(idx, fty) => {
+                if let Ty::Struct { item, .. } = &cx.model.types[ty] {
+                    field = Some((*item, *idx));
+                }
+                ty = *fty;
+            }
+            PlaceElem::Index(_) | PlaceElem::ConstantIndex { .. } => {
+                ty = match &cx.model.types[ty] {
+                    Ty::Array(elem, _) => *elem,
+                    _ => return Err(EmitError::Unsupported("atomic receiver index of non-array".into())),
+                };
+                field = None;
+            }
+            _ => return Err(EmitError::Unsupported("atomic receiver unsupported projection".into())),
+        }
+    }
+    let (item, fidx) = field.ok_or_else(|| {
+        EmitError::Unsupported("atomic receiver does not resolve to a driver field".into())
+    })?;
+    // S01: an `Atomic<T>` op is supported only on a DIRECT driver-struct field.
+    // A nested atomic field (its parent is some sub-struct, not the driver) is
+    // rejected loud — the per-target init seeds only the driver struct, so
+    // supporting nested ops would silently skip a nested non-zero initial.
+    let driver_item = match &cx.model.types[cx.driver.driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => return Err(EmitError::Unsupported("driver type is not a struct".into())),
+    };
+    if item != driver_item {
+        return Err(EmitError::Unsupported(
+            "atomic op on a nested Atomic field is unsupported; place Atomic state \
+             directly in the driver struct (S01)"
+                .into(),
+        ));
+    }
+    let (element, _) = cx.model.atomic_field_at(item, fidx).ok_or_else(|| {
+        EmitError::Unsupported("atomic receiver field has no recorded Atomic marker".into())
+    })?;
+    let lv = place_lvalue(cx, body, &src)?;
+    Ok((format!("&{lv}"), element))
+}
+
+/// The const-`Ordering` discriminant at `args[i]` (D14: read the const operand,
+/// chasing the reaching-def temp via the shared model helper).
+fn atomic_ordering(
+    cx: &LowerCx<'_>,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    i: usize,
+) -> Result<u32, EmitError> {
+    let op = args
+        .get(i)
+        .ok_or_else(|| EmitError::Unsupported("atomic call missing the Ordering argument".into()))?;
+    cx.model
+        .resolve_operand_enum_variant(body, op)
+        .ok_or_else(|| EmitError::Unsupported("atomic Ordering is not a compile-time constant".into()))
+}
+
 /// Atomic-memory-access-and-ordering lowering (atomicity construct) — Linux
-/// kernel atomics.
-///
-/// **M1 stub:** the real per-target emission (`atomic_*`/`atomic_long_*`/`*_bit`
-/// + the AcqRel→SeqCst strengthening + single-ordering CAS collapse, reading the
-/// CTFE'd `Ordering` discriminant from the const `Call.args` operand) lands in
-/// M4/T14. The generic-c host oracle (M1) is the only backend exercised before
-/// then, so this returns a loud error rather than mis-emitting.
+/// kernel atomics (C03/C04/C07). Uniform `atomic_t`/`atomic64_t`/`atomic_long_t`
+/// storage by width; ordering carried as the Linux suffix (AcqRel/SeqCst → full
+/// barrier); bit ops via `atomic_fetch_or`/`_and`; `compare_exchange` via
+/// `atomic_try_cmpxchg` (writeback) collapsed to the stronger-of ordering, with
+/// the `Result<T,T>` built into the opaque enum carrier (the `emit_aggregate`
+/// pattern). The CTFE'd `Ordering` discriminant is re-read at emit (C06/D14).
 fn emit_atomic(
-    _cx: &mut LowerCx<'_>,
-    _op: AtomicOp,
+    cx: &mut LowerCx<'_>,
+    op: AtomicOp,
     _instance: InstanceId,
-    _body: &regseq_model::Body,
-    _args: &[Operand],
-    _destination: &Place,
-    _out: &mut String,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    destination: &Place,
+    out: &mut String,
 ) -> Result<(), EmitError> {
-    Err(EmitError::Unsupported(
-        "atomic-memory-access-and-ordering Linux lowering (M4/T14)".into(),
-    ))
+    cx.extra_includes.insert("<linux/atomic.h>");
+    // `atomic::fence` — free fn, no receiver; conservative full barrier for every
+    // valid ordering (smp_rmb/smp_wmb are not faithful acquire/release fences —
+    // Codex M4 review; Relaxed is rejected at the frontend).
+    if matches!(op, AtomicOp::Fence) {
+        let _ = atomic_ordering(cx, body, args, 0)?;
+        out.push_str("\tsmp_mb();\n");
+        return Ok(());
+    }
+    let recv = args
+        .first()
+        .ok_or_else(|| EmitError::Unsupported("atomic op call without a receiver".into()))?;
+    let (faddr, element) = recover_atomic_field(cx, body, recv)?;
+    let (_storage, api, valty) = linux_atomic(element);
+    let dst_cty = |cx: &mut LowerCx<'_>| -> Result<String, EmitError> {
+        let ty = place_ty(cx.model, body, destination)?;
+        types::c_type(cx.model, &mut cx.names, ty)
+    };
+    match op {
+        AtomicOp::Load => {
+            let v = atomic_ordering(cx, body, args, 1)?;
+            let suffix = if matches!(v, 1 | 4) { "_acquire" } else { "" }; // SeqCst->acquire (no seqcst read)
+            let dst = place_lvalue(cx, body, destination)?;
+            let cty = dst_cty(cx)?;
+            out.push_str(&format!("\t{dst} = ({cty}){api}_read{suffix}({faddr});\n"));
+        }
+        AtomicOp::Store => {
+            let v = atomic_ordering(cx, body, args, 2)?;
+            let suffix = if matches!(v, 2 | 4) { "_release" } else { "" }; // SeqCst->release
+            let val = operand_expr(cx, body, &args[1])?;
+            out.push_str(&format!("\t{api}_set{suffix}({faddr}, ({valty})({val}));\n"));
+        }
+        AtomicOp::FetchModify(fop) => {
+            let v = atomic_ordering(cx, body, args, 2)?;
+            let suffix = linux_rmw_suffix(v);
+            let val = operand_expr(cx, body, &args[1])?;
+            let dst = place_lvalue(cx, body, destination)?;
+            let cty = dst_cty(cx)?;
+            let stmt = match fop {
+                FetchOp::Add => format!("{api}_fetch_add{suffix}(({valty})({val}), {faddr})"),
+                FetchOp::Sub => format!("{api}_fetch_sub{suffix}(({valty})({val}), {faddr})"),
+                FetchOp::Or => format!("{api}_fetch_or{suffix}(({valty})({val}), {faddr})"),
+                FetchOp::And => format!("{api}_fetch_and{suffix}(({valty})({val}), {faddr})"),
+                FetchOp::Xor => format!("{api}_fetch_xor{suffix}(({valty})({val}), {faddr})"),
+                FetchOp::Swap => format!("{api}_xchg{suffix}({faddr}, ({valty})({val}))"),
+            };
+            out.push_str(&format!("\t{dst} = ({cty}){stmt};\n"));
+        }
+        AtomicOp::BitTestSet | AtomicOp::BitTestClear => {
+            let v = atomic_ordering(cx, body, args, 2)?;
+            let suffix = linux_rmw_suffix(v);
+            let bit = operand_expr(cx, body, &args[1])?;
+            let dst = place_lvalue(cx, body, destination)?;
+            let cty = dst_cty(cx)?;
+            // bit_test lowers to fetch_or / fetch_and(~mask); the prior bit is
+            // extracted from the returned prior value (C03, Codex M4 idiom). The
+            // mask + the prior-shift are computed in the UNSIGNED width type
+            // (`u32`/`u64`) — `(int)1 << 31` / `(s64)1 << 63` would be signed-
+            // shift UB, and right-shifting a negative signed prior is
+            // implementation-defined; bit_test is unsigned-only (D08), so the
+            // unsigned type is exact. The mask is cast to the signed API value
+            // type only at the call boundary (bit pattern preserved).
+            let ubits = if element.width_bits() == 32 { "u32" } else { "u64" };
+            // Mask the shift AMOUNT to width-1 so `<< bit` / `>> bit` is never
+            // UB even for a runtime out-of-range bit (a const out-of-range bit is
+            // already a frontend reject; a non-const out-of-range bit is an
+            // author error the generic-c oracle's bounds assert catches — here it
+            // is merely made UB-free, never silently mis-shifted into UB).
+            let smask = element.width_bits() - 1;
+            let sh = format!("(({bit}) & {smask})");
+            let rmw = match op {
+                AtomicOp::BitTestSet => {
+                    format!("{api}_fetch_or{suffix}(({valty})(({ubits})1 << {sh}), {faddr})")
+                }
+                _ => format!("{api}_fetch_and{suffix}(({valty})(~(({ubits})1 << {sh})), {faddr})"),
+            };
+            out.push_str(&format!("\t{dst} = ({cty})(((({ubits}){rmw}) >> {sh}) & 1);\n"));
+        }
+        AtomicOp::CompareExchange => {
+            // args = [recv, current, new, success, failure]. try_cmpxchg writeback
+            // collapsed to the stronger-of ordering; build Result<T,T> (Ok=0/
+            // Err=1) into the opaque enum carrier (C04/I07).
+            let succ = atomic_ordering(cx, body, args, 3)?;
+            let fail = atomic_ordering(cx, body, args, 4)?;
+            let suffix = linux_rmw_suffix(ordering_lub(succ, fail));
+            let cur = operand_expr(cx, body, &args[1])?;
+            let new = operand_expr(cx, body, &args[2])?;
+            let dst = place_lvalue(cx, body, destination)?;
+            let dst_ty = place_ty(cx.model, body, destination)?;
+            // Fixed temp names: each CAS wraps its own `{ }` block, so sibling
+            // CAS expansions never share a scope.
+            let exp = "__cas_exp";
+            let ok = "__cas_ok";
+            out.push_str(&format!("\t{{ {valty} {exp} = ({valty})({cur});\n"));
+            out.push_str(&format!(
+                "\t  bool {ok} = {api}_try_cmpxchg{suffix}({faddr}, &{exp}, ({valty})({new}));\n"
+            ));
+            // Ok(observed) when committed, else Err(observed); observed == exp.
+            out.push_str(&format!("\t  if ({ok}) {{\n"));
+            cx_emit_cas_result(cx, &dst, dst_ty, 0, &exp, out)?;
+            out.push_str("\t  } else {\n");
+            cx_emit_cas_result(cx, &dst, dst_ty, 1, &exp, out)?;
+            out.push_str("\t  } }\n");
+        }
+        AtomicOp::Fence => unreachable!("fence handled before receiver recovery"),
+    }
+    Ok(())
+}
+
+/// Build a `Result<T,T>` variant (Ok=0/Err=1) carrying `payload_expr` into the
+/// opaque enum carrier lvalue `dst` (the `emit_aggregate` enum pattern): zero,
+/// write the tag, memcpy the payload to its variant-field offset.
+fn cx_emit_cas_result(
+    cx: &mut LowerCx<'_>,
+    dst: &str,
+    dst_ty: TyId,
+    variant_idx: u32,
+    payload_expr: &str,
+    out: &mut String,
+) -> Result<(), EmitError> {
+    use regseq_model::VariantIdx;
+    let variant = VariantIdx::from_u32(variant_idx);
+    out.push_str(&format!("\t\tmemset(&{dst}, 0, sizeof({dst}));\n"));
+    emit_enum_tag_write(cx, dst_ty, dst, variant, out)?;
+    let layout = types::layout_of(cx.model, dst_ty)
+        .ok_or_else(|| EmitError::Unsupported("compare_exchange destination has no layout".into()))?;
+    let LayoutKind::Enum {
+        shape: EnumShape::Multiple { variants, .. },
+    } = &layout.kind
+    else {
+        return Err(EmitError::Unsupported(
+            "compare_exchange destination is not a tagged Result enum".into(),
+        ));
+    };
+    let vlayout = &variants[variant_idx as usize];
+    let f = vlayout
+        .fields
+        .first()
+        .ok_or_else(|| EmitError::Unsupported("Result variant has no payload field".into()))?;
+    let fty = types::c_type(cx.model, &mut cx.names, f.ty)?;
+    out.push_str(&format!(
+        "\t\t{{ {fty} __v = ({fty})({payload_expr}); memcpy(&{dst}._raw[{}], &__v, sizeof(__v)); }}\n",
+        f.offset
+    ));
+    Ok(())
 }
 
 /// The timed-cpu-delay-and-sleep lowering helpers (TCD construct), emitted into

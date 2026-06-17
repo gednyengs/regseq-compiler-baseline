@@ -213,6 +213,17 @@ fn classify_fields(
             if crate::bridge::interrupt::is_interrupt_field(tcx, field_ty) {
                 continue;
             }
+            // Atomicity fields (construct #7) are driver-local `Atomic<T>` state
+            // (zero L2, no lifecycle — D11), recognized + recorded by
+            // `bridge::atomic::materialise_atomics` (element-type legality +
+            // the `AttrData::Atomic` field-attr the backends read for storage +
+            // init). Route them away from the user-data D3 classifier (which
+            // would reject the `Atomic<T>` shell); the per-target backends
+            // override the field's storage type (`atomic_t`/`atomic64_t`/… ) and
+            // emit the ops + init from the field-attr.
+            if crate::bridge::atomic::is_atomic_field(tcx, field_ty) {
+                continue;
+            }
             if is_mmio_resource(tcx, field_ty) {
                 // Recognize the bus-resource-management L1 facts on the shared
                 // `#[rseq::mmio(...)]` field attribute (construct #3, T03): the

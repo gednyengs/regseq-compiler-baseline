@@ -50,6 +50,15 @@ fn atomic_element_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> 
     args.types().next()
 }
 
+/// Whether `ty` is an `Atomic<T>` resource field (any `T`). Used by the
+/// device-lifecycle field classifier to route `Atomic` fields away from the
+/// user-data D3 rejection (mirroring the `Mmio`/`Interrupt` routing); the
+/// element-type legality + the field-attr record are handled by
+/// [`materialise_atomics`].
+pub(crate) fn is_atomic_field<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    atomic_element_ty(tcx, ty).is_some()
+}
+
 /// Classify the `Atomic<T>` element type `T` into the recognized
 /// [`AtomicElement`] set (`{u32,i32,u64,i64}` + permissive pointer, C07/D08), or
 /// `None` for an unsupported `T`. (The M2 element-type pass turns the `None`

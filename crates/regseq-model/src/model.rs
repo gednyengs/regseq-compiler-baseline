@@ -2111,6 +2111,65 @@ impl RegseqModel {
         }
     }
 
+    /// The recognized atomic element + initial value of the `Atomic<T>` field at
+    /// `FieldPath { item, variant: 0, field }`, or `None` if that field carries
+    /// no `AttrData::Atomic` marker. The shared per-target read for the
+    /// atomicity construct (atomic-memory-access-and-ordering): the generic-c /
+    /// linux-c / zephyr-c backends recover the element (storage width +
+    /// signedness) + the `#[rseq::atomic(initial = N)]` value from the marker
+    /// `bridge::atomic::materialise_atomics` recorded, keeping all three targets
+    /// consistent.
+    pub fn atomic_field_at(
+        &self,
+        item: ItemId,
+        field: crate::ids::FieldIdx,
+    ) -> Option<(crate::domain_attr::AtomicElement, Option<i128>)> {
+        let path = crate::domain_attr::FieldPath {
+            item,
+            variant: crate::ids::VariantIdx::ZERO,
+            field,
+        };
+        self.domain_attrs
+            .field_attrs
+            .get(&path)?
+            .iter()
+            .find_map(|a| match a {
+                AttrData::Atomic {
+                    element,
+                    initial_value,
+                } => Some((*element, *initial_value)),
+                _ => None,
+            })
+    }
+
+    /// Every `Atomic<T>` field of the struct type `struct_ty`, as
+    /// `(field name, element, initial value)` in declaration order. Used by the
+    /// per-target backends to (a) override each field's storage type in the
+    /// emitted driver struct (`atomic_t`/`atomic64_t`/… ) and (b) emit the
+    /// `#[rseq::atomic(initial = N)]` field-init. The struct's layout `fields`
+    /// vector is indexed by `FieldIdx` (declaration order), so position `i`
+    /// matches `FieldPath { …, field: i }`.
+    pub fn atomic_fields_of(
+        &self,
+        struct_ty: crate::ids::TyId,
+    ) -> Vec<(String, crate::domain_attr::AtomicElement, Option<i128>)> {
+        let crate::ty::Ty::Struct { item, layout, .. } = &self.types[struct_ty] else {
+            return Vec::new();
+        };
+        let crate::layout::LayoutKind::Struct { fields } = &layout.kind else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for (i, f) in fields.iter().enumerate() {
+            if let Some((element, initial)) =
+                self.atomic_field_at(*item, crate::ids::FieldIdx::from_u32(i as u32))
+            {
+                out.push((self.strings.resolve(f.name).to_string(), element, initial));
+            }
+        }
+        out
+    }
+
     fn instance_item(&self, id: InstanceId) -> &Item {
         &self.items[self.instances[id].item]
     }
