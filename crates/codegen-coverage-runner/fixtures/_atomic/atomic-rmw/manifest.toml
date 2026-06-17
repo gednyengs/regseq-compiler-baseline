@@ -1,0 +1,5 @@
+name   = "atomic-rmw"
+kind   = "rust"
+entry  = "regseq_main"
+covers = ["ATM-S07", "ATM-C05", "ATM-R02", "ATM-R07", "ATM-R08"]
+expect = "pass"

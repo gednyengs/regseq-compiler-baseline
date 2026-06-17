@@ -44,7 +44,7 @@ use regseq_model::{
     args_key_for_generic_args, AggregateKind, ArmReachability, AssertKind, AtomicElement, AtomicOp,
     AttrData, BinOp, Byte,
     CallCallee, CastKind, ConfigOp, Const,
-    ConstId, DriverInterrupts, Endian, EnumShape, FieldIdx, FieldPath, FloatKind,
+    ConstId, DriverInterrupts, Endian, EnumShape, FetchOp, FieldIdx, FieldPath, FloatKind,
     GenericArg, InstanceId, InstanceKind,
     InstanceRef, InterruptForm, IntKind, IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel,
     MatchEntry, MmioOp, NonDivergingIntrinsic,
@@ -2328,12 +2328,16 @@ impl BodyEmit<'_> {
         target: Option<regseq_model::BlockId>,
     ) -> Result<String, EmitError> {
         let target = target.ok_or(EmitError::Unsupported("atomic call with no target"))?;
-        // `atomic::fence` is the only op with no receiver (lands in M3 alongside
-        // `fetch_*`/`swap`/`compare_exchange`).
-        if matches!(op, AtomicOp::Fence) {
-            return Err(EmitError::Unsupported("atomic::fence generic-c lowering (M3)"));
-        }
         let param_tys = super::callee_param_tys(self.model, self.body, callee);
+        // `atomic::fence` is the only op with no receiver (a free fn): order at
+        // args[0]. Lower to the CPU-only host fence hook (never MMIO — D02/I03).
+        if matches!(op, AtomicOp::Fence) {
+            let ord = self.atomic_ordering(args, 0)?;
+            return Ok(format!(
+                "regseq_atomic_fence({ord}); goto bb_{};",
+                target.as_u32()
+            ));
+        }
         let recv = args
             .first()
             .ok_or(EmitError::Unsupported("atomic op call without a receiver"))?;
@@ -2370,10 +2374,75 @@ impl BodyEmit<'_> {
                     "{dst} = ({dst_cty})regseq_atomic_bittest({cell}, {width}, {set_or_clear}, (uint32_t)({bit}), {ord});"
                 )
             }
-            AtomicOp::FetchModify(_) | AtomicOp::CompareExchange => {
-                return Err(EmitError::Unsupported(
-                    "atomic fetch/swap/compare_exchange generic-c lowering (M3)",
-                ));
+            AtomicOp::FetchModify(fop) => {
+                // args = [recv, value, order]; the host RMW hook returns the
+                // prior value. FetchOp ABI: Add=0, Sub=1, Or=2, And=3, Xor=4,
+                // Swap=5 (C05).
+                let fop_disc = match fop {
+                    FetchOp::Add => 0u32,
+                    FetchOp::Sub => 1,
+                    FetchOp::Or => 2,
+                    FetchOp::And => 3,
+                    FetchOp::Xor => 4,
+                    FetchOp::Swap => 5,
+                };
+                let val_op = args.get(1).ok_or(EmitError::Unsupported(
+                    "atomic fetch_*/swap call missing the value argument",
+                ))?;
+                let val = self.operand_expr(val_op, param_tys.get(1).copied())?;
+                let ord = self.atomic_ordering(args, 2)?;
+                let dst = self.place_lvalue(destination)?;
+                let dst_cty = types::c_type(self.model, self.names, self.place_ty(destination));
+                format!(
+                    "{dst} = ({dst_cty})regseq_atomic_rmw({cell}, {width}, {fop_disc}, (uint64_t)({val}), {ord});"
+                )
+            }
+            AtomicOp::CompareExchange => {
+                // args = [recv, current(expected), new(desired), success, failure].
+                // The host CAS hook writes the observed prior into a temp and
+                // returns whether it committed; we build the `Result<T, T>`
+                // destination (Ok = committed, Err = contention; I07/C04) by
+                // replicating the enum-construction the assign-site uses
+                // (`assign_enum`): a discriminant write + the payload field. std
+                // `Result` is Ok=variant 0, Err=variant 1.
+                let cur_op = args.get(1).ok_or(EmitError::Unsupported(
+                    "compare_exchange call missing the current argument",
+                ))?;
+                let new_op = args.get(2).ok_or(EmitError::Unsupported(
+                    "compare_exchange call missing the new argument",
+                ))?;
+                let expected = self.operand_expr(cur_op, param_tys.get(1).copied())?;
+                let desired = self.operand_expr(new_op, param_tys.get(2).copied())?;
+                let succ = self.atomic_ordering(args, 3)?;
+                let fail = self.atomic_ordering(args, 4)?;
+                let dst = self.place_lvalue(destination)?;
+                let dst_ty = self.place_ty(destination);
+                let shape = enum_emit::enum_shape(self.model, dst_ty).ok_or(
+                    EmitError::Unsupported(
+                        "compare_exchange destination is not an enum (expected Result<T, T>)",
+                    ),
+                )?;
+                // Ok=0 / Err=1 tag writes + payload field paths.
+                let ok_tag = self.emit_set_discriminant(&dst, shape, 0)?.unwrap_or_default();
+                let err_tag = self.emit_set_discriminant(&dst, shape, 1)?.unwrap_or_default();
+                let (ok_field, ok_fty) = enum_emit::enum_variant_field(self.model, dst_ty, 0, 0)
+                    .ok_or(EmitError::Unsupported(
+                        "compare_exchange Result Ok payload field navigation failed",
+                    ))?;
+                let (err_field, err_fty) = enum_emit::enum_variant_field(self.model, dst_ty, 1, 0)
+                    .ok_or(EmitError::Unsupported(
+                        "compare_exchange Result Err payload field navigation failed",
+                    ))?;
+                let ok_cty = types::c_type(self.model, self.names, ok_fty);
+                let err_cty = types::c_type(self.model, self.names, err_fty);
+                let obs = self.fresh_temp_name("_cas_obs");
+                let committed = self.fresh_temp_name("_cas_ok");
+                format!(
+                    "{{ uint64_t {obs}; int {committed} = regseq_atomic_cmpxchg({cell}, {width}, \
+                     (uint64_t)({expected}), (uint64_t)({desired}), &{obs}, {succ}, {fail}); \
+                     if ({committed}) {{ {ok_tag} {dst}.{ok_field} = ({ok_cty}){obs}; }} \
+                     else {{ {err_tag} {dst}.{err_field} = ({err_cty}){obs}; }} }}"
+                )
             }
             // Handled above.
             AtomicOp::Fence => unreachable!("fence handled before cell recovery"),

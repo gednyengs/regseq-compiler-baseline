@@ -1,0 +1,6 @@
+ATM add cell=0 w=32 ord=Relaxed val=0x5 prior=0x0
+ATM add cell=0 w=32 ord=AcqRel val=0x3 prior=0x5
+ATM or cell=0 w=32 ord=Release val=0xf0 prior=0x8
+ATM and cell=0 w=32 ord=Acquire val=0xf prior=0xf8
+ATM xor cell=0 w=32 ord=SeqCst val=0xff prior=0x8
+ATM swap cell=0 w=32 ord=SeqCst val=0x2a prior=0xf7
