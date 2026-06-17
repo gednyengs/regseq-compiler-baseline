@@ -652,6 +652,113 @@ pub enum BridgeError {
     /// contracts C03/C05).
     #[error("timed-cpu-delay-and-sleep validation: {0}")]
     TimedCpuDelayValidation(TimedCpuDelayDiagnostic),
+
+    /// An atomic-memory-access-and-ordering frontend check failed (atomicity
+    /// construct, contracts C01/C02/C07).
+    #[error("atomic-memory-access-and-ordering validation: {0}")]
+    AtomicValidation(AtomicDiagnostic),
+}
+
+/// Per-construct atomic-memory-access-and-ordering (atomicity) frontend
+/// diagnostics (GRILL C02; messages follow the taxonomy organized-spec §9 where
+/// an ID exists, generalized per O3 for the degenerate-ordering check;
+/// `OrderingNonConst` is the implementer-defined O4 addition). Carried by
+/// [`BridgeError::AtomicValidation`].
+///
+/// `MissingOrdering` is reclassified to the **facade-signature** residual (D15):
+/// the canonical typed facade makes a missing-`Ordering` *call* a rustc error
+/// before the bridge runs, so the only reachable Regseq check is a *mis-declared*
+/// facade (a `#[rseq::intrinsic("atomic_*")]` callee whose signature omits the
+/// `Ordering` parameter), mirroring `TimedCpuDelayDiagnostic::ArgTypeMismatch`
+/// and `InterruptDiagnostic`'s ISR-signature check.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum AtomicDiagnostic {
+    /// `ATOMIC-ERR-ELEMENT-TYPE`: an `Atomic<T>` field whose `T` is outside the
+    /// admitted set `{u32,i32,u64,i64}` (permissive pointer atomics accepted).
+    #[error(
+        "ATOMIC-ERR-ELEMENT-TYPE / Atomicity / Atomic Memory Access And Ordering: Atomic<{ty}> declaration on field \
+         {field} uses unsupported element type; the locked surface accepts u32/i32/u64/i64 \
+         (and permissive pointer atomics per G-ATM-07 anti-narrowing standing item)"
+    )]
+    ElementType {
+        /// The offending field name.
+        field: String,
+        /// The unsupported element type `T`.
+        ty: String,
+    },
+    /// `ATOMIC-ERR-MISSING-ORDERING` (facade-signature residual, D15): a
+    /// recognized `#[rseq::intrinsic("atomic_*")]` callee whose signature omits
+    /// the mandatory `Ordering` parameter(s). The canonical-facade call-site
+    /// omission is type-system-subsumed (a rustc error before the bridge runs).
+    #[error(
+        "ATOMIC-ERR-MISSING-ORDERING / Atomicity / Atomic Memory Access And Ordering: atomic operation facade `{facade}` \
+         must take an explicit `Ordering` argument; there is no implicit default ({detail})"
+    )]
+    MissingOrdering {
+        /// The recognized facade path/leaf.
+        facade: String,
+        /// What is wrong with the declared signature.
+        detail: String,
+    },
+    /// `ATOMIC-ERR-BIT-TEST-TYPE`: `bit_test_*` on a non-unsigned atomic
+    /// element, or a compile-time-constant out-of-range bit index (folded under
+    /// the same ID per C02).
+    #[error(
+        "ATOMIC-ERR-BIT-TEST-TYPE / Atomicity / Atomic Memory Access And Ordering: bit-test operation {op} {detail}"
+    )]
+    BitTestType {
+        /// The bit-test op (`bit_test_set`/`bit_test_clear`).
+        op: String,
+        /// The specific violation (non-unsigned element, or out-of-range bit).
+        detail: String,
+    },
+    /// `ATOMIC-ERR-DEGENERATE-ACQREL` (generalized per O3 to "invalid ordering
+    /// for operation"): an `Ordering` outside the op's valid set per C01 —
+    /// `AcqRel`/`Release` on `load`, `AcqRel`/`Acquire` on `store`, or an
+    /// invalid/stronger-than-success `compare_exchange` failure ordering.
+    #[error(
+        "ATOMIC-ERR-DEGENERATE-ACQREL / Atomicity / Atomic Memory Access And Ordering: Ordering::{ordering} is not valid for \
+         {op} (valid: {valid}); the locked per-op ordering matrix rejects it"
+    )]
+    DegenerateAcqrel {
+        /// The operation.
+        op: String,
+        /// The rejected ordering.
+        ordering: String,
+        /// The valid ordering set for this op.
+        valid: String,
+    },
+    /// `ATOMIC-ERR-FENCE-RELAXED`: `atomic::fence(Relaxed)` (no cross-CPU effect).
+    #[error(
+        "ATOMIC-ERR-FENCE-RELAXED / Atomicity / Atomic Memory Access And Ordering: atomic::fence(Relaxed) is degenerate \
+         (a Relaxed fence has no cross-CPU effect); use Acquire / Release / AcqRel / SeqCst"
+    )]
+    FenceRelaxed,
+    /// `ATOMIC-ERR-MMIO-FENCE-COLLAPSE` (designed-in, D02/O1): an MMIO-ordering
+    /// op smuggled onto the atomic surface. No live trigger until register-access
+    /// lands its `io_fence`/`ordered!` ordering surface (M5/T19 placeholder).
+    #[error(
+        "ATOMIC-ERR-MMIO-FENCE-COLLAPSE / Atomicity / Atomic Memory Access And Ordering: primitive {mmio_op} is excluded from \
+         this construct's surface (MMIO ordering belongs to Register Access); use \
+         register_access.io_fence for MMIO ordering and atomic_operations.fence for CPU \
+         ordering — the two co-exist at MMIO+atomic boundaries"
+    )]
+    MmioFenceCollapse {
+        /// The smuggled MMIO op name.
+        mmio_op: String,
+    },
+    /// `ATOMIC-ERR-ORDERING-NONCONST` (implementer-defined, D14/O4): an
+    /// `Ordering` argument that is not a compile-time constant. A runtime
+    /// ordering cannot be statically validated (C01) or lowered (C03).
+    #[error(
+        "ATOMIC-ERR-ORDERING-NONCONST / Atomicity / Atomic Memory Access And Ordering: the Ordering argument to {op} must be a \
+         compile-time constant (a literal Ordering::X or a const); a runtime Ordering cannot be \
+         statically validated or lowered"
+    )]
+    OrderingNonConst {
+        /// The operation whose ordering argument was non-constant.
+        op: String,
+    },
 }
 
 /// Per-construct device-lifecycle validation diagnostics (PLAN T16; GRILL I09;
@@ -2047,6 +2154,12 @@ fn construct_instances_and_resolve_cross_references(
     // materialized AND `finalise_isrs` has recorded the `IsrBinding` markers
     // this pass consults.
     timed_delay::validate_isr_no_sleep(&ctxt.model)?;
+    // Atomic-memory-access-and-ordering frontend op legality (atomicity
+    // construct, C01/C02): the per-op valid-ordering matrix, the const-`Ordering`
+    // discipline (D14), and the bit-test element/bounds rule (C07/D08). Runs
+    // last — after every body is materialized, so it walks the recognized atomic
+    // calls.
+    atomic::validate_atomic_ops(&ctxt.model)?;
     Ok(())
 }
 

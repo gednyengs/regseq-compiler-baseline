@@ -25,7 +25,9 @@
 //! M1 record half.
 
 use regseq_model::{
-    AtomicElement, AttrData, FieldIdx, FieldPath, ItemId, ItemKind, SyntheticItemKind, VariantIdx,
+    AtomicElement, AtomicOp, AttrData, Body, CallCallee, Const, FetchOp, FieldIdx, FieldPath,
+    GenericArg, Instance, InstanceKind, IntrinsicKind, ItemId, ItemKind, Operand, RegseqModel,
+    SyntheticItemKind, TerminatorKind, Ty as ModelTy, TyId, UintKind, VariantIdx,
 };
 use rustc_ast::token::{Delimiter, LitKind as TokenLitKind, TokenKind};
 use rustc_ast::tokenstream::TokenTree;
@@ -34,7 +36,7 @@ use rustc_middle::ty::{self, Ty, TyCtxt, TyKind};
 use rustc_span::{def_id::DefId, Symbol as RustcSymbol};
 
 use super::framework_type::recover_source_def_id;
-use super::{BridgeCtxt, BridgeError};
+use super::{AtomicDiagnostic, BridgeCtxt, BridgeError};
 
 /// If `ty` is the typed `Atomic<T>` resource shell, the element type `T`.
 /// Name-based detection, matching `is_mmio_resource` / `is_interrupt_ty`.
@@ -183,13 +185,17 @@ pub(crate) fn materialise_atomics(cx: &mut BridgeCtxt<'_>) -> Result<(), BridgeE
                 let Some(elem_ty) = atomic_element_ty(tcx, field_ty) else {
                     continue;
                 };
-                // An `Atomic<T>` with an unsupported `T`: not recorded in M1
-                // (the M2 element-type pass rejects it with
-                // `ATOMIC-ERR-ELEMENT-TYPE`). Skipping here means its ops fail
-                // loud at the backend rather than lowering against a guessed
-                // width.
+                // Element-type legality (T09/C07/D08): an `Atomic<T>` whose `T`
+                // is outside `{u32,i32,u64,i64}` + permissive pointer is rejected
+                // with `ATOMIC-ERR-ELEMENT-TYPE`. Folded into the field walk that
+                // already classifies `T` (the recognition is the legality).
                 let Some(element) = classify_element(elem_ty) else {
-                    continue;
+                    return Err(BridgeError::AtomicValidation(
+                        AtomicDiagnostic::ElementType {
+                            field: field.name.to_string(),
+                            ty: elem_ty.to_string(),
+                        },
+                    ));
                 };
                 let initial_value = recognise_atomic_initial(tcx, field.did);
                 markers.push((
@@ -213,6 +219,414 @@ pub(crate) fn materialise_atomics(cx: &mut BridgeCtxt<'_>) -> Result<(), BridgeE
             .entry(path)
             .or_default()
             .push(marker);
+    }
+    Ok(())
+}
+
+// ----------------------------------------------------------------------------
+// M2 frontend legality (C01/C02): the ordering-legality matrix, the const-
+// `Ordering` discipline (D14), the bit-test element/bounds check (C07/D08), and
+// the facade-signature MISSING-ORDERING residual (D15).
+// ----------------------------------------------------------------------------
+
+/// The author-facing facade leaf for a recognized atomic op (diagnostics).
+fn atomic_op_name(op: AtomicOp) -> &'static str {
+    match op {
+        AtomicOp::Load => "load",
+        AtomicOp::Store => "store",
+        AtomicOp::FetchModify(FetchOp::Add) => "fetch_add",
+        AtomicOp::FetchModify(FetchOp::Sub) => "fetch_sub",
+        AtomicOp::FetchModify(FetchOp::Or) => "fetch_or",
+        AtomicOp::FetchModify(FetchOp::And) => "fetch_and",
+        AtomicOp::FetchModify(FetchOp::Xor) => "fetch_xor",
+        AtomicOp::FetchModify(FetchOp::Swap) => "swap",
+        AtomicOp::CompareExchange => "compare_exchange",
+        AtomicOp::BitTestSet => "bit_test_set",
+        AtomicOp::BitTestClear => "bit_test_clear",
+        AtomicOp::Fence => "fence",
+    }
+}
+
+/// The `Ordering` enum-discriminant name (C05 ABI: Relaxed=0 .. SeqCst=4).
+fn ordering_name(variant: u32) -> &'static str {
+    match variant {
+        0 => "Relaxed",
+        1 => "Acquire",
+        2 => "Release",
+        3 => "AcqRel",
+        4 => "SeqCst",
+        _ => "<unknown>",
+    }
+}
+
+/// `a ⊑ b` in the ordering strength lattice
+/// `Relaxed ⊏ {Acquire, Release} ⊏ AcqRel ⊏ SeqCst` (Acquire/Release
+/// incomparable): true iff every memory-ordering capability of `a` is also in
+/// `b` (the `compare_exchange` `failure ⊑ success` rule, C01/C04).
+fn ordering_le(a: u32, b: u32) -> bool {
+    // (acquire, release, seqcst) capabilities per discriminant.
+    fn caps(o: u32) -> (bool, bool, bool) {
+        match o {
+            0 => (false, false, false), // Relaxed
+            1 => (true, false, false),  // Acquire
+            2 => (false, true, false),  // Release
+            3 => (true, true, false),   // AcqRel
+            4 => (true, true, true),    // SeqCst
+            _ => (false, false, false),
+        }
+    }
+    let (aa, ar, asq) = caps(a);
+    let (ba, br, bsq) = caps(b);
+    (!aa || ba) && (!ar || br) && (!asq || bsq)
+}
+
+/// `ATOMIC-ERR-ORDERING-NONCONST` for `op` (D14).
+fn nonconst(op: &str) -> BridgeError {
+    BridgeError::AtomicValidation(AtomicDiagnostic::OrderingNonConst { op: op.to_string() })
+}
+
+/// `ATOMIC-ERR-DEGENERATE-ACQREL` (generalized, O3) for `op` with the rejected
+/// `variant` and the human `valid` set.
+fn degenerate(op: &str, variant: u32, valid: &str) -> BridgeError {
+    BridgeError::AtomicValidation(AtomicDiagnostic::DegenerateAcqrel {
+        op: op.to_string(),
+        ordering: ordering_name(variant).to_string(),
+        valid: valid.to_string(),
+    })
+}
+
+/// A short element-type name for a bit-test diagnostic.
+fn model_elem_name(model: &RegseqModel, ty: TyId) -> &'static str {
+    match &model.types[ty] {
+        ModelTy::Uint(UintKind::U32) => "u32",
+        ModelTy::Uint(UintKind::U64) => "u64",
+        ModelTy::Int(regseq_model::IntKind::I32) => "i32",
+        ModelTy::Int(regseq_model::IntKind::I64) => "i64",
+        ModelTy::Ptr(..) | ModelTy::Ref(..) => "<ptr>",
+        _ => "<other>",
+    }
+}
+
+/// The materialized body of a function instance, if any.
+fn function_body(instance: &Instance) -> Option<&Body> {
+    match &instance.kind {
+        InstanceKind::Function(data) => data.body.as_ref(),
+        _ => None,
+    }
+}
+
+/// The `Atomic<T>` element type named by a wrapper-method `&self` receiver
+/// operand — the receiver's place type, peeled of its reference, with the
+/// `Atomic` struct's first type argument. `None` when the operand is not a
+/// recoverable receiver place (the bit-test check is then skipped — the runtime
+/// hook still bounds-asserts).
+fn receiver_element_ty(model: &RegseqModel, body: &Body, recv: &Operand) -> Option<TyId> {
+    let place = match recv {
+        Operand::Copy(p) | Operand::Move(p) => p,
+        Operand::Constant(_) => return None,
+    };
+    // The borrow temp carries the full `&Atomic<T>` type with no projection.
+    if !place.projection.is_empty() {
+        return None;
+    }
+    let ref_ty = body.local_decls[place.local].ty;
+    let atomic_ty = match &model.types[ref_ty] {
+        ModelTy::Ref(p, _) | ModelTy::Ptr(p, _) => *p,
+        _ => return None,
+    };
+    match &model.types[atomic_ty] {
+        ModelTy::Struct { args, .. } => args.iter().find_map(|a| match a {
+            GenericArg::Type(t) => Some(*t),
+            _ => None,
+        }),
+        _ => None,
+    }
+}
+
+/// Is `ty` the `Ordering` enum (by type name, matching the name-based resource
+/// anchors)? A by-value `Ordering` parameter satisfies the facade-signature
+/// obligation (D15).
+fn is_ordering_ty(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {
+    ty.ty_adt_def()
+        .is_some_and(|adt| tcx.item_name(adt.did()).as_str() == "Ordering")
+}
+
+/// The `Call.args` / signature-input position(s) the mandatory `Ordering`
+/// argument(s) occupy for an op (`args[0]` is the `&self` receiver for methods;
+/// `fence` is a free fn). This is the SINGLE source of truth shared by the
+/// facade-signature obligation (`validate_atomic_signatures`, which requires an
+/// `Ordering` at each position) and the per-op legality check
+/// (`validate_atomic_call`, which reads the ordering at each position) — so a
+/// mis-declared facade whose arity/position does not match cannot slip an
+/// unvalidated ordering past the ops check.
+fn ordering_positions(op: AtomicOp) -> &'static [usize] {
+    match op {
+        AtomicOp::Load => &[1],
+        AtomicOp::Store => &[2],
+        AtomicOp::FetchModify(_) => &[2],
+        AtomicOp::BitTestSet | AtomicOp::BitTestClear => &[2],
+        AtomicOp::CompareExchange => &[3, 4],
+        AtomicOp::Fence => &[0],
+    }
+}
+
+/// Phase-4 facade-signature obligation (D15/R13; C02): every recognized
+/// `#[rseq::intrinsic("atomic_*")]` callee must declare its mandatory trailing
+/// by-value `Ordering` parameter(s) — `ATOMIC-ERR-MISSING-ORDERING` otherwise.
+///
+/// The canonical typed facade's call-site omission is type-system-subsumed (a
+/// rustc error before the bridge runs, which executes in `after_analysis`); the
+/// residual reachable case is a *mis-declared* facade, validated here exactly
+/// like `timed_delay::validate_delay_signatures` / the device-interrupt ISR
+/// signature check. Recognition is call-driven, so an uncalled mis-declared
+/// facade is never recognized and never validated — harmless (it has no call
+/// site to lower).
+pub(crate) fn validate_atomic_signatures(cx: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
+    let tcx = cx.input.tcx;
+    for (idx, attrs) in cx.model.domain_attrs.item_attrs.iter().enumerate() {
+        let Some(op) = attrs.iter().find_map(|a| match a {
+            AttrData::Intrinsic(IntrinsicKind::Atomic(op)) => Some(*op),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let item_id = ItemId::from_u32(idx as u32);
+        if !matches!(
+            cx.model.item_synthetic_kinds[item_id],
+            SyntheticItemKind::None
+        ) {
+            continue;
+        }
+        let Some(def_id) = recover_source_def_id(tcx, cx.model.item_def_paths[item_id]) else {
+            continue;
+        };
+        let opname = atomic_op_name(op);
+        let sig = tcx.fn_sig(def_id).instantiate_identity().skip_binder();
+        let inputs = sig.inputs();
+        // Every position the ops legality check reads MUST hold a by-value
+        // `Ordering` — i.e. the facade declares its mandatory `Ordering`
+        // argument(s) at the canonical position(s) (D15). This rejects BOTH a
+        // missing trailing `Ordering` AND a wrong-arity facade (e.g. a `store`
+        // missing its value parameter, which would otherwise shift the ordering
+        // out from under the ops check). Arity: a call provides exactly one arg
+        // per input, so an in-range `Ordering` input guarantees the ops check
+        // finds the ordering operand at the same index.
+        for &pos in ordering_positions(op) {
+            let ok = inputs.get(pos).is_some_and(|param| is_ordering_ty(tcx, *param));
+            if !ok {
+                let detail = match inputs.get(pos) {
+                    None => format!(
+                        "found {} parameter(s); the mandatory Ordering argument at position {pos} \
+                         is absent",
+                        inputs.len()
+                    ),
+                    Some(param) => {
+                        format!("parameter at position {pos} has type `{param}`, not `Ordering`")
+                    }
+                };
+                return Err(BridgeError::AtomicValidation(
+                    AtomicDiagnostic::MissingOrdering {
+                        facade: opname.to_string(),
+                        detail,
+                    },
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Phase-5 frontend op legality (C01/C02): walks every materialized body and,
+/// for each recognized atomic-op call, enforces the const-`Ordering` discipline
+/// (D14) + the per-op valid-ordering matrix (C01) + the bit-test element/bounds
+/// rule (C07/D08). Runs after body materialization (mirrors
+/// `timed_delay::validate_isr_no_sleep`); a rejection aborts the bridge, so no
+/// IR for an offending op reaches a backend.
+pub(crate) fn validate_atomic_ops(model: &RegseqModel) -> Result<(), BridgeError> {
+    for instance in model.instances.iter() {
+        let Some(body) = function_body(instance) else {
+            continue;
+        };
+        for block in body.basic_blocks.iter() {
+            let TerminatorKind::Call {
+                callee: CallCallee::Direct(callee_id),
+                args,
+                ..
+            } = &block.terminator.kind
+            else {
+                continue;
+            };
+            let Some(IntrinsicKind::Atomic(op)) = model.instance_intrinsic(*callee_id) else {
+                continue;
+            };
+            validate_atomic_call(model, body, *op, args)?;
+        }
+    }
+    Ok(())
+}
+
+/// The valid-ordering matrix (C01) + bit-test/CAS/fence checks for one call.
+fn validate_atomic_call(
+    model: &RegseqModel,
+    body: &Body,
+    op: AtomicOp,
+    args: &[Operand],
+) -> Result<(), BridgeError> {
+    let name = atomic_op_name(op);
+    match op {
+        // `load`: Relaxed/Acquire/SeqCst (Release/AcqRel ⇒ degenerate). arg 1.
+        AtomicOp::Load => check_ordering(model, body, args, 1, name, &[0, 1, 4], "Relaxed/Acquire/SeqCst"),
+        // `store`: Relaxed/Release/SeqCst (Acquire/AcqRel ⇒ degenerate). arg 2.
+        AtomicOp::Store => check_ordering(model, body, args, 2, name, &[0, 2, 4], "Relaxed/Release/SeqCst"),
+        // `fetch_*`/`swap`: all five orderings legal. arg 2.
+        AtomicOp::FetchModify(_) => check_ordering(model, body, args, 2, name, &[0, 1, 2, 3, 4], "all"),
+        // `bit_test_*`: all five orderings legal (arg 2) + unsigned element +
+        // const bit in range.
+        AtomicOp::BitTestSet | AtomicOp::BitTestClear => {
+            check_ordering(model, body, args, 2, name, &[0, 1, 2, 3, 4], "all")?;
+            check_bit_test(model, body, name, args)
+        }
+        // `compare_exchange`: success (arg 3) all five; failure (arg 4)
+        // Relaxed/Acquire/SeqCst and failure ⊑ success.
+        AtomicOp::CompareExchange => check_cas(model, body, args),
+        // `atomic::fence`: Acquire/Release/AcqRel/SeqCst (Relaxed ⇒
+        // FENCE-RELAXED); free fn, order at arg 0.
+        AtomicOp::Fence => check_fence(model, body, args),
+    }
+}
+
+/// Read the const ordering at `args[pos]` (non-const ⇒ ORDERING-NONCONST) and
+/// require it in `valid` (else DEGENERATE-ACQREL). A missing positional argument
+/// is type-subsumed (the rustc signature guarantees arity), so it is skipped.
+fn check_ordering(
+    model: &RegseqModel,
+    body: &Body,
+    args: &[Operand],
+    pos: usize,
+    name: &str,
+    valid: &[u32],
+    valid_str: &str,
+) -> Result<(), BridgeError> {
+    let Some(op_arg) = args.get(pos) else {
+        return Ok(());
+    };
+    let Some(variant) = model.resolve_operand_enum_variant(body, op_arg) else {
+        return Err(nonconst(name));
+    };
+    if !valid.contains(&variant) {
+        return Err(degenerate(name, variant, valid_str));
+    }
+    Ok(())
+}
+
+/// `atomic::fence(order)` legality: const, and not Relaxed (C01).
+fn check_fence(model: &RegseqModel, body: &Body, args: &[Operand]) -> Result<(), BridgeError> {
+    let Some(op_arg) = args.first() else {
+        return Ok(());
+    };
+    let Some(variant) = model.resolve_operand_enum_variant(body, op_arg) else {
+        return Err(nonconst("fence"));
+    };
+    if variant == 0 {
+        return Err(BridgeError::AtomicValidation(AtomicDiagnostic::FenceRelaxed));
+    }
+    // Valid fence orderings are exactly {Acquire, Release, AcqRel, SeqCst}.
+    // Reject any out-of-range discriminant too (a malformed `Ordering`), closing
+    // the same unknown-variant hole the CAS success bound closes.
+    if !matches!(variant, 1 | 2 | 3 | 4) {
+        return Err(degenerate(
+            "fence",
+            variant,
+            "Acquire/Release/AcqRel/SeqCst",
+        ));
+    }
+    Ok(())
+}
+
+/// `compare_exchange` ordering legality (C01/C04): success ∈ all five; failure ∈
+/// {Relaxed, Acquire, SeqCst} and failure ⊑ success; both compile-time const.
+fn check_cas(model: &RegseqModel, body: &Body, args: &[Operand]) -> Result<(), BridgeError> {
+    let (Some(s_arg), Some(f_arg)) = (args.get(3), args.get(4)) else {
+        return Ok(());
+    };
+    let Some(succ) = model.resolve_operand_enum_variant(body, s_arg) else {
+        return Err(nonconst("compare_exchange"));
+    };
+    let Some(fail) = model.resolve_operand_enum_variant(body, f_arg) else {
+        return Err(nonconst("compare_exchange"));
+    };
+    // success: all five legal — but it MUST be one of the five known orderings.
+    // (Validating the bound closes the `ordering_le(_, unknown)` hole, where an
+    // out-of-range discriminant has empty capabilities and would otherwise
+    // appear weaker than any failure.)
+    if !matches!(succ, 0 | 1 | 2 | 3 | 4) {
+        return Err(degenerate(
+            "compare_exchange success",
+            succ,
+            "Relaxed/Acquire/Release/AcqRel/SeqCst",
+        ));
+    }
+    // failure: Relaxed/Acquire/SeqCst only.
+    if !matches!(fail, 0 | 1 | 4) {
+        return Err(degenerate(
+            "compare_exchange failure",
+            fail,
+            "Relaxed/Acquire/SeqCst",
+        ));
+    }
+    // ...and no stronger than success.
+    if !ordering_le(fail, succ) {
+        return Err(degenerate(
+            "compare_exchange failure",
+            fail,
+            &format!("an ordering no stronger than success ({})", ordering_name(succ)),
+        ));
+    }
+    Ok(())
+}
+
+/// `bit_test_*` element + bounds legality (C07/D08): the atomic element must be
+/// unsigned (`u32`/`u64`), and a compile-time-constant bit index must be in
+/// range — both `ATOMIC-ERR-BIT-TEST-TYPE`. A non-const bit index is bounds-
+/// asserted at the generic-c hook at runtime.
+fn check_bit_test(
+    model: &RegseqModel,
+    body: &Body,
+    name: &str,
+    args: &[Operand],
+) -> Result<(), BridgeError> {
+    let Some(recv) = args.first() else {
+        return Ok(());
+    };
+    let Some(elem) = receiver_element_ty(model, body, recv) else {
+        return Ok(());
+    };
+    let width: u128 = match &model.types[elem] {
+        ModelTy::Uint(UintKind::U32) => 32,
+        ModelTy::Uint(UintKind::U64) => 64,
+        _ => {
+            return Err(BridgeError::AtomicValidation(AtomicDiagnostic::BitTestType {
+                op: name.to_string(),
+                detail: format!(
+                    "requires a supported unsigned integer atomic element type (u32/u64); \
+                     observed Atomic<{}>",
+                    model_elem_name(model, elem)
+                ),
+            }));
+        }
+    };
+    // A compile-time-constant out-of-range bit index (the runtime case is
+    // hook-asserted). Integer literals reach the call as a direct constant
+    // operand at every opt level, so a direct read suffices here.
+    if let Some(Operand::Constant(id)) = args.get(1) {
+        if let Const::Uint(_, value) = model.consts.resolve(*id) {
+            if *value >= width {
+                return Err(BridgeError::AtomicValidation(AtomicDiagnostic::BitTestType {
+                    op: name.to_string(),
+                    detail: format!("bit index {value} is out of range for a {width}-bit atomic"),
+                }));
+            }
+        }
     }
     Ok(())
 }
