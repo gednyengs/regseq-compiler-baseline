@@ -380,6 +380,9 @@ fn run_bridge_phase5_peels_all_four_severities() {
                         // produces none, so skip.
                         AttrData::InterruptResource { .. } => {}
                         AttrData::IsrBinding { .. } => {}
+                        // Atomicity field markers (#7); this fixture produces
+                        // none, so skip.
+                        AttrData::Atomic { .. } => {}
                     }
                 }
             }

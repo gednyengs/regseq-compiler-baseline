@@ -1,0 +1,5 @@
+name   = "atomic-m1"
+kind   = "rust"
+entry  = "regseq_main"
+covers = ["ATM-S07", "ATM-C05", "ATM-C06", "ATM-C07", "ATM-R08", "ATM-R10"]
+expect = "pass"

@@ -15,6 +15,7 @@ use regseq_model::{
 };
 
 mod assign;
+mod atomic;
 pub mod body;
 pub mod const_;
 pub mod def_path;

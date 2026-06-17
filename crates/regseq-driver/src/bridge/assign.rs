@@ -1,7 +1,8 @@
 //! Phase 4 final `ItemId` assignment and side-table population.
 
 use super::{
-    device_lifecycle, framework_type, interrupt, intrinsic, timed_delay, BridgeCtxt, BridgeError,
+    atomic, device_lifecycle, framework_type, interrupt, intrinsic, timed_delay, BridgeCtxt,
+    BridgeError,
 };
 
 /// Assigns dense `ItemId`s and populates item side tables in lock-step.
@@ -15,6 +16,11 @@ pub(crate) fn assign_item_ids_and_populate_sidetables(
     // every recognized busy_wait/sleep facade (TCD-ERR-02). Runs after
     // `materialise_intrinsics` records the markers it walks.
     timed_delay::validate_delay_signatures(ctxt)?;
+    // Atomic-memory-access-and-ordering (atomicity construct): record the
+    // `AttrData::Atomic` field marker for every `Atomic<T>` struct field
+    // (element type + optional initial value). Item-driven (scans every struct),
+    // so it needs neither the driver map nor a `#[rseq::driver]` host (D05/D11).
+    atomic::materialise_atomics(ctxt)?;
     device_lifecycle::materialise_drivers(ctxt)?;
     // Device-interrupt (construct #6): walks the driver map materialised by
     // the device-lifecycle pass above, so it must run after it.

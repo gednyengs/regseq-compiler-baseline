@@ -25,7 +25,7 @@
 use std::collections::BTreeMap;
 
 use regseq_model::{
-    AggregateKind, AttrData, BinOp, CallCallee, CastKind, Const, EnumShape, InstanceId,
+    AggregateKind, AtomicOp, AttrData, BinOp, CallCallee, CastKind, Const, EnumShape, InstanceId,
     InstanceKind, IntrinsicKind, LayoutKind, LocalId, Operand, Place, PlaceElem, RegseqModel,
     Rvalue, StatementKind, TerminatorKind, Ty, TyId, UnOp,
 };
@@ -709,6 +709,13 @@ fn emit_call(
             IntrinsicKind::BusyWait | IntrinsicKind::Sleep => {
                 emit_delay(cx, kind, *instance, body, args, out)
             }
+            // Atomic-memory-access-and-ordering lowering (atomicity construct):
+            // the per-target Zephyr atomics emission lands in M4/T16. The
+            // generic-c host oracle (M1) is the only backend exercised before
+            // then; route here so the dispatch is exhaustive.
+            IntrinsicKind::Atomic(op) => {
+                emit_atomic(cx, op, *instance, body, args, destination, out)
+            }
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {
@@ -815,6 +822,28 @@ fn emit_delay(
     };
     out.push_str(&format!("\t{helper}({ns});\n"));
     Ok(())
+}
+
+/// Atomic-memory-access-and-ordering lowering (atomicity construct) — Zephyr
+/// atomics.
+///
+/// **M1 stub:** the real per-target emission (`atomic_*`/`__atomic_*`/BUILTIN
+/// fence + native dual-ordering CAS, reading the CTFE'd `Ordering` discriminant
+/// from the const `Call.args` operand) lands in M4/T16. The generic-c host
+/// oracle (M1) is the only backend exercised before then, so this returns a loud
+/// error rather than mis-emitting.
+fn emit_atomic(
+    _cx: &mut LowerCx<'_>,
+    _op: AtomicOp,
+    _instance: InstanceId,
+    _body: &regseq_model::Body,
+    _args: &[Operand],
+    _destination: &Place,
+    _out: &mut String,
+) -> Result<(), EmitError> {
+    Err(EmitError::Unsupported(
+        "atomic-memory-access-and-ordering Zephyr lowering (M4/T16)".into(),
+    ))
 }
 
 /// The timed-cpu-delay-and-sleep lowering helpers (TCD construct), emitted into

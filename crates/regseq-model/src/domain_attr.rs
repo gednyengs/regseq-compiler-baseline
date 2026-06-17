@@ -89,6 +89,22 @@ pub enum AttrData {
         /// Whether this is an array-bind handler (`index: usize` parameter).
         array_bind: bool,
     } = 3,
+    /// `Atomic<T>` driver-struct field marker
+    /// (atomic-memory-access-and-ordering construct), stored in
+    /// `DomainAttrTables.field_attrs`. Carries the recognized element type (for
+    /// backend storage-width/signedness selection) and the optional
+    /// `#[rseq::atomic(initial = N)]` initial value emitted at field-init
+    /// (R10/S10). The presence of this marker at a `FieldPath` is also what the
+    /// generic-c backend enumerates (in `FieldPath` order) to assign a
+    /// deterministic per-`Atomic`-field cell id (C07/OR-1). Appended at
+    /// discriminant 4.
+    Atomic {
+        /// The recognized element type of `Atomic<T>`.
+        element: AtomicElement,
+        /// The `#[rseq::atomic(initial = N)]` literal value, or `None` for
+        /// default-init (`0` / null pointer).
+        initial_value: Option<i128>,
+    } = 4,
 }
 
 /// Closed, append-only framework-type taxonomy.
@@ -142,6 +158,15 @@ pub enum IntrinsicKind {
     /// sleepable context (sleeping in a marked IRQ region is rejected by
     /// TCD-ERR-01). Appended at discriminant 5.
     Sleep = 5,
+    /// Atomic memory-access-and-ordering operation family
+    /// (atomic-memory-access-and-ordering construct). The lock-free ops on a
+    /// typed driver-local `Atomic<T>` field (`load`/`store`/`fetch_*`/`swap`/
+    /// `compare_exchange`/`bit_test_*`) plus the standalone CPU memory
+    /// `regseq::atomic::fence`. Each op carries an explicit, compile-time-
+    /// constant memory `Ordering` whose discriminant rides in the `Call.args`
+    /// const operand (the model `Call` terminator is unchanged — C06/I08).
+    /// Appended at discriminant 6, preserving the discriminants above.
+    Atomic(AtomicOp) = 6,
 }
 
 /// Config-space operation carried by [`IntrinsicKind::Config`]
@@ -158,6 +183,96 @@ pub enum ConfigOp {
     /// `write_config::<T>(offset, val)`: write `size_of::<T>()` bytes of PCI
     /// config space (recognized + lowerable; no behavioral witness, GRILL O3).
     Write = 1,
+}
+
+/// Atomic operation carried by [`IntrinsicKind::Atomic`]
+/// (atomic-memory-access-and-ordering construct). These correspond to the
+/// `#[rseq::intrinsic("atomic_*")]`-tagged wrapper methods on `Atomic<T>` and
+/// the `regseq::atomic::fence` free function. Closed, append-only — variants
+/// append at the end preserving existing serialized discriminants.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AtomicOp {
+    /// `atomic_load`: read the atomic value (Relaxed/Acquire/SeqCst).
+    Load = 0,
+    /// `atomic_store`: write the atomic value (Relaxed/Release/SeqCst).
+    Store = 1,
+    /// `atomic_fetch_*`/`atomic_swap`: read-modify-write returning the prior
+    /// value (all five orderings legal). The sub-operation is the nested
+    /// [`FetchOp`], mirroring the fieldful `IntrinsicKind::Mmio(MmioOp)` shape.
+    FetchModify(FetchOp) = 2,
+    /// `atomic_compare_exchange`: strong CAS with separate success/failure
+    /// orderings, returning `Result<T, T>` (I07/C04).
+    CompareExchange = 3,
+    /// `atomic_bit_test_set`: set bit `n`, return the prior bit (unsigned `T`).
+    BitTestSet = 4,
+    /// `atomic_bit_test_clear`: clear bit `n`, return the prior bit (unsigned `T`).
+    BitTestClear = 5,
+    /// `atomic_fence`: standalone CPU memory fence — CPU-ordering ONLY, never
+    /// MMIO (D02/I03). Not a method; the `regseq::atomic::fence` free function.
+    Fence = 6,
+}
+
+/// The fetch-modify sub-operation carried by [`AtomicOp::FetchModify`]
+/// (atomic-memory-access-and-ordering construct). Closed, append-only.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FetchOp {
+    /// `atomic_fetch_add`: two's-complement wrapping add.
+    Add = 0,
+    /// `atomic_fetch_sub`: two's-complement wrapping sub.
+    Sub = 1,
+    /// `atomic_fetch_or`: bitwise or.
+    Or = 2,
+    /// `atomic_fetch_and`: bitwise and.
+    And = 3,
+    /// `atomic_fetch_xor`: bitwise xor.
+    Xor = 4,
+    /// `atomic_swap`: unconditional exchange (no arithmetic).
+    Swap = 5,
+}
+
+/// The element type of an `Atomic<T>` field
+/// (atomic-memory-access-and-ordering construct), recorded by the bridge so
+/// backends select the storage width + signedness without re-deriving `T`. The
+/// admitted set is `{u32,i32,u64,i64}` plus a permissive pointer-width integer
+/// atomic (C07/D08; `T ∉` this set ⇒ `ATOMIC-ERR-ELEMENT-TYPE`). Closed,
+/// append-only.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AtomicElement {
+    /// `u32` — 32-bit unsigned.
+    U32 = 0,
+    /// `i32` — 32-bit signed.
+    I32 = 1,
+    /// `u64` — 64-bit unsigned.
+    U64 = 2,
+    /// `i64` — 64-bit signed.
+    I64 = 3,
+    /// A pointer-width integer atomic (`*mut T`/`*const T`; LP64 ⇒ 64-bit).
+    Ptr = 4,
+}
+
+impl AtomicElement {
+    /// The storage/access width in bits (32 or 64; pointer atomics are LP64).
+    pub fn width_bits(self) -> u32 {
+        match self {
+            AtomicElement::U32 | AtomicElement::I32 => 32,
+            AtomicElement::U64 | AtomicElement::I64 | AtomicElement::Ptr => 64,
+        }
+    }
+
+    /// Whether the element is a signed integer (governs two's-complement
+    /// wrapping + sign-extension on value ops).
+    pub fn is_signed(self) -> bool {
+        matches!(self, AtomicElement::I32 | AtomicElement::I64)
+    }
+
+    /// Whether `bit_test_*` is legal on this element (unsigned integer only —
+    /// D08; signed and pointer elements ⇒ `ATOMIC-ERR-BIT-TEST-TYPE`).
+    pub fn allows_bit_test(self) -> bool {
+        matches!(self, AtomicElement::U32 | AtomicElement::U64)
+    }
 }
 
 /// MMIO register-access operation carried by `IntrinsicKind::Mmio`.
@@ -224,6 +339,21 @@ impl IntrinsicKind {
             // until their later fold.
             "busy_wait" => Some(IntrinsicKind::BusyWait),
             "sleep" => Some(IntrinsicKind::Sleep),
+            // Atomic-memory-access-and-ordering intrinsics (underscore form,
+            // matching the facade `#[rseq::intrinsic("atomic_*")]` tags; the
+            // `atomic_fence` is the `regseq::atomic::fence` free function).
+            "atomic_load" => Some(IntrinsicKind::Atomic(AtomicOp::Load)),
+            "atomic_store" => Some(IntrinsicKind::Atomic(AtomicOp::Store)),
+            "atomic_fetch_add" => Some(IntrinsicKind::Atomic(AtomicOp::FetchModify(FetchOp::Add))),
+            "atomic_fetch_sub" => Some(IntrinsicKind::Atomic(AtomicOp::FetchModify(FetchOp::Sub))),
+            "atomic_fetch_or" => Some(IntrinsicKind::Atomic(AtomicOp::FetchModify(FetchOp::Or))),
+            "atomic_fetch_and" => Some(IntrinsicKind::Atomic(AtomicOp::FetchModify(FetchOp::And))),
+            "atomic_fetch_xor" => Some(IntrinsicKind::Atomic(AtomicOp::FetchModify(FetchOp::Xor))),
+            "atomic_swap" => Some(IntrinsicKind::Atomic(AtomicOp::FetchModify(FetchOp::Swap))),
+            "atomic_compare_exchange" => Some(IntrinsicKind::Atomic(AtomicOp::CompareExchange)),
+            "atomic_bit_test_set" => Some(IntrinsicKind::Atomic(AtomicOp::BitTestSet)),
+            "atomic_bit_test_clear" => Some(IntrinsicKind::Atomic(AtomicOp::BitTestClear)),
+            "atomic_fence" => Some(IntrinsicKind::Atomic(AtomicOp::Fence)),
             _ => None,
         }
     }
@@ -554,6 +684,136 @@ mod tests {
         // `sleep_ex`/`sleep_until` reserve NAMEs only — no discriminants yet.
         assert_eq!(IntrinsicKind::from_name(symbol("sleep_ex")), None);
         assert_eq!(IntrinsicKind::from_name(symbol("sleep_until")), None);
+    }
+
+    #[test]
+    fn atomic_from_name_round_trip_and_discriminants() {
+        // Atomic-memory-access-and-ordering: every `atomic_*` tag maps from its
+        // underscore-form NAME, round-trips through JSON, and the `Atomic`
+        // family appends at IntrinsicKind discriminant 6 with every prior
+        // family unmoved (Log=0 / Mmio=1 / PollUntil=2 / Config=3 / BusyWait=4 /
+        // Sleep=5).
+        let cases = [
+            ("atomic_load", AtomicOp::Load),
+            ("atomic_store", AtomicOp::Store),
+            ("atomic_fetch_add", AtomicOp::FetchModify(FetchOp::Add)),
+            ("atomic_fetch_sub", AtomicOp::FetchModify(FetchOp::Sub)),
+            ("atomic_fetch_or", AtomicOp::FetchModify(FetchOp::Or)),
+            ("atomic_fetch_and", AtomicOp::FetchModify(FetchOp::And)),
+            ("atomic_fetch_xor", AtomicOp::FetchModify(FetchOp::Xor)),
+            ("atomic_swap", AtomicOp::FetchModify(FetchOp::Swap)),
+            ("atomic_compare_exchange", AtomicOp::CompareExchange),
+            ("atomic_bit_test_set", AtomicOp::BitTestSet),
+            ("atomic_bit_test_clear", AtomicOp::BitTestClear),
+            ("atomic_fence", AtomicOp::Fence),
+        ];
+        for (name, op) in cases {
+            assert_eq!(
+                IntrinsicKind::from_name(symbol(name)),
+                Some(IntrinsicKind::Atomic(op)),
+                "from_name({name})"
+            );
+            assert_json_round_trip(IntrinsicKind::Atomic(op));
+        }
+        // The `Atomic` family appends at IntrinsicKind discriminant 6; every
+        // prior family discriminant is unmoved.
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Log(LogLevel::Debug)), 0);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Mmio(MmioOp::Read)), 1);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::PollUntil), 2);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)), 3);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::BusyWait), 4);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Sleep), 5);
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::Atomic(AtomicOp::Load)),
+            6
+        );
+        // `AttrData::Intrinsic` stays at 0 regardless of which family it carries.
+        assert_eq!(
+            attr_data_tag(&AttrData::Intrinsic(IntrinsicKind::Atomic(AtomicOp::Fence))),
+            0
+        );
+        // A non-vocabulary atomic-ish name stays outside the closed set.
+        assert_eq!(IntrinsicKind::from_name(symbol("atomic_fetch_nand")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("atomic")), None);
+    }
+
+    #[test]
+    fn atomic_op_inner_discriminants_are_stable() {
+        // SAFETY: `AtomicOp` is `repr(u8)`; read the tag byte. `as u8` is
+        // unavailable because `FetchModify` carries a field.
+        fn atomic_op_tag(value: &AtomicOp) -> u8 {
+            unsafe { *(value as *const AtomicOp as *const u8) }
+        }
+        assert_eq!(atomic_op_tag(&AtomicOp::Load), 0);
+        assert_eq!(atomic_op_tag(&AtomicOp::Store), 1);
+        assert_eq!(atomic_op_tag(&AtomicOp::FetchModify(FetchOp::Add)), 2);
+        assert_eq!(atomic_op_tag(&AtomicOp::CompareExchange), 3);
+        assert_eq!(atomic_op_tag(&AtomicOp::BitTestSet), 4);
+        assert_eq!(atomic_op_tag(&AtomicOp::BitTestClear), 5);
+        assert_eq!(atomic_op_tag(&AtomicOp::Fence), 6);
+        // FetchOp is fieldless, so `as u8` yields its pinned discriminant.
+        assert_eq!(FetchOp::Add as u8, 0);
+        assert_eq!(FetchOp::Sub as u8, 1);
+        assert_eq!(FetchOp::Or as u8, 2);
+        assert_eq!(FetchOp::And as u8, 3);
+        assert_eq!(FetchOp::Xor as u8, 4);
+        assert_eq!(FetchOp::Swap as u8, 5);
+        // AtomicElement is fieldless and pinned.
+        assert_eq!(AtomicElement::U32 as u8, 0);
+        assert_eq!(AtomicElement::I32 as u8, 1);
+        assert_eq!(AtomicElement::U64 as u8, 2);
+        assert_eq!(AtomicElement::I64 as u8, 3);
+        assert_eq!(AtomicElement::Ptr as u8, 4);
+        // Width/signedness/bit-test helpers.
+        assert_eq!(AtomicElement::U32.width_bits(), 32);
+        assert_eq!(AtomicElement::U64.width_bits(), 64);
+        assert_eq!(AtomicElement::Ptr.width_bits(), 64);
+        assert!(AtomicElement::I32.is_signed());
+        assert!(!AtomicElement::U32.is_signed());
+        assert!(AtomicElement::U32.allows_bit_test());
+        assert!(!AtomicElement::I32.allows_bit_test());
+        assert!(!AtomicElement::Ptr.allows_bit_test());
+    }
+
+    #[test]
+    fn attr_data_atomic_discriminant_and_round_trip() {
+        // The `Atomic` field-attr variant appends at AttrData discriminant 4
+        // without shifting the prior variants, and round-trips through JSON
+        // (both `Some`/`None` initial value).
+        assert_eq!(
+            attr_data_tag(&AttrData::Atomic {
+                element: AtomicElement::U32,
+                initial_value: Some(0),
+            }),
+            4
+        );
+        assert_eq!(attr_data_tag(&attr(LogLevel::Debug)), 0);
+        assert_eq!(
+            attr_data_tag(&AttrData::FrameworkType(FrameworkType::RegseqError)),
+            1
+        );
+        for element in [
+            AtomicElement::U32,
+            AtomicElement::I32,
+            AtomicElement::U64,
+            AtomicElement::I64,
+            AtomicElement::Ptr,
+        ] {
+            assert_json_round_trip(AttrData::Atomic {
+                element,
+                initial_value: Some(-1),
+            });
+            assert_json_round_trip(AttrData::Atomic {
+                element,
+                initial_value: None,
+            });
+        }
+        // A large unsigned initial (u64 high bit) round-trips through the i128
+        // carrier.
+        assert_json_round_trip(AttrData::Atomic {
+            element: AtomicElement::U64,
+            initial_value: Some(i128::from(u64::MAX)),
+        });
     }
 
     #[test]

@@ -2020,6 +2020,97 @@ impl RegseqModel {
         None
     }
 
+    /// The enum variant index of a **compile-time-constant** enum operand, or
+    /// `None` if the operand is not such a constant.
+    ///
+    /// This is the shared D14/I08 read for the atomicity construct's
+    /// compile-time-constant `Ordering` argument: the const `Ordering` interns as
+    /// a `Const::EnumValue` operand that survives in `Call.args` (the model
+    /// `Call` terminator has no metadata slot), and BOTH consumers recover the
+    /// discriminant from that same operand — the frontend legality passes
+    /// (`ATOMIC-ERR-DEGENERATE-ACQREL`/`FENCE-RELAXED`/`ORDERING-NONCONST`, C01/
+    /// C02) and the per-target backend selectors (intrinsic + strengthening,
+    /// C03/C04). Routing both through this one helper is what keeps them
+    /// consuming the *same* per-call ordering. A non-constant `Ordering` (a
+    /// runtime value reaching as `Operand::Copy`/`Move`) returns `None`, which
+    /// the frontend turns into `ATOMIC-ERR-ORDERING-NONCONST`.
+    ///
+    /// The enum's source declaration order is the variant index, so for
+    /// `Ordering { Relaxed, Acquire, Release, AcqRel, SeqCst }` this yields the
+    /// C05 ABI integers `Relaxed=0 … SeqCst=4` directly.
+    pub fn operand_const_enum_variant(&self, operand: &Operand) -> Option<u32> {
+        match operand {
+            Operand::Constant(id) => match self.consts.resolve(*id) {
+                Const::EnumValue { variant_idx, .. } => Some(variant_idx.as_u32()),
+                _ => None,
+            },
+            Operand::Copy(_) | Operand::Move(_) => None,
+        }
+    }
+
+    /// The enum variant index of a compile-time-constant enum operand,
+    /// **chasing a reaching-def temp** in `body` when the operand is not a
+    /// direct constant.
+    ///
+    /// At `mir_opt_level = 0` a constant enum value reaches a call argument
+    /// through a single-assignment temp rather than inline: `_5 =
+    /// Ordering::Acquire; f(move _5)`. The temp's defining rvalue is either a
+    /// `Use(Operand::Constant(Const::EnumValue))` or a fieldless
+    /// `Aggregate(AggregateKind::Enum(_, variant), [])`; both are compile-time
+    /// constants and yield the same discriminant. This is the D14/I08 read both
+    /// the atomicity frontend legality passes and the per-target backend
+    /// selectors use, so they agree on each call's `Ordering` (C06). A
+    /// non-constant (runtime) ordering — a temp with a non-constant defining
+    /// rvalue, an ambiguous/missing def, or a projected place — returns `None`,
+    /// which the frontend turns into `ATOMIC-ERR-ORDERING-NONCONST`.
+    pub fn resolve_operand_enum_variant(&self, body: &Body, operand: &Operand) -> Option<u32> {
+        self.resolve_operand_enum_variant_inner(body, operand, 0)
+    }
+
+    fn resolve_operand_enum_variant_inner(
+        &self,
+        body: &Body,
+        operand: &Operand,
+        depth: u32,
+    ) -> Option<u32> {
+        // Bound the reaching-def chase (matches the receiver-chase bound).
+        if depth > 8 {
+            return None;
+        }
+        if let Some(variant) = self.operand_const_enum_variant(operand) {
+            return Some(variant);
+        }
+        let place = match operand {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            Operand::Constant(_) => return None,
+        };
+        if !place.projection.is_empty() {
+            return None;
+        }
+        let local = place.local;
+        // The unique whole-local definition (single-assignment at opt-level 0).
+        let mut def: Option<&Rvalue> = None;
+        for block in body.basic_blocks.iter() {
+            for stmt in block.statements.iter() {
+                if let StatementKind::Assign(dst, rhs) = &stmt.kind {
+                    if dst.local == local && dst.projection.is_empty() {
+                        if def.is_some() {
+                            return None; // ambiguous: not a clean constant
+                        }
+                        def = Some(rhs);
+                    }
+                }
+            }
+        }
+        match def? {
+            Rvalue::Use(inner) => self.resolve_operand_enum_variant_inner(body, inner, depth + 1),
+            Rvalue::Aggregate(AggregateKind::Enum(_, variant), fields) if fields.is_empty() => {
+                Some(variant.as_u32())
+            }
+            _ => None,
+        }
+    }
+
     fn instance_item(&self, id: InstanceId) -> &Item {
         &self.items[self.instances[id].item]
     }

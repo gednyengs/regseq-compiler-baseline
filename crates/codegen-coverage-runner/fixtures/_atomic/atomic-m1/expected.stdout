@@ -1,0 +1,5 @@
+ATM load cell=1 w=32 ord=Acquire => 0x7
+ATM store cell=0 w=32 ord=Release val=0x1
+ATM load cell=0 w=32 ord=Acquire => 0x1
+ATM bit_set cell=0 w=32 ord=SeqCst bit=3 prior=0
+ATM bit_clear cell=0 w=32 ord=SeqCst bit=3 prior=1

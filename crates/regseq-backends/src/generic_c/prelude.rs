@@ -420,6 +420,136 @@ extern void regseq_delay_busy_wait_ns(uint64_t ns);
 extern void regseq_delay_sleep_ns(uint64_t ns);
 "#;
 
+/// Atomic-memory-access-and-ordering host oracle (atomicity construct, C05),
+/// emitted only for a TU that uses an atomic op. Unlike `DELAY_HOOKS`, this is
+/// the ALWAYS-ON `regseq_mmio_*` model: the atomic state lives in a host cell
+/// table (indexed by the deterministic per-`Atomic`-field cell id), and each of
+/// the six hooks applies value semantics to its cell, then prints an `ATM <op>`
+/// line. That printed trace IS the behavioral oracle — value correctness,
+/// ordering-tag preservation (the `Ordering` name is printed), the bit-test
+/// prior bit, and the `compare_exchange` commit/contention branch are all
+/// observable. It is NOT a weak-memory-soundness model (I06): the cells are
+/// plain memory and the ordering tag is recorded, not enforced. The recording
+/// impl is DEFINED here (self-contained), so the same emitted TU is host-
+/// faithfully observable with no harness-linked clock. Two's-complement wrapping
+/// + width masking are bit-level (uint64_t), so a signed element's wrapping/
+/// sign-extension is correct without a separate signed path (C07/I04).
+///
+/// The caller emits a `#define REGSEQ_ATOMIC_CELLS <n>` immediately before this
+/// block, sized to the TU's actual `Atomic`-field count
+/// ([`super::body_emit::atomic_cell_count`]), so the cell table never overflows
+/// regardless of how many `Atomic` fields a driver declares — there is no fixed
+/// cap.
+pub const ATOMIC_HELPERS: &str = r#"
+/* ---------------------------------------------------------------------------
+ * Atomic-memory-access-and-ordering host oracle (atomicity construct, C05).
+ * The atomic state lives in this cell table (the regseq_mmio_* model); each
+ * hook applies value semantics to its cell and prints an "ATM <op>" line --
+ * that trace IS the behavioral oracle (value + ordering tag + bit-test prior +
+ * CAS branch). NOT weak-memory soundness (I06). REGSEQ_ATOMIC_CELLS is
+ * #define'd just above, sized to the TU's Atomic-field count. */
+static uint64_t regseq_atomic_cells[REGSEQ_ATOMIC_CELLS] __attribute__((unused));
+
+/* Low `width` bits set (width in {32,64}). */
+__attribute__((unused)) static uint64_t regseq_atomic_mask(uint32_t width) {
+    return width >= 64u ? ~(uint64_t)0 : (((uint64_t)1 << width) - 1u);
+}
+/* The memory-ordering enum tag -> its name (C05 ABI: Relaxed=0 .. SeqCst=4),
+ * printed so ordering-tag preservation (C01) is observable in the trace. */
+__attribute__((unused)) static const char *regseq_atomic_order(int o) {
+    switch (o) {
+    case 0: return "Relaxed";
+    case 1: return "Acquire";
+    case 2: return "Release";
+    case 3: return "AcqRel";
+    case 4: return "SeqCst";
+    default: return "?";
+    }
+}
+/* The fetch-modify sub-op tag -> its name (FetchOp ABI: Add=0 .. Swap=5). */
+__attribute__((unused)) static const char *regseq_atomic_fetch_op(int op) {
+    switch (op) {
+    case 0: return "add";
+    case 1: return "sub";
+    case 2: return "or";
+    case 3: return "and";
+    case 4: return "xor";
+    case 5: return "swap";
+    default: return "?";
+    }
+}
+
+__attribute__((unused)) static uint64_t regseq_atomic_load(uint32_t cell, uint32_t width, int order) {
+    uint64_t v = regseq_atomic_cells[cell] & regseq_atomic_mask(width);
+    printf("ATM load cell=%u w=%u ord=%s => 0x%llx\n",
+           (unsigned)cell, (unsigned)width, regseq_atomic_order(order),
+           (unsigned long long)v);
+    return v;
+}
+__attribute__((unused)) static void regseq_atomic_store(uint32_t cell, uint32_t width, uint64_t val, int order) {
+    uint64_t v = val & regseq_atomic_mask(width);
+    regseq_atomic_cells[cell] = v;
+    printf("ATM store cell=%u w=%u ord=%s val=0x%llx\n",
+           (unsigned)cell, (unsigned)width, regseq_atomic_order(order),
+           (unsigned long long)v);
+}
+__attribute__((unused)) static uint64_t regseq_atomic_rmw(uint32_t cell, uint32_t width, int op, uint64_t val, int order) {
+    uint64_t mask = regseq_atomic_mask(width);
+    uint64_t prior = regseq_atomic_cells[cell] & mask;
+    uint64_t arg = val & mask;
+    uint64_t next;
+    switch (op) {
+    case 0: next = prior + arg; break;   /* add (two's-complement wrap via mask) */
+    case 1: next = prior - arg; break;   /* sub */
+    case 2: next = prior | arg; break;   /* or  */
+    case 3: next = prior & arg; break;   /* and */
+    case 4: next = prior ^ arg; break;   /* xor */
+    case 5: next = arg;         break;   /* swap */
+    default: next = prior;      break;
+    }
+    regseq_atomic_cells[cell] = next & mask;
+    printf("ATM %s cell=%u w=%u ord=%s val=0x%llx prior=0x%llx\n",
+           regseq_atomic_fetch_op(op), (unsigned)cell, (unsigned)width,
+           regseq_atomic_order(order), (unsigned long long)arg,
+           (unsigned long long)prior);
+    return prior;
+}
+__attribute__((unused)) static int regseq_atomic_cmpxchg(uint32_t cell, uint32_t width, uint64_t expected, uint64_t desired, uint64_t *observed, int succ, int fail) {
+    uint64_t mask = regseq_atomic_mask(width);
+    uint64_t cur = regseq_atomic_cells[cell] & mask;
+    int committed = (cur == (expected & mask));
+    if (committed) {
+        regseq_atomic_cells[cell] = desired & mask;
+    }
+    *observed = cur;
+    printf("ATM cmpxchg cell=%u w=%u succ=%s fail=%s expected=0x%llx desired=0x%llx observed=0x%llx outcome=%s\n",
+           (unsigned)cell, (unsigned)width, regseq_atomic_order(succ),
+           regseq_atomic_order(fail), (unsigned long long)(expected & mask),
+           (unsigned long long)(desired & mask), (unsigned long long)cur,
+           committed ? "Ok" : "Err");
+    return committed;
+}
+__attribute__((unused)) static int regseq_atomic_bittest(uint32_t cell, uint32_t width, int set_or_clear, uint32_t bit, int order) {
+    if (bit >= width) {
+        regseq_panic("atomic bit index out of range");
+    }
+    uint64_t b = (uint64_t)1 << bit;
+    int prior = (regseq_atomic_cells[cell] & b) ? 1 : 0;
+    if (set_or_clear == 0) {
+        regseq_atomic_cells[cell] |= b;
+    } else {
+        regseq_atomic_cells[cell] &= ~b;
+    }
+    printf("ATM bit_%s cell=%u w=%u ord=%s bit=%u prior=%d\n",
+           set_or_clear == 0 ? "set" : "clear", (unsigned)cell, (unsigned)width,
+           regseq_atomic_order(order), (unsigned)bit, prior);
+    return prior;
+}
+__attribute__((unused)) static void regseq_atomic_fence(int order) {
+    printf("ATM fence ord=%s\n", regseq_atomic_order(order));
+}
+"#;
+
 /// `(c_type, min_expr, max_expr)` for every primitive integer type in the
 /// fixed helper set (section 10 / section 11). The order is fixed so the
 /// emitted block is byte-stable. The 128-bit bounds reference the

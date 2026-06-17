@@ -336,6 +336,25 @@ fn emit_generic_c_inner(
     if body_emit::model_has_delay_intrinsic(model) {
         out.push_str(prelude::DELAY_HOOKS);
     }
+    // Atomic-memory-access-and-ordering host oracle (atomicity construct, C05):
+    // the always-on `regseq_atomic_*` cell table + six hooks, plus the per-TU
+    // cell-init constructor (R10/S10) that seeds the non-zero initials. Emitted
+    // only for a TU with an `Atomic` field so an atomic-less TU's `.c` is
+    // byte-unchanged (no golden churn).
+    if body_emit::model_has_atomic(model) {
+        // Size the cell table to the TU's exact Atomic-field count (no fixed
+        // cap): the `#define` precedes the prelude block, which declares
+        // `regseq_atomic_cells[REGSEQ_ATOMIC_CELLS]`. Cell ids run 0..count-1,
+        // so the table can never overflow.
+        out.push_str(&format!(
+            "#define REGSEQ_ATOMIC_CELLS {}u\n",
+            body_emit::atomic_cell_count(model)
+        ));
+        out.push_str(prelude::ATOMIC_HELPERS);
+        if let Some(init) = body_emit::emit_atomic_cell_init(model) {
+            out.push_str(&init);
+        }
+    }
     out.push_str(&bank2);
     out.push_str(&bank3);
     out.push_str(&bank4);

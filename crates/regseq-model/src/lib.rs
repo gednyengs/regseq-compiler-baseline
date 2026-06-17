@@ -73,7 +73,8 @@ pub use device_lifecycle::{
     UserDataField, UserDataKind,
 };
 pub use domain_attr::{
-    AttrData, ConfigOp, DomainAttrTables, FieldPath, FrameworkType, IntrinsicKind, LogLevel, MmioOp,
+    AtomicElement, AtomicOp, AttrData, ConfigOp, DomainAttrTables, FetchOp, FieldPath,
+    FrameworkType, IntrinsicKind, LogLevel, MmioOp,
 };
 pub use fn_sig::{canonical_fn_sig, FnSig};
 pub use fn_sig_interner::FnSigInterner;
