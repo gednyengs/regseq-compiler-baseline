@@ -179,6 +179,9 @@ fn diag_logging_post_peel_shape_and_attrs() {
                 AttrData::IsrBinding { .. } => {
                     panic!("spurious AttrData on log callee: IsrBinding")
                 }
+                AttrData::SyncResource { .. } => {
+                    panic!("spurious AttrData on log callee: SyncResource")
+                }
             }
         }
     }

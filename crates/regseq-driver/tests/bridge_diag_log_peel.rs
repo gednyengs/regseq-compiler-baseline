@@ -380,6 +380,8 @@ fn run_bridge_phase5_peels_all_four_severities() {
                         // produces none, so skip.
                         AttrData::InterruptResource { .. } => {}
                         AttrData::IsrBinding { .. } => {}
+                        // Synchronization marker; this fixture produces none.
+                        AttrData::SyncResource { .. } => {}
                     }
                 }
             }

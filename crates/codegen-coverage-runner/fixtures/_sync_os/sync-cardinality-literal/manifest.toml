@@ -1,0 +1,8 @@
+name   = "sync-cardinality-literal"
+kind   = "rust"
+covers = []
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "SYN-ERR-UNKNOWN-CARDINALITY"

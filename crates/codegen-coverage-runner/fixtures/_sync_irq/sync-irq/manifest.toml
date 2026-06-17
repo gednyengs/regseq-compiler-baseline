@@ -1,0 +1,9 @@
+name   = "sync-irq"
+kind   = "rust"
+# Combined interrupt + synchronization fixture (T09 / G-SYN-17 + M4 PL011 seed):
+# a bound ISR that acquires an IrqSpinLock EXPLICITLY. Run ONLY by the dedicated
+# `sync_irq_e2e` binary (substring assertions on the no-auto-acquire wrapper +
+# the explicit handler-body acquire); never the generic 6-stage sweep; no golden.
+covers = []
+lifecycle_scenario = "orderly"
+expect = "pass"

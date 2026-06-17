@@ -546,6 +546,168 @@ fn bus_resource_based_accessor_traces_the_real_mapped_address() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Compile `prelude::PRELUDE + bank + main` as ONE TU (so `main` can call the
+/// `static` oracle hooks) and run it. Returns `(exit_code, stdout)`, or `None`
+/// when no C compiler is available (the test then skips).
+fn compile_and_run_oracle(tag: &str, bank: &str, main: &str) -> Option<(Option<i32>, String)> {
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    if std::process::Command::new(&cc)
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping {tag}: no C compiler ({cc})");
+        return None;
+    }
+    let program = format!("{}{}\n{}\n", prelude::PRELUDE, bank, main);
+    let dir = std::env::temp_dir().join(format!("regseq_{tag}_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let src = dir.join("oracle.c");
+    let bin = dir.join("oracle");
+    std::fs::write(&src, &program).expect("write source");
+    let compile = std::process::Command::new(&cc)
+        .args(["-std=gnu11", "-fwrapv", "-Wall", "-o"])
+        .arg(&bin)
+        .arg(&src)
+        .output()
+        .expect("invoke cc");
+    assert!(
+        compile.status.success(),
+        "cc failed for {tag}:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = std::process::Command::new(&bin).output().expect("run binary");
+    let out = String::from_utf8_lossy(&run.stdout).into_owned();
+    let code = run.status.code();
+    let _ = std::fs::remove_dir_all(&dir);
+    Some((code, out))
+}
+
+/// The T13 scenario `main`: an ISR that acquires+releases the declared
+/// `IrqSpinLock`, a mainline that holds the lock across a synchronous fire (must
+/// be masked → no reentry) and fires again unheld (the ISR runs cleanly).
+const T13_MAIN: &str = "\
+static void t13_isr(void *ctx) {\n\
+\x20\x20\x20\x20(void)ctx;\n\
+\x20\x20\x20\x20regseq_lock_acquire(0u, \"IRQSPIN\");\n\
+\x20\x20\x20\x20regseq_lock_release(0u);\n\
+}\n\
+int main(void) {\n\
+\x20\x20\x20\x20regseq_lock_init(0u, \"IRQSPIN\");\n\
+\x20\x20\x20\x20regseq_irq_register(0u, t13_isr, (void *)0);\n\
+\x20\x20\x20\x20regseq_irq_enable(0u);\n\
+\x20\x20\x20\x20regseq_lock_acquire(0u, \"IRQSPIN\");\n\
+\x20\x20\x20\x20regseq_irq_fire(0u);\n\
+\x20\x20\x20\x20regseq_lock_release(0u);\n\
+\x20\x20\x20\x20regseq_irq_fire(0u);\n\
+\x20\x20\x20\x20return 0;\n\
+}\n";
+
+#[test]
+fn t13_irqspinlock_masks_synchronous_irq_reentry() {
+    // The T13 IRQ-reentry behavioral check (M3 exit): with the coupled bank, a
+    // held IrqSpinLock masks a synchronous `regseq_irq_fire`, so the ISR does NOT
+    // re-enter and double-acquire. A clean exit IS the proof (the oracle aborts
+    // on a double-acquire); the masked trace + the second (unheld) fire running
+    // the ISR confirm the behavior is real, not vacuous.
+    let Some((code, out)) =
+        compile_and_run_oracle("t13_masked", &prelude::sync_irq_coupled_helpers(), T13_MAIN)
+    else {
+        return;
+    };
+    assert_eq!(
+        code,
+        Some(0),
+        "the masked held fire must NOT re-enter/double-acquire (clean exit); stdout:\n{out}"
+    );
+    assert!(
+        !out.contains("SYNC error"),
+        "no discipline violation must occur; stdout:\n{out}"
+    );
+    assert!(
+        out.contains("IRQ fire line=0 masked"),
+        "the held fire must be masked (IrqSpinLock disables local IRQs); stdout:\n{out}"
+    );
+    // The ISR acquires lock 0 exactly once — on the SECOND (unheld) fire. The
+    // mainline acquire is the other; the masked fire ran no acquire.
+    assert_eq!(
+        out.matches("SYNC lock_acquire id=0 kind=IRQSPIN").count(),
+        2,
+        "exactly the mainline acquire + the unmasked-fire ISR acquire (the masked \
+         fire ran no ISR); stdout:\n{out}"
+    );
+    assert!(
+        out.contains("IRQ fire line=0\n"),
+        "the second (unheld) fire must actually invoke the ISR; stdout:\n{out}"
+    );
+}
+
+#[test]
+fn t13_coupling_weaves_the_mask_logic_into_both_banks() {
+    // The T13 coupling is built by unique-anchor replacement on the untouched
+    // IRQ/SYNC helper consts; assert each masked variant actually changed AND
+    // grew the expected mask logic (the `replace_once` guard would already abort
+    // if an anchor were missing/duplicated, but pin the woven result here).
+    let irq = prelude::irq_helpers_masked();
+    assert_ne!(irq, prelude::IRQ_HELPERS, "the masked fire must differ from the base");
+    assert!(
+        irq.contains("if (regseq_local_irq_masked > 0u)") && irq.contains("masked\\n"),
+        "the masked fire must gate on the mask + trace `masked`"
+    );
+    let sync = prelude::sync_helpers_masked();
+    assert_ne!(sync, prelude::SYNC_HELPERS, "the masked lock ops must differ from the base");
+    assert!(
+        sync.contains("regseq_local_irq_masked++") && sync.contains("regseq_local_irq_masked--"),
+        "acquire must raise + release must lower the IRQ mask"
+    );
+    // The single-construct banks the goldens depend on are untouched.
+    assert!(!prelude::IRQ_HELPERS.contains("regseq_local_irq_masked"));
+    assert!(!prelude::SYNC_HELPERS.contains("regseq_local_irq_masked"));
+}
+
+#[test]
+fn t16_isr_safety_limitation_is_in_the_conformance_audit_output() {
+    // M4/T16 (GRILL I03/D08): the §7.1 ISR-legality conformance/audit note must
+    // appear in the emitted artifact for a TU where the check is live (interrupt
+    // + sync), and it must NEVER claim "ISR-safety verified" — the thesis-honesty
+    // gate. It is part of the both-construct coupled bank.
+    let coupled = prelude::sync_irq_coupled_helpers();
+    assert!(
+        coupled.contains("RSEQ-SYNC-AUDIT") && coupled.contains("SOUND-BUT-INCOMPLETE"),
+        "the §7.1 conformance/audit limitation note must be emitted for an ISR+lock TU"
+    );
+    assert!(
+        coupled.contains("NOT \"ISR-safety verified\""),
+        "the audit note must explicitly refuse the 'ISR-safety verified' claim"
+    );
+    // A single-construct TU does not carry the note (the §7.1 check is not live
+    // without an ISR context), and its helper text stays byte-identical.
+    assert!(!prelude::SYNC_HELPERS.contains("RSEQ-SYNC-AUDIT"));
+    assert!(!prelude::IRQ_HELPERS.contains("RSEQ-SYNC-AUDIT"));
+}
+
+#[test]
+fn t13_without_masking_the_held_fire_double_acquires() {
+    // Negative control proving the masking is LOAD-BEARING: with the un-coupled
+    // banks (no mask), the same scenario re-enters on the held fire — the ISR
+    // acquires a lock the mainline already holds → the oracle's runtime
+    // double-acquire net fires and aborts. This is exactly the deadlock the T13
+    // coupling prevents.
+    let uncoupled = format!("{}{}", prelude::IRQ_HELPERS, prelude::SYNC_HELPERS);
+    let Some((code, out)) = compile_and_run_oracle("t13_uncoupled", &uncoupled, T13_MAIN) else {
+        return;
+    };
+    assert_ne!(
+        code,
+        Some(0),
+        "without masking the held fire must re-enter and abort (non-zero); stdout:\n{out}"
+    );
+    assert!(
+        out.contains("SYNC error double-acquire id=0"),
+        "the un-masked reentry must trip the oracle's double-acquire net; stdout:\n{out}"
+    );
+}
+
 #[test]
 fn bus_resource_block_absent_without_a_resolved_binding() {
     // Zero-churn gate: a register-access lifecycle driver — NO `bus` declared and
@@ -3772,19 +3934,34 @@ fn prelude_ordinary_idents_all_defined_in_prelude() {
     // (RD-7) but every reserved name must still be a real helper, so check the
     // full superset (`include_lifecycle = true`) against the superset text.
     let prelude_text = format!(
-        "{}{}{}{}",
+        "{}{}{}{}{}{}",
         prelude::PRELUDE,
         prelude::helper_block(&prelude::HelperUsage::all()),
         prelude::LIFECYCLE_HELPERS,
         prelude::IRQ_HELPERS,
+        prelude::SYNC_HELPERS,
+        // The T13 IrqSpinLock<->interrupt coupling state (emitted only for a
+        // both-construct TU) is part of the reserved superset.
+        prelude::MASK_STATE,
     );
-    for ident in prelude_ordinary_idents(true, true) {
-        // Two device-interrupt names share C's ordinary identifier namespace
-        // without being functions: the slot-table static (defined with `[`)
-        // and the slot typedef (defined as `} regseq_irq_slot_t;`). They are
-        // reserved (a collision would still break the TU) and pinned by plain
-        // presence; everything else must be a real helper function.
-        let defined = if ident == "regseq_irq_slot_table" || ident == "regseq_irq_slot_t" {
+    for ident in prelude_ordinary_idents(true, true, true) {
+        // A few names share C's ordinary identifier namespace without being
+        // functions: the device-interrupt slot-table static + slot typedef, the
+        // synchronization lock-oracle state globals, and the T13 coupling state.
+        // They are reserved (a collision would still break the TU) and pinned by
+        // plain presence; everything else must be a real helper function.
+        let non_function = matches!(
+            ident.as_str(),
+            "regseq_irq_slot_table"
+                | "regseq_irq_slot_t"
+                | "regseq_lock_inited"
+                | "regseq_lock_held_stack"
+                | "regseq_lock_held_depth"
+                | "regseq_lock_atexit_armed"
+                | "regseq_local_irq_masked"
+                | "regseq_lock_held_is_irqspin"
+        );
+        let defined = if non_function {
             prelude_text.contains(&ident)
         } else {
             prelude_text.contains(&format!("{ident}("))

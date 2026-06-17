@@ -8,6 +8,7 @@ use crate::ids::{FieldIdx, ItemId, StringId, Symbol, VariantIdx};
 use crate::index_vec::IndexVec;
 use crate::interrupt::InterruptForm;
 use crate::source::Span;
+use crate::synchronization::SyncKind;
 
 /// Sibling tables on `RegseqModel` for structured DSL property
 /// attributes derived from the `#[rseq::*]` tool namespace.
@@ -89,6 +90,21 @@ pub enum AttrData {
         /// Whether this is an array-bind handler (`index: usize` parameter).
         array_bind: bool,
     } = 3,
+    /// Synchronization lock/completion field marker (`Mutex<T>`/`SpinLock<T>`/
+    /// `IrqSpinLock<T>`/`Completion`, synchronization construct), stored in
+    /// `DomainAttrTables.field_attrs`. Carries the recognized lock kind — the
+    /// field's wrapper type *is* the kind (GRILL `C01`). The joined per-driver
+    /// facts (protected type, cardinality, acquire sites) live in the
+    /// `SynchronizationTables` sibling table.
+    ///
+    /// Appended at discriminant **5**: discriminant **4 is reserved** for the
+    /// atomicity construct's `AttrData::Atomic` (the sibling Concurrency-umbrella
+    /// construct, developed in parallel) so the two append-only enums do not
+    /// collide on a discriminant when their branches merge.
+    SyncResource {
+        /// The lock kind, given by the field's wrapper type.
+        kind: SyncKind,
+    } = 5,
 }
 
 /// Closed, append-only framework-type taxonomy.
@@ -775,6 +791,51 @@ mod tests {
             array_bind: true,
         });
         assert_json_round_trip(AttrData::FrameworkType(FrameworkType::IrqResult));
+    }
+
+    #[test]
+    fn attr_data_sync_resource_discriminant_is_stable() {
+        // The synchronization field marker appends at discriminant **5**
+        // (discriminant 4 is reserved for the atomicity construct's
+        // `AttrData::Atomic`)...
+        assert_eq!(
+            attr_data_tag(&AttrData::SyncResource {
+                kind: SyncKind::IrqSpinLock,
+            }),
+            5
+        );
+        // ...and adding it must not shift any prior variant.
+        assert_eq!(attr_data_tag(&attr(LogLevel::Debug)), 0);
+        assert_eq!(
+            attr_data_tag(&AttrData::FrameworkType(FrameworkType::RegseqError)),
+            1
+        );
+        assert_eq!(
+            attr_data_tag(&AttrData::InterruptResource {
+                id: StringId::from_u32(1),
+                form: InterruptForm::Single,
+            }),
+            2
+        );
+        assert_eq!(
+            attr_data_tag(&AttrData::IsrBinding {
+                field: None,
+                array_bind: false,
+            }),
+            3
+        );
+    }
+
+    #[test]
+    fn attr_data_sync_resource_variants_json_round_trip() {
+        for kind in [
+            SyncKind::Mutex,
+            SyncKind::SpinLock,
+            SyncKind::IrqSpinLock,
+            SyncKind::Completion,
+        ] {
+            assert_json_round_trip(AttrData::SyncResource { kind });
+        }
     }
 
     #[test]

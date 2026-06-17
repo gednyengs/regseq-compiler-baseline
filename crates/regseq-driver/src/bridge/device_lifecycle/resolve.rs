@@ -213,6 +213,14 @@ fn classify_fields(
             if crate::bridge::interrupt::is_interrupt_field(tcx, field_ty) {
                 continue;
             }
+            // Synchronization lock fields are compiler-managed resources owned
+            // by `bridge::synchronization` (recognized in its Phase-4 pass) —
+            // route them away from the user-data classifier, whose
+            // `UserDataNotInitializable` rule would otherwise reject the lock
+            // shell. `init_primitives`/`destroy_primitives` place their init.
+            if crate::bridge::synchronization::is_sync_field(tcx, field_ty) {
+                continue;
+            }
             if is_mmio_resource(tcx, field_ty) {
                 // Recognize the bus-resource-management L1 facts on the shared
                 // `#[rseq::mmio(...)]` field attribute (construct #3, T03): the

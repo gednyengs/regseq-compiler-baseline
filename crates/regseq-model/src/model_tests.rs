@@ -181,6 +181,7 @@ fn root_struct_exposes_spec_field_set() {
         domain_attrs,
         device_lifecycle,
         interrupt,
+        synchronization,
     } = m;
 
     assert_eq!(primary_crate, CrateId::ZERO);
@@ -203,6 +204,7 @@ fn root_struct_exposes_spec_field_set() {
     assert_eq!(domain_attrs, crate::DomainAttrTables::default());
     assert_eq!(device_lifecycle, crate::DeviceLifecycleTables::default());
     assert_eq!(interrupt, crate::InterruptTables::default());
+    assert_eq!(synchronization, crate::SynchronizationTables::default());
 }
 
 // ------------------------------------------------------------------

@@ -39,6 +39,7 @@ pub mod rvalue;
 mod source;
 mod statement;
 mod string_interner;
+mod synchronization;
 mod synthetic;
 mod synthetic_def_path;
 mod target;
@@ -93,6 +94,10 @@ pub use interrupt::{
     InterruptTables, IrqArmReachability, IsrHandler, TriggerPolarity, TriggerType,
 };
 pub use item::{BridgeItemFlags, InlineHint, Item, ItemKind, Linkage};
+pub use synchronization::{
+    AcquireSite, Cardinality, CompletionOpKind, CompletionSite, DriverSynchronization,
+    SpinlockHeldRegion, SyncKind, SyncOp, SyncResource, SynchronizationTables,
+};
 pub use layout::{
     EnumShape, FieldLayout, Layout, LayoutKind, TagEncoding, TagScalar, VariantLayout,
     VariantRange, WrappingRange, UNIT_LAYOUT,

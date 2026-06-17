@@ -126,6 +126,12 @@ pub struct RegseqModel {
     /// serialized before the construct existed deserializable (I06).
     #[serde(default)]
     pub interrupt: crate::interrupt::InterruptTables,
+
+    /// Synchronization (locks) sibling table, keyed by the `#[rseq::driver]`
+    /// struct's Item. `#[serde(default)]` keeps models serialized before the
+    /// construct existed deserializable.
+    #[serde(default)]
+    pub synchronization: crate::synchronization::SynchronizationTables,
 }
 
 #[cfg(test)]
@@ -1084,6 +1090,7 @@ impl RegseqModel {
             domain_attrs: DomainAttrTables::default(),
             device_lifecycle: crate::device_lifecycle::DeviceLifecycleTables::default(),
             interrupt: crate::interrupt::InterruptTables::default(),
+            synchronization: crate::synchronization::SynchronizationTables::default(),
         }
     }
 
@@ -1379,6 +1386,18 @@ impl RegseqModel {
             self.interrupt.drivers.insert(new_id, driver);
         }
 
+        // `synchronization.drivers` is keyed by the same driver-struct `ItemId`
+        // (its values carry no `ItemId` references — StringId/TyId/InstanceRef/
+        // BlockId/LocalId only), so re-key it by the same remap, exactly like
+        // `device_lifecycle`/`interrupt`. Without this a TU that runs the F4
+        // item sort would leave the sync map keyed by stale ItemIds and the
+        // backend's `Ty::Struct { item }` lookup would not find the locks.
+        let old_synchronization = std::mem::take(&mut self.synchronization.drivers);
+        for (old_id, driver) in old_synchronization {
+            let new_id = remap[old_id.index()];
+            self.synchronization.drivers.insert(new_id, driver);
+        }
+
         #[cfg(debug_assertions)]
         for idx in 0..self.items.len().saturating_sub(1) {
             let first = ItemId::from_u32(idx as u32);
@@ -1565,6 +1584,16 @@ impl RegseqModel {
         for (old_id, driver) in old_drivers {
             if let Some(new_id) = remap[old_id.index()] {
                 self.device_lifecycle.drivers.insert(new_id, driver);
+            }
+        }
+
+        // `synchronization.drivers` is keyed by the driver-struct `ItemId` (same
+        // discipline as `device_lifecycle`); remap it the same way, dropping any
+        // removed driver's entry.
+        let old_synchronization = std::mem::take(&mut self.synchronization.drivers);
+        for (old_id, driver) in old_synchronization {
+            if let Some(new_id) = remap[old_id.index()] {
+                self.synchronization.drivers.insert(new_id, driver);
             }
         }
         remap

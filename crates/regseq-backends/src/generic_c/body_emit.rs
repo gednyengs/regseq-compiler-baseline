@@ -41,14 +41,14 @@
 use std::cell::RefCell;
 
 use regseq_model::{
-    args_key_for_generic_args, AggregateKind, ArmReachability, AssertKind, BinOp, Byte,
-    CallCallee, CastKind, ConfigOp, Const,
+    args_key_for_generic_args, AggregateKind, ArmReachability, AssertKind, BinOp, BlockId, Byte,
+    CallCallee, CastKind, CompletionOpKind, ConfigOp, Const,
     ConstId, DriverInterrupts, Endian, EnumShape, FloatKind, GenericArg, InstanceId, InstanceKind,
     InstanceRef, InterruptForm, IntKind, IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel,
     MatchEntry, MmioOp, NonDivergingIntrinsic,
     Operand, Place, PlaceElem, PointerCoercion, RegseqModel, Rvalue, StatementKind, SwitchTargets,
-    SyntheticItemKind, TagEncoding, TerminatorKind, TriggerPolarity, TriggerType, Ty, TyId,
-    UintKind, UnOp, VariantIdx, VariantLayout,
+    SyncKind, SyntheticItemKind, TagEncoding, TerminatorKind, TriggerPolarity, TriggerType, Ty,
+    TyId, UintKind, UnOp, VariantIdx, VariantLayout,
 };
 
 use crate::interrupt_order::{irq_steps_for, IrqPhase, IrqStep};
@@ -86,6 +86,7 @@ pub(super) fn emit_body(
     model: &RegseqModel,
     names: &NameTable,
     syms: &InstanceSymbols,
+    id: InstanceId,
     instance: &regseq_model::Instance,
     body: &regseq_model::Body,
     helper_use: &RefCell<HelperUsage>,
@@ -107,6 +108,84 @@ pub(super) fn emit_body(
         lowering,
         helper_use,
     };
+
+    // Synchronization acquire/release sites in THIS body lower to lock-oracle
+    // hooks, replacing the wrapper-method `lock()` Call and the guard's
+    // drop-glue Call. Keyed by block; the site is matched to this body by its
+    // content-addressed `InstanceRef` (stable across the Phase-5 instance sort).
+    let body_ref = model.instance_ref_of(id);
+    let mut sync_actions: std::collections::BTreeMap<BlockId, SyncAction> =
+        std::collections::BTreeMap::new();
+    // TU-global lock ids (SF1): each driver's `lock_id` (its index into that
+    // driver's `resources`) is offset by the cumulative resource count of the
+    // earlier drivers, so the oracle's per-id init/held tracking never collides
+    // across drivers in a multi-driver TU. `drivers` is a BTreeMap (ItemId-sorted)
+    // — the same deterministic order `tu_lock_base` (the init emission) walks.
+    let mut base = 0u32;
+    for driver in model.synchronization.drivers.values() {
+        for site in &driver.acquire_sites {
+            if site.body != body_ref {
+                continue;
+            }
+            let kind = driver
+                .resources
+                .get(site.lock_id as usize)
+                .map(|r| sync_kind_label(r.kind))
+                .unwrap_or("LOCK");
+            // Each block is the acquire or release of exactly one site; a
+            // collision means the recognizer recorded overlapping sites — fail
+            // loud rather than silently lower the last writer.
+            if sync_actions
+                .insert(
+                    site.acquire_block,
+                    SyncAction::Acquire {
+                        lock_id: base + site.lock_id,
+                        kind,
+                    },
+                )
+                .is_some()
+            {
+                return Err(EmitError::Unsupported(
+                    "two synchronization sites map to one acquire block",
+                ));
+            }
+            for rb in &site.release_blocks {
+                if sync_actions
+                    .insert(
+                        *rb,
+                        SyncAction::Release {
+                            lock_id: base + site.lock_id,
+                        },
+                    )
+                    .is_some()
+                {
+                    return Err(EmitError::Unsupported(
+                        "two synchronization sites map to one release block",
+                    ));
+                }
+            }
+        }
+        for site in &driver.completion_sites {
+            if site.body != body_ref {
+                continue;
+            }
+            if sync_actions
+                .insert(
+                    site.block,
+                    SyncAction::Completion {
+                        comp_id: base + site.lock_id,
+                        op: site.op,
+                    },
+                )
+                .is_some()
+            {
+                return Err(EmitError::Unsupported(
+                    "a synchronization completion site collides with another sync site block",
+                ));
+            }
+        }
+        base += driver.resources.len() as u32;
+    }
 
     let mut out = String::from(" {\n");
 
@@ -192,15 +271,89 @@ pub(super) fn emit_body(
                 out.push_str(&format!("        {line}\n"));
             }
         }
-        out.push_str(&format!(
-            "        {}\n",
-            emitter.terminator(&bb.terminator.kind)?
-        ));
+        // A recognized lock acquire/release block replaces its `Call`
+        // terminator with the lock-oracle hook + a goto to the call's normal
+        // successor (the wrapper-method body / drop glue is never lowered). The
+        // borrow temps the suppressed Call consumed stay set-but-unused, exactly
+        // as for the register-access / delay intrinsic interceptions.
+        let block_id = BlockId::from_u32(idx as u32);
+        let term_line = match sync_actions.get(&block_id) {
+            Some(action) => emit_sync_action(action, &bb.terminator.kind)?,
+            None => emitter.terminator(&bb.terminator.kind)?,
+        };
+        out.push_str(&format!("        {term_line}\n"));
         out.push_str("    }\n");
     }
 
     out.push_str("}\n");
     Ok(out)
+}
+
+/// A recognized synchronization op at a block, lowered in place of the block's
+/// `Call` terminator (synchronization construct, S11).
+enum SyncAction {
+    /// `lock()` → `regseq_lock_acquire(id, "<KIND>")`.
+    Acquire { lock_id: u32, kind: &'static str },
+    /// guard drop / `guard_drop_early` → `regseq_lock_release(id)`.
+    Release { lock_id: u32 },
+    /// `Completion::{signal,wait,reset}()` → `regseq_completion_<op>(id)`.
+    Completion { comp_id: u32, op: CompletionOpKind },
+}
+
+/// The TU-global lock-id base for a driver (SF1): the cumulative count of
+/// lock/completion resources declared by the sync drivers ordered before it
+/// (BTreeMap ItemId order). Matches the running offset in [`emit_body`], so the
+/// `init`/`destroy` emission and the `acquire`/`release` hooks agree on the id.
+fn tu_lock_base(model: &RegseqModel, driver_item: regseq_model::ItemId) -> u32 {
+    let mut base = 0u32;
+    for (item, d) in model.synchronization.drivers.iter() {
+        if *item == driver_item {
+            break;
+        }
+        base += d.resources.len() as u32;
+    }
+    base
+}
+
+/// The generic-c oracle's `kind` string for a [`SyncKind`].
+fn sync_kind_label(kind: SyncKind) -> &'static str {
+    match kind {
+        SyncKind::Mutex => "MUTEX",
+        SyncKind::SpinLock => "SPIN",
+        SyncKind::IrqSpinLock => "IRQSPIN",
+        SyncKind::Completion => "COMPLETION",
+    }
+}
+
+/// Lower a recognized acquire/release site to its lock-oracle hook + a goto to
+/// the suppressed `Call`'s normal successor. Asserts the terminator is the
+/// `Call` the recognizer recorded (a defensive guard against a stale block id).
+fn emit_sync_action(action: &SyncAction, term: &TerminatorKind) -> Result<String, EmitError> {
+    let TerminatorKind::Call { target, .. } = term else {
+        return Err(EmitError::Unsupported(
+            "synchronization acquire/release site terminator is not a Call",
+        ));
+    };
+    let goto = match target {
+        Some(t) => format!("goto bb_{};", t.as_u32()),
+        None => "__builtin_unreachable();".to_string(),
+    };
+    Ok(match action {
+        SyncAction::Acquire { lock_id, kind } => {
+            format!("regseq_lock_acquire({lock_id}u, \"{kind}\"); {goto}")
+        }
+        SyncAction::Release { lock_id } => {
+            format!("regseq_lock_release({lock_id}u); {goto}")
+        }
+        SyncAction::Completion { comp_id, op } => {
+            let hook = match op {
+                CompletionOpKind::Wait => "regseq_completion_wait",
+                CompletionOpKind::Signal => "regseq_completion_signal",
+                CompletionOpKind::Reset => "regseq_completion_reset",
+            };
+            format!("{hook}({comp_id}u); {goto}")
+        }
+    })
 }
 
 /// Integer-scalar facts used by shift masking, `*WithOverflow` helper
@@ -5702,6 +5855,22 @@ pub(crate) fn emit_lifecycle_synthesis(
                 }
             }
 
+            // Synchronization init_primitives (C05/I05): initialize every declared
+            // lock/completion HERE — after the bus/map_region keystone, BEFORE the
+            // interrupt register-disabled below and before `on_init` (which may
+            // acquire). The lock-live window thus ⊇ the line-live window for the
+            // right reason. TU-global ids (SF1) match the acquire/release hooks.
+            if let Some(sync) = model.synchronization.drivers.get(driver_item) {
+                let lock_base = tu_lock_base(model, *driver_item);
+                for (i, res) in sync.resources.iter().enumerate() {
+                    out.push_str(&format!(
+                        "    regseq_lock_init({}u, \"{}\");\n",
+                        lock_base + i as u32,
+                        sync_kind_label(res.kind)
+                    ));
+                }
+            }
+
             // The created instance — a distinct zero-initialized backend-local
             // whose address is each callback's `&mut self`. Declared once iff a
             // callback invoked in THIS scenario is overridden (an empty
@@ -5761,6 +5930,23 @@ pub(crate) fn emit_lifecycle_synthesis(
             // The interrupt view threaded into the scenario emission.
             let irq_view = irq.as_ref().map(|(i, e)| (*i, e));
 
+            // Synchronization destroy_primitives lines (C05): reverse of init, so
+            // id `base+(n-1)` … `base+0`. Empty for a lock-less driver.
+            let sync_teardown = match model.synchronization.drivers.get(driver_item) {
+                Some(sync) => {
+                    let lock_base = tu_lock_base(model, *driver_item);
+                    let mut s = String::new();
+                    for (i, _res) in sync.resources.iter().enumerate().rev() {
+                        s.push_str(&format!(
+                            "    regseq_lock_destroy({}u);\n",
+                            lock_base + i as u32
+                        ));
+                    }
+                    s
+                }
+                None => String::new(),
+            };
+
             // Scenario-specific on_init handling + teardown/shutdown suffix.
             match scenario {
                 // Orderly teardown (device present, M2): on_init Result discarded
@@ -5787,6 +5973,7 @@ pub(crate) fn emit_lifecycle_synthesis(
                         &on_deinit_sym,
                         &resource_names,
                         &irq_teardown,
+                        &sync_teardown,
                         &mut out,
                     );
                     if let Some((_, e)) = irq_view {
@@ -5819,6 +6006,7 @@ pub(crate) fn emit_lifecycle_synthesis(
                         &on_surprise_remove_sym,
                         &resource_names,
                         &irq_teardown,
+                        &sync_teardown,
                         &mut out,
                     );
                 }
@@ -5887,6 +6075,7 @@ fn emit_teardown_dispatch(
     cb_sym: &Option<String>,
     resource_names: &[String],
     irq_teardown: &str,
+    sync_teardown: &str,
     out: &mut String,
 ) {
     out.push_str(&format!("    regseq_lc_teardown({present});\n"));
@@ -5899,6 +6088,12 @@ fn emit_teardown_dispatch(
     // preamble, where the interrupt registration came last). Empty for an
     // interrupt-less driver.
     out.push_str(irq_teardown);
+    // Synchronization destroy_primitives (C05/I05): AFTER the interrupt disable
+    // (the line is drained/quiet), BEFORE the resource postambles — the symmetric
+    // reverse of `init_primitives`, so the lock-live window ⊇ line-live window.
+    // Empty for a lock-less driver; on Zephyr/Linux destroy is a no-op (this is
+    // the generic-c oracle's realization).
+    out.push_str(sync_teardown);
     let skipped = if present == 0 { 1 } else { 0 };
     for res in resource_names.iter().rev() {
         out.push_str(&format!("    regseq_lc_postamble(\"{res}\", {skipped});\n"));

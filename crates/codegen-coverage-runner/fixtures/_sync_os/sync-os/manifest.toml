@@ -1,0 +1,9 @@
+name   = "sync-os"
+kind   = "rust"
+# Per-OS synchronization lowering fixture (T07/C02): the full lock/signal kind
+# matrix on an AMBA driver, run ONLY by the dedicated sole-binary `sync_os_e2e`
+# through emit_linux_c + emit_zephyr_c (substring assertions on the C02
+# primitives + the per-OS guard hidden state). Never run through the generic_c
+# 6-stage pipeline; commits no golden.c.
+covers = []
+expect = "pass"
