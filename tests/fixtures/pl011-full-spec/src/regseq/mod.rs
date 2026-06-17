@@ -10,6 +10,7 @@
 //! namespace; the spec crate is responsible for declaring
 //! `#![feature(register_tool)]` and `#![register_tool(rseq)]` at its crate root.
 
+pub mod atomic;
 mod clock;
 pub mod delay;
 mod error;
@@ -28,6 +29,7 @@ mod serial;
 pub mod sync;
 mod time;
 
+pub use atomic::{Atomic, Ordering};
 pub use clock::Clock;
 pub use error::RegseqError;
 pub use irq::{Interrupt, IrqResult};
