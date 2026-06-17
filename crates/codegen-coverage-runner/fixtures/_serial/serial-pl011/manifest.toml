@@ -1,0 +1,13 @@
+name   = "serial-pl011"
+kind   = "rust"
+# The serial device-class M1 vertical slice (construct #7, PLAN T06/T07): the
+# framework-pure in-scope serial surface on a PL011 driver. The synthesized
+# serial choreography brings the port up (disable → line-format → enable),
+# arms RX+line-error, pumps one interrupt-driven TX byte (arm TxReady → write →
+# fire TX cause → synthesized-ISR decode + disarm), receives one RX byte (poke
+# DR + fire RX cause → synthesized-ISR decode + read), then tears down.
+# `expected.stdout` is the placement-contract trace (R09): each per-source mask
+# write (irq_source_set → IMSC) appears as a regseq_mmio_write DISTINCT from the
+# line-level regseq_irq_enable.
+covers = ["SER-1", "SER-2", "SER-3", "SER-4", "SER-5"]
+expect = "pass"

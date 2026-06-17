@@ -89,6 +89,10 @@ pub(crate) fn int_spelling(kind: IntKind) -> Result<&'static str, EmitError> {
         IntKind::I16 => "s16",
         IntKind::I32 => "s32",
         IntKind::I64 => "s64",
+        // `isize` appears as the discriminant-read local of an enum `match`
+        // (`_t = Discriminant(e)`); `<linux/types.h>` `ssize_t` is the faithful
+        // kernel spelling.
+        IntKind::Isize => "ssize_t",
         _ => {
             return Err(EmitError::Unsupported(format!(
                 "integer kind {kind:?} (first-light scalar subset)"

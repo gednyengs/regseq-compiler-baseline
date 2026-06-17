@@ -1,0 +1,10 @@
+name   = "serial-modem-control-reject"
+kind   = "rust"
+# T04/R10/C06: a serial-class driver implements the v1-deferred companion trait
+# `SerialModemControl` — that plane is out of v1.
+covers = ["SER-T04-R10"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "SER-ERR-DEFERRED-TRAIT"

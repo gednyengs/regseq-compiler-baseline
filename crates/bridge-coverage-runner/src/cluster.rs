@@ -201,6 +201,7 @@ pub fn bridge_error_variant(err: &BridgeError) -> &'static str {
         BridgeError::DeviceLifecycleUnsupportedBus { .. } => "DeviceLifecycleUnsupportedBus",
         BridgeError::DeviceLifecycleValidation(_) => "DeviceLifecycleValidation",
         BridgeError::InterruptValidation(_) => "InterruptValidation",
+        BridgeError::SerialValidation(_) => "SerialValidation",
     }
 }
 

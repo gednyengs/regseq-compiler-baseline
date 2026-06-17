@@ -1,0 +1,12 @@
+name   = "serial-bitset-struct-literal-reject"
+kind   = "rust"
+# O2 body-provenance (Codex hole): a same-module struct literal `CauseSet { bits:
+# 1<<7 }` (include! puts the driver in the surface module, so the private field is
+# reachable) bypasses the from_bits anchor. The aggregate's bits field is sliced
+# and rejected.
+covers = ["SER-O2-BODY-PROVENANCE"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "SER-ERR-BITSET-PROVENANCE"

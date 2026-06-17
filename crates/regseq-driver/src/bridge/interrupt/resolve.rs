@@ -223,7 +223,20 @@ pub(crate) fn resolve_isrs(cx: &mut BridgeCtxt<'_>) -> Result<Vec<PendingIsrAttr
                     },
                 ));
             }
-            if count == 0 && !matches!(resource.form, InterruptForm::Optional) {
+            // Serial-class relaxation (construct #7, B3): a serial driver's
+            // interrupt line is serviced by the compiler-SYNTHESIZED serial ISR
+            // (decode → service → re-arm, built from `irq_cause_decode` + the
+            // data path), not an authored `#[rseq::isr]`. So a serial-class
+            // driver legitimately has an `Interrupt` resource with zero authored
+            // handlers — do not raise MISSING-HANDLER. Non-serial drivers keep
+            // the authored-ISR requirement.
+            let serial_class = matches!(
+                cx.model.device_lifecycle.drivers[&item_id]
+                    .descriptor
+                    .device_class,
+                regseq_model::ClassTag::Serial
+            );
+            if count == 0 && !matches!(resource.form, InterruptForm::Optional) && !serial_class {
                 return Err(BridgeError::InterruptValidation(
                     InterruptDiagnostic::MissingHandler {
                         driver: driver_name,

@@ -1,0 +1,11 @@
+name   = "serial-bitset-projection-dest-reject"
+kind   = "rust"
+# O2 body-provenance (Codex round-2 hole): from_bits writes into a PROJECTED
+# destination (`d.errors = RxError::from_bits(1<<7)`), which a bare-local-keyed
+# scan skips. Keying on the destination place TYPE catches it; rejected.
+covers = ["SER-O2-BODY-PROVENANCE"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "SER-ERR-BITSET-PROVENANCE"

@@ -126,6 +126,12 @@ pub struct RegseqModel {
     /// serialized before the construct existed deserializable (I06).
     #[serde(default)]
     pub interrupt: crate::interrupt::InterruptTables,
+
+    /// Serial device-class sibling table (construct #7), keyed by the
+    /// `#[rseq::driver]` struct's Item. `#[serde(default)]` keeps models
+    /// serialized before the construct existed deserializable.
+    #[serde(default)]
+    pub serial: crate::serial::SerialTables,
 }
 
 #[cfg(test)]
@@ -1084,6 +1090,7 @@ impl RegseqModel {
             domain_attrs: DomainAttrTables::default(),
             device_lifecycle: crate::device_lifecycle::DeviceLifecycleTables::default(),
             interrupt: crate::interrupt::InterruptTables::default(),
+            serial: crate::serial::SerialTables::default(),
         }
     }
 
@@ -1377,6 +1384,18 @@ impl RegseqModel {
         for (old_id, driver) in old_interrupts {
             let new_id = remap[old_id.index()];
             self.interrupt.drivers.insert(new_id, driver);
+        }
+
+        // `serial.drivers` is keyed by the same driver-struct `ItemId`. Its
+        // values carry only `InstanceRef` (content-addressed) + `TyId`/
+        // `VariantIdx`/`StringId` (stable across the F4 item sort — it permutes
+        // `items`, not the `TyInterner`, and remaps `ItemId`s *inside* `Ty`
+        // entries transparently), so re-keying by the driver `ItemId` is the
+        // only patch needed, like `interrupt`/`device_lifecycle`.
+        let old_serial = std::mem::take(&mut self.serial.drivers);
+        for (old_id, driver) in old_serial {
+            let new_id = remap[old_id.index()];
+            self.serial.drivers.insert(new_id, driver);
         }
 
         #[cfg(debug_assertions)]

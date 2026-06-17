@@ -27,6 +27,7 @@ mod handles;
 mod interrupt;
 pub(crate) mod intrinsic;
 mod opaque_handle;
+mod serial;
 mod sort;
 pub mod synth;
 pub mod ty;
@@ -645,6 +646,141 @@ pub enum BridgeError {
     /// A device-interrupt frontend check failed (construct #6, contract C06).
     #[error("device-interrupt validation: {0}")]
     InterruptValidation(InterruptDiagnostic),
+
+    /// A serial device-class frontend check failed (construct #7).
+    #[error("serial validation: {0}")]
+    SerialValidation(SerialDiagnostic),
+}
+
+/// Per-construct serial device-class frontend diagnostics (construct #7). The
+/// `SER-ERR-*` family. Carried by [`BridgeError::SerialValidation`]. T03 mints
+/// the recognition diagnostics (`MISSING-BASE`, `TYPE-MISMATCH`,
+/// `BAD-VARIANTS`); T04 adds the enforcement matrix (dynamic `irq_source_set`
+/// call rejection + deferred-member capability gates).
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum SerialDiagnostic {
+    /// `SER-ERR-MISSING-BASE`: a `#[rseq::device_class(serial)]` driver does not
+    /// implement the required base `Serial` trait (C04).
+    #[error(
+        "SER-ERR-MISSING-BASE: serial-class driver `{driver}` does not implement the base \
+         `Serial` trait (C04: port_service_set/data_ready_query/data_unit_write/data_unit_read)"
+    )]
+    MissingBase {
+        /// The offending driver's logical name.
+        driver: String,
+    },
+    /// `SER-ERR-TYPE-MISMATCH`: a recognized serial method carries a support
+    /// type of the wrong shape (e.g. a non-enum where an enum is required).
+    #[error("SER-ERR-TYPE-MISMATCH: driver `{driver}` serial type `{type_name}`: {detail}")]
+    TypeMismatch {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The support type that mismatched.
+        type_name: String,
+        /// What was expected.
+        detail: String,
+    },
+    /// `SER-ERR-BAD-VARIANTS`: a serial support enum is missing a required
+    /// variant of the closed vocab (so the compiler cannot mint the literal).
+    #[error("SER-ERR-BAD-VARIANTS: driver `{driver}` serial enum `{type_name}`: {detail}")]
+    BadVariants {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending enum's name.
+        type_name: String,
+        /// What was missing/wrong.
+        detail: String,
+    },
+    /// `SER-ERR-DYNAMIC-IRQ-SET` (T04, R07/D03/I01): an author method body calls
+    /// `irq_source_set` directly. The op is BACKEND-CALLED only — the compiler
+    /// owns WHEN each source is armed/disarmed (the per-OS scatter sites); a
+    /// dynamic author call breaks the portable placement contract.
+    #[error(
+        "SER-ERR-DYNAMIC-IRQ-SET: driver `{driver}` method `{caller}` calls `irq_source_set` \
+         directly — it is backend-called only (the compiler arms/disarms sources at the per-OS \
+         scatter sites; the author owns only the mask bits in the `irq_source_set` match arms)"
+    )]
+    DynamicIrqSourceSet {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The author method whose body contains the illegal call.
+        caller: String,
+    },
+    /// `SER-ERR-DEFERRED-MEMBER` (T04, R10/C03/C05): an author impl OVERRIDES a
+    /// v1-deferred member inside an in-scope trait (`SerialRuntimeLineConfig::`
+    /// `{line_format_readback,break_set,flow_auto_set}` or
+    /// `SerialQueueControl::fifo_purge_hw`). Deferred members are capability-
+    /// gated out of v1; the backend never sees a partially-built surface.
+    #[error(
+        "SER-ERR-DEFERRED-MEMBER: driver `{driver}` impl of `{trait_name}` overrides the \
+         v1-deferred member `{member}` — that capability is not built in v1 (defer it)"
+    )]
+    DeferredMember {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The in-scope trait carrying the deferred member.
+        trait_name: String,
+        /// The deferred member that was overridden.
+        member: String,
+    },
+    /// `SER-ERR-DEFERRED-TRAIT` (T04, R10/C06/C07/C08): a serial-class driver
+    /// implements a v1-deferred companion trait (`SerialModemControl`,
+    /// `SerialConsole`, or `SerialBulkTransfer`). Those planes are out of v1.
+    #[error(
+        "SER-ERR-DEFERRED-TRAIT: driver `{driver}` implements the v1-deferred serial trait \
+         `{trait_name}` — that plane is not built in v1 (defer it)"
+    )]
+    DeferredTrait {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The deferred trait that was implemented.
+        trait_name: String,
+    },
+    /// `SER-ERR-REPR-CONST` (O2 hardening): an author bit-position const
+    /// (`CAUSE_*` for `CauseSetRepr`, `RX_ERR_*` for `RxErrorRepr`) disagrees with
+    /// the pinned representation's convention (bit position = the canonical
+    /// `SerialCause`/`SerialRxErrorKind` discriminant). The backends decode the
+    /// authored bitsets against the pinned convention, so a mismatched const
+    /// would make them silently MISCLASSIFY the decoded causes / inline errors —
+    /// caught here at the frontend instead.
+    #[error(
+        "SER-ERR-REPR-CONST: {repr} bit const `{const_name}` = {found:#x}, but the pinned \
+         {repr}Repr convention requires {expected:#x} (bit position = the canonical \
+         discriminant); the backend would misclassify — fix the const to match"
+    )]
+    ReprConstMismatch {
+        /// Which representation the const belongs to (`CauseSet` / `RxError`).
+        repr: String,
+        /// The offending const's name.
+        const_name: String,
+        /// The author's value.
+        found: u32,
+        /// The pinned-convention value (`1 << discriminant`).
+        expected: u32,
+    },
+    /// `SER-ERR-BITSET-PROVENANCE` (O2 body-provenance hardening): the value
+    /// constructed and handed to `<CauseSet|RxError>::from_bits` in the author's
+    /// `irq_cause_decode` / `data_unit_read` body carries bits the backend would
+    /// MISCLASSIFY — either a constant bit outside the pinned representation's
+    /// bit-domain (a raw literal or a wrong-value const), or a non-constant
+    /// (device-derived / computed) contribution. The backend decodes the bitset
+    /// against the pinned convention, so the bitset must be built ONLY from
+    /// convention-domain constant bits. This catches the raw-literal /
+    /// differently-named-const / device-bit-leak bypasses of the named-const
+    /// check; the device→semantic mapping (which device bit means which cause)
+    /// remains irreducibly author knowledge (documented residual).
+    #[error(
+        "SER-ERR-BITSET-PROVENANCE: the `{repr}` bitset built in `{op}` is not a pure OR of \
+         pinned {repr}Repr convention bits — {detail}; the backend would misclassify"
+    )]
+    BitsetProvenance {
+        /// Which representation (`CauseSet` / `RxError`).
+        repr: String,
+        /// The op whose body builds the bitset.
+        op: String,
+        /// What was wrong (foreign bits / non-constant contribution).
+        detail: String,
+    },
 }
 
 /// Per-construct device-lifecycle validation diagnostics (PLAN T16; GRILL I09;
@@ -1904,6 +2040,14 @@ fn construct_instances_and_resolve_cross_references(
     // and force-materialize the overriding instances BEFORE the Phase-5 body
     // drain, so those synthesized callbacks get bodies the backend can emit.
     device_lifecycle::resolve_drivers(ctxt)?;
+    // Serial device-class (construct #7): recognize each serial-class driver's
+    // op-set + capture the support-enum variant maps, force-materializing the op
+    // bodies before the drain (like the lifecycle callbacks). Runs after the
+    // lifecycle pass (device class known) and before `resolve_isrs` so the
+    // serial-class interrupt-handler relaxation (a serial driver's line handler
+    // is the compiler-synthesized serial ISR, not an authored `#[rseq::isr]`) is
+    // in effect when the interrupt pass validates handler presence.
+    serial::resolve_serial(ctxt)?;
     // Device-interrupt (construct #6): discover + validate + bind the
     // #[rseq::isr] handlers and force-materialize their instances before the
     // drain, exactly like the lifecycle callbacks. The pending attribute

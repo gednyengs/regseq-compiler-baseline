@@ -1,0 +1,12 @@
+name   = "serial-bitset-device-leak-reject"
+kind   = "rust"
+# O2 body-provenance: data_unit_read hands a NON-CONSTANT (a struct field — the
+# device-leak analog) to RxError::from_bits, instead of a pure OR of convention
+# constants. Raw/computed device bits would leak into the inline error and the
+# backend would misclassify; rejected.
+covers = ["SER-O2-BODY-PROVENANCE"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "SER-ERR-BITSET-PROVENANCE"

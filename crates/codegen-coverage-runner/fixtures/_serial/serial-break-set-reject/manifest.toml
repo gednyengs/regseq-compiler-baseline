@@ -1,0 +1,11 @@
+name   = "serial-break-set-reject"
+kind   = "rust"
+# T04/R10/C03: an author OVERRIDE of the v1-deferred `break_set` member inside
+# the in-scope `SerialRuntimeLineConfig` trait (D10 gated break_supported) — not
+# built in v1.
+covers = ["SER-T04-R10"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "SER-ERR-DEFERRED-MEMBER"

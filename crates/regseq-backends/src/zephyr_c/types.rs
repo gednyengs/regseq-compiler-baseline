@@ -138,6 +138,11 @@ pub(crate) fn int_spelling(kind: IntKind) -> Result<&'static str, EmitError> {
         IntKind::I16 => "int16_t",
         IntKind::I32 => "int32_t",
         IntKind::I64 => "int64_t",
+        // The signed-word discriminant local of an enum `match`
+        // (`_t = Discriminant(e)`); Rust `isize` is precisely C `intptr_t`
+        // (pointer-width signed), already provided by the demand-included
+        // <stdint.h> — no extra header is required.
+        IntKind::Isize => "intptr_t",
         _ => {
             return Err(EmitError::Unsupported(format!(
                 "integer kind {kind:?} (first-light scalar subset)"

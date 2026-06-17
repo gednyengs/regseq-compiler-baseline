@@ -383,6 +383,36 @@ fn emit_assign(
             Ok(())
         }
         Rvalue::Aggregate(kind, operands) => emit_aggregate(cx, body, &lv, kind, operands, out),
+        Rvalue::Discriminant(src) => {
+            // The discriminant of an enum `match` (`_t = Discriminant(e); switchInt(_t)`).
+            // For the fieldless byte carriers the subset lowers, the stored tag
+            // byte IS the discriminant value, so read it from the carrier and
+            // cast to the discriminant local's type (SwitchInt compares against
+            // the same per-variant tag values).
+            let src_ty = place_ty(cx.model, body, src)?;
+            let src_lv = place_lvalue(cx, body, src)?;
+            let (offset, size) = types::enum_tag_cell(cx.model, src_ty)?;
+            let dest_c = types::c_type(cx.model, &mut cx.names, dest_ty)?;
+            match size {
+                1 => out.push_str(&format!("\t{lv} = ({dest_c}){src_lv}._raw[{offset}];\n")),
+                2 | 4 | 8 => {
+                    let rd = match size {
+                        2 => "u16",
+                        4 => "u32",
+                        _ => "u64",
+                    };
+                    out.push_str(&format!(
+                        "\t{{ {rd} __d; memcpy(&__d, &{src_lv}._raw[{offset}], sizeof(__d)); {lv} = ({dest_c})__d; }}\n"
+                    ));
+                }
+                other => {
+                    return Err(EmitError::Unsupported(format!(
+                        "enum discriminant tag width {other} (first-light subset)"
+                    )))
+                }
+            }
+            Ok(())
+        }
         other => Err(EmitError::Unsupported(format!(
             "rvalue {other:?} (first-light subset)"
         ))),

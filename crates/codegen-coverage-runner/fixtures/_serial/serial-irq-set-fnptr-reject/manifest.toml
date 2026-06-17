@@ -1,0 +1,11 @@
+name   = "serial-irq-set-fnptr-reject"
+kind   = "rust"
+# T04/R07: EVASION — reifying `irq_source_set` as a fn pointer and calling it
+# indirectly must STILL be rejected (the FnDef ZST appears as an operand, so the
+# operand-level scan catches it; Codex T04 review hardening).
+covers = ["SER-T04-R07"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "SER-ERR-DYNAMIC-IRQ-SET"
