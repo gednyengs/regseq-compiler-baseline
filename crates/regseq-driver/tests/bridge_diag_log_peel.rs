@@ -383,6 +383,8 @@ fn run_bridge_phase5_peels_all_four_severities() {
                         // Atomicity field markers (#7); this fixture produces
                         // none, so skip.
                         AttrData::Atomic { .. } => {}
+                        // Synchronization marker; this fixture produces none.
+                        AttrData::SyncResource { .. } => {}
                     }
                 }
             }

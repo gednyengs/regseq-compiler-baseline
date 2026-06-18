@@ -1,0 +1,10 @@
+name   = "sync-pl011-seam"
+kind   = "rust"
+# M4/T14 — the BILATERAL PL011 ISR↔mainline seam: a bound ISR AND a mainline
+# reconfigure path both acquire the SAME IrqSpinLock<IsrState>. Run ONLY by the
+# dedicated `sync_pl011_seam_e2e` binary (substring assertions that BOTH contexts
+# acquire the same lock + init-before-register); never the generic 6-stage sweep;
+# no golden.
+covers = []
+lifecycle_scenario = "orderly"
+expect = "pass"

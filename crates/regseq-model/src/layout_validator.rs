@@ -932,6 +932,9 @@ fn validate_attr_data_payload(
             }
             Ok(())
         }
+        // The sync-resource marker carries a closed `SyncKind` enum with no
+        // nested model IDs, so there is nothing to range-check here.
+        AttrData::SyncResource { .. } => Ok(()),
     }
 }
 

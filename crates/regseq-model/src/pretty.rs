@@ -1967,6 +1967,10 @@ impl<'a> PrettyPrinter<'a> {
                 // attribute (`field_attrs`); it never appears in the item-attr
                 // stream. Emit nothing if it does.
                 AttrData::Atomic { .. } => {}
+                // The sync-resource marker is likewise a field attribute
+                // (`field_attrs`); it never appears in the item-attr stream.
+                // Emit nothing if it does.
+                AttrData::SyncResource { .. } => {}
             }
         }
         out

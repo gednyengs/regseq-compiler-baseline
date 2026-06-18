@@ -1,0 +1,12 @@
+name   = "sync-wait-consumed"
+kind   = "rust"
+# NEGATIVE: Completion::wait result consumed (via `?`). The bridge must reject
+# with SyncDiagnostic::CompletionWaitResultConsumed (T07-lowering §D4). Run only
+# by sync_os_e2e's negative test (which bridges + matches the typed diagnostic);
+# never the generic sweep.
+covers = []
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "SYN-ERR-WAIT-RESULT-CONSUMED"

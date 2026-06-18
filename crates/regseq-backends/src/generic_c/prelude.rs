@@ -550,6 +550,260 @@ __attribute__((unused)) static void regseq_atomic_fence(int order) {
 }
 "#;
 
+/// Synchronization lock-discipline oracle (synchronization construct, GRILL
+/// C03/S11). The hooks model lock state over the ordered event log and ASSERT
+/// the first-slice discipline: balanced acquire/release, no double-acquire
+/// (non-recursive), LIFO guard-drop, release-only-the-held. Each hook prints a
+/// `SYNC <event>` line to stdout (the trace IS the behavioral oracle, the
+/// `expected.stdout` half); a discipline violation prints `SYNC error <why>`
+/// and `abort()`s (non-zero exit, caught by the behavioral oracle). Emitted
+/// ONLY for a TU with a synchronization surface (the caller gates on
+/// `model.synchronization.drivers`), so a lock-less TU's `.c` is byte-unchanged
+/// — no golden churn. The hook family + the four asserted properties are the
+/// C03/S11 contract; the exact line spellings are blessed at the first sync
+/// golden. (The synchronous `regseq_irq_fire` IRQ-reentry leg is added in M3.)
+pub const SYNC_HELPERS: &str = r#"
+/* ---------------------------------------------------------------------------
+ * Synchronization lock-discipline oracle (synchronization construct). Models
+ * lock state over the event log and asserts balanced acquire/release, no
+ * double-acquire (non-recursive), LIFO guard-drop, release-only-the-held. Each
+ * hook prints a "SYNC <event>" line; a violation prints "SYNC error <why>" and
+ * aborts. Emitted only for a TU with a synchronization surface. */
+#define REGSEQ_LOCK_SLOTS 16u
+static int regseq_lock_inited[REGSEQ_LOCK_SLOTS] __attribute__((unused));
+static uint32_t regseq_lock_held_stack[REGSEQ_LOCK_SLOTS] __attribute__((unused));
+static uint32_t regseq_lock_held_depth __attribute__((unused));
+static int regseq_lock_atexit_armed __attribute__((unused));
+/* End-of-run balance check: at normal exit no lock may still be held (every
+ * acquire must have a matching release). A still-held lock is a leaked critical
+ * section -- print + abort (non-zero exit), so a forgotten/escaped guard cannot
+ * pass the oracle silently. */
+__attribute__((unused)) static void regseq_lock_atexit_check(void) {
+    if (regseq_lock_held_depth != 0) {
+        printf("SYNC error lock-held-at-exit depth=%u\n", (unsigned)regseq_lock_held_depth);
+        fflush(stdout);
+        abort();
+    }
+}
+__attribute__((unused)) static void regseq_lock_arm_atexit(void) {
+    if (!regseq_lock_atexit_armed) {
+        regseq_lock_atexit_armed = 1;
+        atexit(regseq_lock_atexit_check);
+    }
+}
+/* Every id must fit the fixed slot table; an id past it would silently bypass
+ * the init/held tracking (a false-pass for a >REGSEQ_LOCK_SLOTS-lock TU), so it
+ * aborts loud instead. With this guard every other hook may index the arrays
+ * unconditionally. */
+__attribute__((unused)) static void regseq_lock_bounds(uint32_t id) {
+    if (id >= REGSEQ_LOCK_SLOTS) {
+        printf("SYNC error lock-id-overflow id=%u slots=%u\n",
+               (unsigned)id, (unsigned)REGSEQ_LOCK_SLOTS);
+        fflush(stdout);
+        abort();
+    }
+}
+/* The C05/I05 acquire-after-init guard, shared by lock acquire + every
+ * Completion op: the primitive must have been initialized by `init_primitives`
+ * and not since destroyed before any use (use-before-init / use-after-destroy
+ * is a leaked lifecycle). */
+__attribute__((unused)) static void regseq_lock_require_inited(uint32_t id, const char *what) {
+    regseq_lock_bounds(id);
+    if (!regseq_lock_inited[id]) {
+        printf("SYNC error %s-before-init id=%u\n", what, (unsigned)id);
+        fflush(stdout);
+        abort();
+    }
+}
+__attribute__((unused)) static void regseq_lock_init(uint32_t id, const char *kind) {
+    regseq_lock_arm_atexit();
+    regseq_lock_bounds(id);
+    printf("SYNC lock_init id=%u kind=%s\n", (unsigned)id, kind);
+    regseq_lock_inited[id] = 1;
+}
+/* destroy_primitives (C05): the symmetric teardown placed AFTER the interrupt
+ * disable. A still-held lock at destroy is a leaked critical section; marking
+ * the slot un-inited makes a later acquire fail the acquire-after-init check
+ * (the use-after-destroy half of I05). On Zephyr destroy is a structural no-op
+ * (static primitives) — this hook is the generic-c oracle's realization. */
+__attribute__((unused)) static void regseq_lock_destroy(uint32_t id) {
+    regseq_lock_bounds(id);
+    printf("SYNC lock_destroy id=%u\n", (unsigned)id);
+    for (uint32_t i = 0; i < regseq_lock_held_depth; i++) {
+        if (regseq_lock_held_stack[i] == id) {
+            printf("SYNC error destroy-while-held id=%u\n", (unsigned)id);
+            fflush(stdout);
+            abort();
+        }
+    }
+    regseq_lock_inited[id] = 0;
+}
+__attribute__((unused)) static void regseq_lock_acquire(uint32_t id, const char *kind) {
+    regseq_lock_arm_atexit();
+    /* Guard (bounds + acquire-after-init) BEFORE the trace event, so a violation
+     * is not preceded by a normal-looking `lock_acquire` line. */
+    regseq_lock_require_inited(id, "acquire");
+    printf("SYNC lock_acquire id=%u kind=%s\n", (unsigned)id, kind);
+    /* No double-acquire (non-recursive): id must not already be held. */
+    for (uint32_t i = 0; i < regseq_lock_held_depth; i++) {
+        if (regseq_lock_held_stack[i] == id) {
+            printf("SYNC error double-acquire id=%u\n", (unsigned)id);
+            fflush(stdout);
+            abort();
+        }
+    }
+    if (regseq_lock_held_depth >= REGSEQ_LOCK_SLOTS) {
+        printf("SYNC error held-stack-overflow\n");
+        fflush(stdout);
+        abort();
+    }
+    regseq_lock_held_stack[regseq_lock_held_depth++] = id;
+}
+__attribute__((unused)) static void regseq_lock_release(uint32_t id) {
+    regseq_lock_bounds(id);
+    printf("SYNC lock_release id=%u\n", (unsigned)id);
+    /* LIFO guard-drop + release-only-the-held: the top of the held stack must
+     * be exactly id. */
+    if (regseq_lock_held_depth == 0) {
+        printf("SYNC error release-without-acquire id=%u\n", (unsigned)id);
+        fflush(stdout);
+        abort();
+    }
+    if (regseq_lock_held_stack[regseq_lock_held_depth - 1] != id) {
+        printf("SYNC error non-LIFO-release id=%u\n", (unsigned)id);
+        fflush(stdout);
+        abort();
+    }
+    regseq_lock_held_depth--;
+}
+/* Completion one-shot signaling: point events traced for the behavioral oracle
+ * (signal is ISR-safe; wait is sleeping/thread-only; reset re-arms). Each op
+ * asserts the completion was initialized by `init_primitives` (C05/I05); no
+ * held-state discipline applies to a Completion. */
+__attribute__((unused)) static void regseq_completion_signal(uint32_t id) {
+    regseq_lock_require_inited(id, "completion");
+    printf("SYNC completion_signal id=%u\n", (unsigned)id);
+}
+__attribute__((unused)) static void regseq_completion_wait(uint32_t id) {
+    regseq_lock_require_inited(id, "completion");
+    printf("SYNC completion_wait id=%u\n", (unsigned)id);
+}
+__attribute__((unused)) static void regseq_completion_reset(uint32_t id) {
+    regseq_lock_require_inited(id, "completion");
+    printf("SYNC completion_reset id=%u\n", (unsigned)id);
+}
+"#;
+
+/// The T13 `IrqSpinLock`↔interrupt coupling state, emitted **only** for a TU
+/// with BOTH an interrupt surface AND a synchronization surface (so a
+/// single-construct TU's `.c` — and its committed golden — is byte-unchanged).
+/// `regseq_local_irq_masked` models the CPU local-IRQ-disable nesting depth an
+/// `IrqSpinLock` raises (Linux `spin_lock_irqsave` / Zephyr `k_spin_lock`);
+/// `regseq_lock_held_is_irqspin[]` records, per held-stack slot, whether that
+/// entry is an `IrqSpinLock` (so `regseq_lock_release` can lower the mask
+/// without a kind argument — preserving the `regseq_lock_release(id)` ABI).
+/// The array size mirrors `REGSEQ_LOCK_SLOTS` (16) but is a literal so this
+/// block carries no dependency on the (later-emitted) sync helper bank.
+pub const MASK_STATE: &str = r#"
+/* --------------------------------------------------------------------------
+ * IrqSpinLock <-> interrupt reentry coupling (T13). Emitted only when a TU has
+ * BOTH constructs. A held IrqSpinLock disables local IRQs, so a SYNCHRONOUS
+ * regseq_irq_fire while one is held is MASKED (dropped, NOT queued/replayed --
+ * the synchronous oracle models no pending delivery). This is the IRQ-reentry
+ * behavioral check, short of true SMP. */
+static uint32_t regseq_local_irq_masked __attribute__((unused));
+static int regseq_lock_held_is_irqspin[16] __attribute__((unused)); /* [REGSEQ_LOCK_SLOTS] */
+"#;
+
+/// [`IRQ_HELPERS`] with the T13 mask-aware `regseq_irq_fire`: a synchronous fire
+/// while `regseq_local_irq_masked > 0` is traced `IRQ fire line=<n> masked` and
+/// does NOT invoke the wrapper (no reentry → no double-acquire). Built by a
+/// targeted, unique-anchor replacement so the single-construct [`IRQ_HELPERS`]
+/// const (and the interrupt-only goldens) stay byte-identical. Used only by the
+/// both-construct emission path.
+pub fn irq_helpers_masked() -> String {
+    replace_once(
+        IRQ_HELPERS,
+        "static void regseq_irq_fire(uint32_t line) {\n",
+        "static void regseq_irq_fire(uint32_t line) {\n    \
+         /* T13: a held IrqSpinLock masks local IRQs; drop the fire (no replay). */\n    \
+         if (regseq_local_irq_masked > 0u) {\n        \
+         printf(\"IRQ fire line=%u masked\\n\", (unsigned)line);\n        return;\n    }\n",
+    )
+}
+
+/// Replace EXACTLY one occurrence of `anchor` in `src`, asserting it is unique.
+/// The T13 coupling weaves the mask logic into the IRQ/SYNC helper text by
+/// targeted replacement; if a future edit to those consts changes or duplicates
+/// an anchor, this fails loud at emit time rather than silently emitting an
+/// un-coupled (and therefore wrong) helper bank.
+fn replace_once(src: &str, anchor: &str, to: &str) -> String {
+    assert_eq!(
+        src.matches(anchor).count(),
+        1,
+        "T13 coupling anchor must occur exactly once in the helper text: {anchor:?}"
+    );
+    src.replacen(anchor, to, 1)
+}
+
+/// [`SYNC_HELPERS`] with the T13 mask maintenance woven into `regseq_lock_acquire`
+/// / `regseq_lock_release`: acquiring an `IrqSpinLock` raises
+/// `regseq_local_irq_masked` (and records the held-stack slot's kind); releasing
+/// it lowers the mask. Built by targeted unique-anchor replacements so the
+/// single-construct [`SYNC_HELPERS`] const stays byte-identical. Used only by the
+/// both-construct emission path. (Kind `"IRQSPIN"` is the only lock label
+/// starting with `'I'` — `"MUTEX"`/`"SPIN"` start with `M`/`S` — so the
+/// first-char test reliably selects it without `<string.h>`.)
+pub fn sync_helpers_masked() -> String {
+    let acquire_masked = replace_once(
+        SYNC_HELPERS,
+        "    regseq_lock_held_stack[regseq_lock_held_depth++] = id;\n",
+        "    regseq_lock_held_stack[regseq_lock_held_depth++] = id;\n    \
+         /* T13: record IrqSpinLock-ness of this held slot; raise the IRQ mask. */\n    \
+         regseq_lock_held_is_irqspin[regseq_lock_held_depth - 1u] = (kind && kind[0] == 'I');\n    \
+         if (kind && kind[0] == 'I') { regseq_local_irq_masked++; }\n",
+    );
+    replace_once(
+        &acquire_masked,
+        "    regseq_lock_held_depth--;\n",
+        "    /* T13: lower the IRQ mask if this released slot was an IrqSpinLock. */\n    \
+         if (regseq_lock_held_is_irqspin[regseq_lock_held_depth - 1u]) { regseq_local_irq_masked--; }\n    \
+         regseq_lock_held_depth--;\n",
+    )
+}
+
+/// The §7.1 ISR-legality conformance/audit note (synchronization construct, M4
+/// T16 / GRILL `I03`/`D08`). Emitted into a TU that has BOTH an interrupt and a
+/// synchronization surface — exactly when the §7.1 ISR-legality check is live (an
+/// ISR body acquiring a lock). It states the construct's guarantee scope
+/// HONESTLY: the check is sound-but-incomplete (intraprocedural/lexical), so the
+/// construct **never** claims "ISR-safety verified". This is the
+/// thesis-honesty gate made visible in the emitted artifact.
+pub const SYNC_ISR_SAFETY_AUDIT: &str = r#"
+/* ---------------------------------------------------------------------------
+ * RSEQ-SYNC-AUDIT (synchronization construct, §7.1 ISR-legality). The §7.1 check
+ * (an ISR body may acquire only the IRQ-safe IrqSpinLock; Mutex/SpinLock::lock
+ * and Completion::wait are rejected) is SOUND-BUT-INCOMPLETE: it is
+ * intraprocedural/lexical, so a transitively-IRQ-reachable illegal acquisition
+ * one helper-call deeper is NOT caught until the interprocedural hardening lands.
+ * This artifact is therefore NOT "ISR-safety verified" — the construct claims
+ * feasibility + analytic generalization, not proven completeness. */
+"#;
+
+/// The full T13-coupled helper bank for a both-construct TU: the §7.1 audit note,
+/// the mask state, then the mask-aware IRQ + synchronization helpers. The mask
+/// state precedes the helpers so the mask-aware `regseq_irq_fire` and lock ops
+/// see the globals declared.
+pub fn sync_irq_coupled_helpers() -> String {
+    format!(
+        "{}{}{}{}",
+        SYNC_ISR_SAFETY_AUDIT,
+        MASK_STATE,
+        irq_helpers_masked(),
+        sync_helpers_masked()
+    )
+}
+
 /// `(c_type, min_expr, max_expr)` for every primitive integer type in the
 /// fixed helper set (section 10 / section 11). The order is fixed so the
 /// emitted block is byte-stable. The 128-bit bounds reference the

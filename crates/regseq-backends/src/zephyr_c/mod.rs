@@ -28,6 +28,7 @@
 mod body;
 mod naming;
 mod serial;
+mod sync;
 mod types;
 
 #[cfg(test)]
@@ -817,10 +818,30 @@ fn emit_init_fn(
     // before any callback, regardless of whether on_init is authored. Computed
     // up front so `data` is declared when a non-zero initial needs it.
     let atomic_init = zephyr_atomic_init(cx);
-    let uses_data =
-        pcie.is_some() || on_init.is_some() || on_init_failure.is_some() || !atomic_init.is_empty();
+    // Synchronization init_primitives (C05/I05): initialize the declared locks
+    // BEFORE the region map + IRQ connect + on_init (lock-live ⊇ line-live). A
+    // k_spinlock needs no runtime init (zero-init valid); destroy is a no-op on
+    // Zephyr (static primitives). Computed before `uses_data` so a lock-bearing
+    // driver with init lines but NO on_init still declares `data` (the init
+    // references `data->inner.<f>`).
+    let sync_inits = sync::init_primitive_lines(cx.model, cx.driver.driver_ty);
+    // `data` is needed if ANY of: pcie, on_init(_failure), a non-empty atomic
+    // seed (atomicity), or a non-empty lock-init (synchronization). The merge
+    // must OR both construct conditions — neither alone is sufficient.
+    let uses_data = pcie.is_some()
+        || on_init.is_some()
+        || on_init_failure.is_some()
+        || !atomic_init.is_empty()
+        || !sync_inits.is_empty();
     if uses_data {
         out.push_str(&format!("\tstruct {drv}_data *data = dev->data;\n\n"));
+    }
+    if !sync_inits.is_empty() {
+        out.push_str("\t/* init_primitives (C05): locks initialized before region/IRQ/on_init */\n");
+        for line in &sync_inits {
+            out.push_str(&format!("\t{line}\n"));
+        }
+        out.push('\n');
     }
     if let Some(p) = pcie {
         // The C01 preamble, PCIe arm, in emission order — the ratified
@@ -1286,6 +1307,23 @@ fn result_carrier_facts(model: &RegseqModel, result_ty: TyId) -> Result<CarrierF
 /// struct containment first). The driver struct's resource fields are
 /// substituted with their dead-weight zephyr carrier (`mm_reg_t`, A-2).
 fn emit_type_defs(cx: &mut body::LowerCx<'_>, driver_ty: TyId) -> Result<String, EmitError> {
+    // Synchronization (locks, T07/C02): the lock FIELDS substitute their
+    // declaration to the per-OS lock object and pull in the per-kind header; the
+    // driver struct's `ItemId` keys the sync table.
+    let mut sync_field_decls: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    if let Ty::Struct { item, .. } = &cx.model.types[driver_ty] {
+        if let Some(s) = cx.model.synchronization.drivers.get(item) {
+            for res in &s.resources {
+                let fname = c_ident(cx.model.strings.resolve(res.name));
+                for inc in sync::includes_for(res.kind) {
+                    cx.extra_includes.insert(inc);
+                }
+                sync_field_decls.insert(fname.clone(), sync::lock_field_decl(res.kind, &fname));
+            }
+        }
+    }
+
     let model = cx.model;
     // The driver struct is always defined (the data struct embeds it, A-17).
     cx.names.name_of(model, driver_ty)?;
@@ -1328,6 +1366,7 @@ fn emit_type_defs(cx: &mut body::LowerCx<'_>, driver_ty: TyId) -> Result<String,
                     .map(|(n, _, _)| n.clone())
                     .collect();
                 let af = atomic_fields;
+                let sync = sync_field_decls.clone();
                 types::emit_aggregate_def(model, &mut cx.names, ty, &move |fname: &str| {
                     if rn.iter().any(|r| r == fname) {
                         Some(format!(
@@ -1336,7 +1375,9 @@ fn emit_type_defs(cx: &mut body::LowerCx<'_>, driver_ty: TyId) -> Result<String,
                     } else if let Some((_, cty)) = af.iter().find(|(n, _)| n == fname) {
                         Some(format!("{cty} {fname}"))
                     } else {
-                        None
+                        // T07/C02: a recognized lock field lowers to its per-OS
+                        // lock object (the payload `T` is not stored this slice).
+                        sync.get(fname).cloned()
                     }
                 })
                 .map_err(with_ctx)?
@@ -1526,13 +1567,17 @@ fn reachable_closure(
             continue;
         };
         let Some(b) = &data.body else { continue };
-        for bb in b.basic_blocks.iter() {
+        let body_ref = model.instance_ref_of(id);
+        for (idx, bb) in b.basic_blocks.iter().enumerate() {
             if let TerminatorKind::Call {
                 callee: regseq_model::CallCallee::Direct(callee),
                 ..
             } = &bb.terminator.kind
             {
-                if intrinsic_of(model, *callee).is_some()
+                // A recognized sync acquire/release/completion `Call` is replaced
+                // by its C02 primitive (T07); its callee is never lowered.
+                if sync::is_sync_call_block(model, body_ref, regseq_model::BlockId::from_u32(idx as u32))
+                    || intrinsic_of(model, *callee).is_some()
                     || body::trivial_accessor_tail(model, *callee).is_some()
                 {
                     continue;

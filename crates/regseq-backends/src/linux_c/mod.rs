@@ -21,6 +21,7 @@
 mod body;
 mod naming;
 mod serial;
+mod sync;
 mod types;
 
 #[cfg(test)]
@@ -299,6 +300,22 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         uses_delay_sleep: false,
         elided_locals: std::collections::BTreeSet::new(),
     };
+
+    // -- synchronization (locks, T07/C02): the lock FIELDS substitute their
+    //    declaration to the per-OS lock object (`field_override`, below) and pull
+    //    in the per-kind header; the body acquire/release/completion CALLS are
+    //    replaced by the C02 primitives in `body::emit_fn`. ------------------
+    let mut sync_field_decls: BTreeMap<String, String> = BTreeMap::new();
+    if let Some(sync) = model.synchronization.drivers.get(driver_item) {
+        for res in &sync.resources {
+            let fname = c_ident(model.strings.resolve(res.name));
+            for inc in sync::includes_for(res.kind) {
+                cx.extra_includes.insert(inc);
+            }
+            sync_field_decls.insert(fname.clone(), sync::lock_field_decl(res.kind, &fname));
+        }
+    }
+
     let callbacks = [
         ("on_init", &driver.ops.on_init),
         ("on_deinit", &driver.ops.on_deinit),
@@ -385,7 +402,7 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     };
 
     // -- type definitions (D04 bank 2/3), now that every use is known -------
-    let type_defs = emit_type_defs(&mut cx, driver_ty, &resource_names)?;
+    let type_defs = emit_type_defs(&mut cx, driver_ty, &resource_names, &sync_field_decls)?;
 
     // -- match table + driver struct + module macros ------------------------
     let tail = match bus {
@@ -560,13 +577,19 @@ fn reachable_closure(
             continue;
         };
         let Some(b) = &data.body else { continue };
-        for bb in b.basic_blocks.iter() {
+        let body_ref = model.instance_ref_of(id);
+        for (idx, bb) in b.basic_blocks.iter().enumerate() {
             if let TerminatorKind::Call {
                 callee: regseq_model::CallCallee::Direct(callee),
                 ..
             } = &bb.terminator.kind
             {
-                if is_intrinsic_anchored(model, *callee)
+                // A recognized sync acquire/release/completion `Call` is replaced
+                // by its C02 primitive (T07) — its callee (`lock()`, the guard's
+                // drop glue, `signal`/`wait`/`reset`) is NEVER lowered, exactly
+                // like an intrinsic-anchored or trivial-accessor callee.
+                if sync::is_sync_call_block(model, body_ref, regseq_model::BlockId::from_u32(idx as u32))
+                    || is_intrinsic_anchored(model, *callee)
                     || body::trivial_accessor_tail(model, *callee).is_some()
                 {
                     continue;
@@ -855,6 +878,15 @@ fn emit_scaffold(
         "\tpriv = devm_kzalloc(&adev->dev, sizeof(*priv), GFP_KERNEL);\n\tif (!priv)\n\t\treturn -ENOMEM;\n",
     );
     out.push_str("\tpriv->adev = adev;\n\tamba_set_drvdata(adev, priv);\n");
+    // Synchronization init_primitives (C05/I05): initialize the declared locks
+    // BEFORE the region map + IRQ register + on_init (lock-live ⊇ line-live).
+    let sync_inits = sync::init_primitive_lines(model, driver_ty);
+    if !sync_inits.is_empty() {
+        out.push_str("\n\t/* init_primitives (C05): locks initialized before region/IRQ/on_init */\n");
+        for line in &sync_inits {
+            out.push_str(&format!("\t{line}\n"));
+        }
+    }
     if resource_names.is_empty() {
         out.push_str("\n\t/* preamble: no bus-managed regions in this model */\n");
     } else {
@@ -1079,6 +1111,15 @@ fn emit_scaffold_pci(
         "\tpriv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);\n\tif (!priv)\n\t\treturn -ENOMEM;\n",
     );
     out.push_str("\tpriv->pdev = pdev;\n\tpci_set_drvdata(pdev, priv);\n");
+    // Synchronization init_primitives (C05/I05): locks initialized before the
+    // region map + IRQ register + on_init (lock-live ⊇ line-live).
+    let sync_inits = sync::init_primitive_lines(model, driver_ty);
+    if !sync_inits.is_empty() {
+        out.push_str("\n\t/* init_primitives (C05): locks initialized before region/IRQ/on_init */\n");
+        for line in &sync_inits {
+            out.push_str(&format!("\t{line}\n"));
+        }
+    }
     match &preamble {
         Some((fname, bar)) => {
             // The T03-pinned managed acquisition (ledger C-7): enable, then
@@ -1410,6 +1451,7 @@ fn emit_type_defs(
     cx: &mut LowerCx<'_>,
     driver_ty: TyId,
     resource_names: &[String],
+    sync_field_decls: &BTreeMap<String, String>,
 ) -> Result<String, EmitError> {
     // Snapshot the names registered during body/scaffold emission, then emit
     // definitions; definition emission may register nested names, so loop to
@@ -1452,13 +1494,16 @@ fn emit_type_defs(
             let chunk = if ty == driver_ty {
                 let rn = resource_names.to_vec();
                 let af = atomic_fields;
+                let sync = sync_field_decls.clone();
                 types::emit_aggregate_def(model, &mut cx.names, ty, &move |fname: &str| {
                     if rn.iter().any(|r| r == fname) {
                         Some(format!("void __iomem *{fname}"))
                     } else if let Some((_, storage)) = af.iter().find(|(n, _)| n == fname) {
                         Some(format!("{storage} {fname}"))
                     } else {
-                        None
+                        // T07/C02: a recognized lock field lowers to its per-OS
+                        // lock object (the payload `T` is not stored this slice).
+                        sync.get(fname).cloned()
                     }
                 })
                 .map_err(with_ctx)?

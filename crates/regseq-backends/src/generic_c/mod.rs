@@ -309,11 +309,21 @@ fn emit_generic_c_inner(
     if !model.device_lifecycle.drivers.is_empty() {
         out.push_str(prelude::LIFECYCLE_HELPERS);
     }
-    // Device-interrupt host line model (construct #6, C05), emitted only for a
-    // TU with recognized Interrupt resources so an interrupt-less TU's `.c` is
-    // byte-unchanged (no golden churn).
-    if !model.interrupt.drivers.is_empty() {
+    // Device-interrupt host line model (construct #6, C05) + synchronization
+    // lock-discipline oracle (synchronization construct, S11), each emitted only
+    // for a TU with the corresponding surface so a single-construct TU's `.c` is
+    // byte-unchanged (no golden churn). When BOTH are present, the T13-coupled
+    // bank is emitted instead: a held IrqSpinLock masks a synchronous
+    // `regseq_irq_fire` (the IRQ-reentry behavioral check). The mask state is
+    // emitted first so the mask-aware fire + lock ops see its globals.
+    let has_irq = !model.interrupt.drivers.is_empty();
+    let has_sync = !model.synchronization.drivers.is_empty();
+    if has_irq && has_sync {
+        out.push_str(&prelude::sync_irq_coupled_helpers());
+    } else if has_irq {
         out.push_str(prelude::IRQ_HELPERS);
+    } else if has_sync {
+        out.push_str(prelude::SYNC_HELPERS);
     }
     // Bus-resource-management host bus model (construct #3, the keystone),
     // emitted for a TU with a resolved bus-resource binding, a bus-declared
@@ -1053,8 +1063,11 @@ fn build_instance_symbols(model: &RegseqModel) -> InstanceSymbols {
     // Same conditional-reservation discipline for the device-interrupt hooks
     // (construct #6): reserved only for a TU that emits `IRQ_HELPERS`.
     let include_irq = !model.interrupt.drivers.is_empty();
+    // Same conditional-reservation discipline for the synchronization lock hooks:
+    // reserved only for a TU that emits `SYNC_HELPERS`.
+    let include_sync = !model.synchronization.drivers.is_empty();
     let mut used: HashSet<String> =
-        prelude_ordinary_idents(include_lifecycle, include_irq)
+        prelude_ordinary_idents(include_lifecycle, include_irq, include_sync)
             .into_iter()
             .collect();
     // The synthesized lifecycle runner is an external-linkage TU symbol; reserve
@@ -1137,7 +1150,11 @@ fn is_external_linkage(model: &RegseqModel, item: regseq_model::ItemId) -> bool 
 /// (RD-7) -- reserving them unconditionally could rename a no-lifecycle symbol
 /// that happened to collide with `regseq_lc_*`. `include_irq` does the same
 /// for the device-interrupt hook bank (construct #6, `IRQ_HELPERS`).
-fn prelude_ordinary_idents(include_lifecycle: bool, include_irq: bool) -> Vec<String> {
+fn prelude_ordinary_idents(
+    include_lifecycle: bool,
+    include_irq: bool,
+    include_sync: bool,
+) -> Vec<String> {
     // The integer C type spellings of the prelude's fixed helper set
     // (prelude.rs `INT_TYPES`) and the float prefixes (`FLOAT_TYPES`).
     const INT_CTYPES: [&str; 12] = [
@@ -1205,6 +1222,37 @@ fn prelude_ordinary_idents(include_lifecycle: bool, include_irq: bool) -> Vec<St
         ] {
             idents.push(format!("regseq_irq_{irq}"));
         }
+    }
+    // Synchronization lock-oracle names (prelude.rs `SYNC_HELPERS`), emitted +
+    // reserved only for a TU with a lock surface. The state globals share C's
+    // ordinary identifier namespace, so they are reserved too.
+    if include_sync {
+        for s in [
+            "init",
+            "destroy",
+            "acquire",
+            "release",
+            "inited",
+            "held_stack",
+            "held_depth",
+            "atexit_armed",
+            "atexit_check",
+            "arm_atexit",
+            "bounds",
+            "require_inited",
+        ] {
+            idents.push(format!("regseq_lock_{s}"));
+        }
+        for s in ["signal", "wait", "reset"] {
+            idents.push(format!("regseq_completion_{s}"));
+        }
+    }
+    // The T13 IrqSpinLock<->interrupt coupling state globals (prelude.rs
+    // `MASK_STATE`), emitted + reserved only for a TU with BOTH constructs. They
+    // share C's ordinary identifier namespace, so they are reserved too.
+    if include_irq && include_sync {
+        idents.push("regseq_local_irq_masked".to_string());
+        idents.push("regseq_lock_held_is_irqspin".to_string());
     }
     idents
 }
@@ -2348,7 +2396,7 @@ fn bank5_definitions(
                 };
                 header(&mut out, &mut wrote_header);
                 let sig = fn_signature(model, names, syms, id, instance, true);
-                let block = body_emit::emit_body(model, names, syms, instance, body, helper_use)?;
+                let block = body_emit::emit_body(model, names, syms, id, instance, body, helper_use)?;
                 out.push_str(&format!("{sig}{block}"));
             }
             InstanceKind::Static {

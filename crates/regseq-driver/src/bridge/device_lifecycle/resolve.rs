@@ -217,11 +217,14 @@ fn classify_fields(
             // (zero L2, no lifecycle — D11), recognized + recorded by
             // `bridge::atomic::materialise_atomics` (element-type legality +
             // the `AttrData::Atomic` field-attr the backends read for storage +
-            // init). Route them away from the user-data D3 classifier (which
-            // would reject the `Atomic<T>` shell); the per-target backends
-            // override the field's storage type (`atomic_t`/`atomic64_t`/… ) and
-            // emit the ops + init from the field-attr.
-            if crate::bridge::atomic::is_atomic_field(tcx, field_ty) {
+            // init). Synchronization lock fields are compiler-managed resources
+            // owned by `bridge::synchronization` (recognized in its Phase-4 pass).
+            // Both route away from the user-data D3 classifier (whose
+            // `UserDataNotInitializable` rule would reject the `Atomic<T>` / lock
+            // shell); the per-target backends override storage + emit init.
+            if crate::bridge::atomic::is_atomic_field(tcx, field_ty)
+                || crate::bridge::synchronization::is_sync_field(tcx, field_ty)
+            {
                 continue;
             }
             if is_mmio_resource(tcx, field_ty) {

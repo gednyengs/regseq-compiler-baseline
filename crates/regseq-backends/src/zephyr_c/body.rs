@@ -247,6 +247,15 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
             }
         }
     }
+    // Synchronization (locks, T07/C02): the per-block C02 primitive statements,
+    // the guard hidden-state locals (Zephyr `k_spinlock_key_t key`), and the dead
+    // guard + receiver locals to elide. Built before the taint fixpoint so
+    // guard-derived borrow temps are elided too.
+    let sync_body = super::sync::build_for_body(cx, body, instance)?;
+    for g in &sync_body.elide_locals {
+        cx.elided_locals.insert(*g);
+    }
+
     // Taint to fixpoint: borrow/copy temps deriving from an elided local are
     // elided too (they exist only symbolically, for the receiver chase). A
     // non-elided use of any of them still fails loud in `place_lvalue`.
@@ -303,6 +312,12 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
             local_name(cx.model, body, local)
         ));
     }
+    // Synchronization guard hidden state (T07/C02): Zephyr `k_spinlock_key_t key`
+    // for each SpinLock/IrqSpinLock acquire, assigned from `k_spin_lock` and
+    // consumed by `k_spin_unlock` (function-scoped so it spans acquire + release).
+    for decl in &sync_body.state_locals {
+        out.push_str(&format!("\t{decl}\n"));
+    }
     out.push('\n');
 
     // Blocks, in table order (RPO from the bridge), each labelled.
@@ -313,7 +328,14 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
         for stmt in &bb.statements {
             emit_statement(cx, body, &stmt.kind, &mut out)?;
         }
-        emit_terminator(cx, body, &bb.terminator.kind, ret_zst, &mut out)?;
+        // A recognized sync acquire/release/completion block replaces its `Call`
+        // terminator with the C02 primitive + a goto to the call's successor.
+        let block_id = regseq_model::BlockId::from_u32(idx as u32);
+        if let Some(stmt) = sync_body.stmts.get(&block_id) {
+            emit_sync_terminator(&bb.terminator.kind, stmt, &mut out)?;
+        } else {
+            emit_terminator(cx, body, &bb.terminator.kind, ret_zst, &mut out)?;
+        }
     }
 
     out.push_str("}\n");
@@ -322,7 +344,7 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
 
 /// The C name of a body local: `_0` for the return place, the sanitized
 /// debug name when present, else `_<n>`.
-fn local_name(model: &RegseqModel, body: &regseq_model::Body, local: LocalId) -> String {
+pub(crate) fn local_name(model: &RegseqModel, body: &regseq_model::Body, local: LocalId) -> String {
     if local == body.return_local() {
         return "_0".into();
     }
@@ -698,6 +720,31 @@ fn emit_terminator(
 /// Direct call emission: intrinsic-anchored callees dispatch to their banks
 /// (Mmio T06, Log T08); Config/PollUntil mirror the D12 frame scan's D.2
 /// rejections defensively.
+/// Emit a recognized synchronization site's C02 primitive in place of its `Call`
+/// terminator, followed by a `goto` to the suppressed call's normal successor
+/// (synchronization construct, T07/C02). Mirrors the linux_c twin.
+fn emit_sync_terminator(
+    kind: &TerminatorKind,
+    primitive: &str,
+    out: &mut String,
+) -> Result<(), EmitError> {
+    let TerminatorKind::Call { target, .. } = kind else {
+        return Err(EmitError::Unsupported(
+            "synchronization acquire/release/completion site terminator is not a Call".into(),
+        ));
+    };
+    out.push_str(&format!("\t{primitive}\n"));
+    match target {
+        Some(t) => {
+            out.push_str(&format!("\tgoto bb_{};\n", t.as_u32()));
+            Ok(())
+        }
+        None => Err(EmitError::Unsupported(
+            "diverging synchronization call (first-light subset)".into(),
+        )),
+    }
+}
+
 fn emit_call(
     cx: &mut LowerCx<'_>,
     body: &regseq_model::Body,
@@ -797,7 +844,7 @@ fn operand_is_zst(model: &RegseqModel, body: &regseq_model::Body, op: &Operand) 
 
 /// Render an operand as a C expression. `consumer` types a constant operand
 /// (a call's parameter type) so non-scalar constants can render.
-fn operand_expr_typed(
+pub(crate) fn operand_expr_typed(
     cx: &mut LowerCx<'_>,
     body: &regseq_model::Body,
     op: &Operand,
@@ -1241,7 +1288,7 @@ fn place_lvalue(
 }
 
 /// The C member name for field `idx` of an aggregate type.
-fn field_c_name(model: &RegseqModel, ty: TyId, idx: usize) -> Result<String, EmitError> {
+pub(crate) fn field_c_name(model: &RegseqModel, ty: TyId, idx: usize) -> Result<String, EmitError> {
     let layout = types::layout_of(model, ty)
         .ok_or_else(|| EmitError::Unsupported("field of a non-aggregate".into()))?;
     let LayoutKind::Struct { fields } = &layout.kind else {

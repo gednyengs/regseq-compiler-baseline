@@ -233,8 +233,22 @@ pub(super) fn emit_linux_serial(
 
     let scaffold = emit_serial_scaffold(&mut cx, drv, driver_ty, serial, &ops)?;
 
-    // -- type defs (now every aggregate use is registered).
-    let type_defs = super::emit_type_defs(&mut cx, driver_ty, &resource_names)?;
+    // -- type defs (now every aggregate use is registered). Build the
+    //    synchronization lock-field decls (T07/C02) the same way the main
+    //    linux_c path does, so a serial driver that declares an IrqSpinLock
+    //    (the ISR<->mainline seam) emits its lock field + pulls the header.
+    let mut sync_field_decls: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    if let Some(sync) = model.synchronization.drivers.get(&driver_item) {
+        for res in &sync.resources {
+            let fname = c_ident(model.strings.resolve(res.name));
+            for inc in super::sync::includes_for(res.kind) {
+                cx.extra_includes.insert(inc);
+            }
+            sync_field_decls.insert(fname.clone(), super::sync::lock_field_decl(res.kind, &fname));
+        }
+    }
+    let type_defs = super::emit_type_defs(&mut cx, driver_ty, &resource_names, &sync_field_decls)?;
 
     // -- assemble the TU.
     let mut tu = String::new();

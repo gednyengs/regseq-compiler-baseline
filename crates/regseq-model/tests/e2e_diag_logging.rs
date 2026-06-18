@@ -182,6 +182,9 @@ fn diag_logging_post_peel_shape_and_attrs() {
                 AttrData::Atomic { .. } => {
                     panic!("spurious AttrData on log callee: Atomic")
                 }
+                AttrData::SyncResource { .. } => {
+                    panic!("spurious AttrData on log callee: SyncResource")
+                }
             }
         }
     }

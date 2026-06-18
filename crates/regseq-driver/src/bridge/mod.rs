@@ -30,6 +30,7 @@ pub(crate) mod intrinsic;
 mod opaque_handle;
 mod serial;
 mod sort;
+mod synchronization;
 pub mod synth;
 mod timed_delay;
 pub mod ty;
@@ -662,6 +663,12 @@ pub enum BridgeError {
     /// A serial device-class frontend check failed (construct #7).
     #[error("serial validation: {0}")]
     SerialValidation(SerialDiagnostic),
+
+    /// A synchronization frontend check failed (synchronization construct,
+    /// contract C03). The §7 context checks land in M3; M2 carries the
+    /// deferred-surface rejections (e.g. `AllWaiters` cardinality).
+    #[error("synchronization validation: {0}")]
+    SynchronizationValidation(SyncDiagnostic),
 }
 
 /// Per-construct atomic-memory-access-and-ordering (atomicity) frontend
@@ -1132,6 +1139,116 @@ pub enum TimedCpuDelayDiagnostic {
         /// or `regseq::delay::sleep`).
         intrinsic: String,
         /// What is wrong with the declared signature.
+        detail: String,
+    },
+}
+
+/// Per-construct synchronization validation diagnostics (synchronization
+/// construct, contract C03). Carried by
+/// [`BridgeError::SynchronizationValidation`]. The §7 context checks (§7.1
+/// ISR-legality, §7.2 wait-context, may-sleep-while-held, guard escape /
+/// use-after-consume) land in M3; M2 carries only the deferred-surface
+/// rejection below.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SyncDiagnostic {
+    /// A `Completion` field declared `#[rseq::sync(cardinality = AllWaiters)]`.
+    /// `AllWaiters` is deferred — the Zephyr companion-condvar backing state is
+    /// underspecified and there is no corpus witness (GRILL C01/C02); only
+    /// `SingleWaiter` (the default) is in the first slice.
+    #[error(
+        "synchronization: `cardinality = AllWaiters` is not supported in the first slice \
+         (only `SingleWaiter`); AllWaiters is deferred (no witness; Zephyr companion-condvar \
+         underspecified) on `Completion` field `{field}`"
+    )]
+    AllWaitersUnsupported {
+        /// The offending `Completion` field name.
+        field: String,
+    },
+    /// A `Completion::wait(Duration)` whose `Result<(), RegseqError>` is
+    /// CONSUMED (matched / `?`-propagated / bound and read), not discarded. The
+    /// first slice does not model the timeout-expiry → `Err` outcome (design
+    /// T07-lowering §D4): the wait result is discarded, so a body that branches
+    /// on it would read an unset destination — rejected loud rather than emitting
+    /// wrong code (I06). Bind it to `_` until the timeout→`Result` lowering lands.
+    #[error(
+        "synchronization: `Completion::wait` result is consumed on field `{field}`, but the \
+         first slice discards the wait result (the timeout→`Result` outcome is not modeled yet); \
+         bind it to `_`"
+    )]
+    CompletionWaitResultConsumed {
+        /// The `Completion` field whose `wait` result is consumed.
+        field: String,
+    },
+    /// `#[rseq::sync(cardinality = <X>)]` with an unrecognized value `<X>` — a
+    /// typo would otherwise silently bind the conservative `SingleWaiter`
+    /// default and mis-state the author's intent. Only `SingleWaiter` is in the
+    /// first slice (`AllWaiters` is the separately-diagnosed deferred case).
+    #[error(
+        "synchronization: unknown `cardinality = {value}` on `Completion` field `{field}` \
+         (only `SingleWaiter` is supported in the first slice)"
+    )]
+    UnknownCardinality {
+        /// The offending `Completion` field name.
+        field: String,
+        /// The unrecognized cardinality token.
+        value: String,
+    },
+
+    /// `forbidden-isr-blocking-op` (§7.1 ISR-legality + §7.2 wait-context, M3
+    /// T11): a sleeping / non-IRQ-safe synchronization op in an `#[rseq::isr]`
+    /// IRQ-context body — `Mutex::lock` (sleeps), `SpinLock::lock` (thread-only,
+    /// no IRQ save/restore), or `Completion::wait` (sleeps). Only
+    /// `IrqSpinLock::lock` and `Completion::signal`/`reset` are ISR-safe. The
+    /// check consumes device-interrupt's `IsrBinding` marking and is
+    /// **sound-but-incomplete** (intraprocedural/lexical, GRILL `I04`): a
+    /// transitively-IRQ-reachable illegal acquisition deeper than the lexical
+    /// body escapes until the Open-4 hardening — documented in the conformance
+    /// output, never presented as "ISR-safety verified".
+    #[error(
+        "synchronization: `{op}` is forbidden in `#[{context}]` interrupt context on field \
+         `{field}` (only IrqSpinLock acquire and Completion signal/reset are ISR-safe)"
+    )]
+    ForbiddenIsrBlockingOp {
+        /// The offending lock/completion field name.
+        field: String,
+        /// The forbidden op (`Mutex::lock` / `SpinLock::lock` / `Completion::wait`).
+        op: String,
+        /// The context attribute (`rseq::isr`).
+        context: String,
+    },
+
+    /// `sleep-in-atomic-section` (may-sleep-while-held, M3 T12): a may-sleep call
+    /// — `regseq::delay::sleep`, `Mutex::lock`, or `Completion::wait` — inside a
+    /// `SpinLock`/`IrqSpinLock` held region (the produced `SpinlockHeldRegion`
+    /// atomic-section marking). Sleeping while holding a spinlock self-deadlocks.
+    /// The may-sleep predicate agrees with timed-delay's. Intraprocedural/lexical
+    /// (`I04`).
+    #[error(
+        "synchronization: may-sleep op `{op}` occurs while the spinlock `{lock_field}` is held \
+         (sleeping in a spinlock-held atomic section self-deadlocks)"
+    )]
+    SleepInAtomicSection {
+        /// The may-sleep op (`regseq::delay::sleep` / `Mutex::lock` / `Completion::wait`).
+        op: String,
+        /// The held spinlock field whose atomic section the op violates.
+        lock_field: String,
+    },
+
+    /// `forbidden-try-lock-or-unlock` (M3 T12). The reachable form in the first
+    /// slice is a **recursive same-lock acquire**: `lock(&self)` takes a shared
+    /// borrow, so `let g1 = self.m.lock(); let g2 = self.m.lock();` compiles yet
+    /// re-acquires a non-recursive lock while already held — detected statically
+    /// as an acquire whose block lies inside the same lock's held region (a clean
+    /// consumer of the T10 marking), so the deadlock is rejected at the bridge
+    /// rather than lowered to a real OS lock. (The `try_lock` / standalone
+    /// `unlock` halves of this catalog entry are unrepresentable in the
+    /// first-slice surface — there is no such method — so they are enforced by
+    /// the Rust type system, proven by negative fixtures.)
+    #[error("synchronization: forbidden lock op on field `{field}`: {detail}")]
+    ForbiddenTryLockOrUnlock {
+        /// The offending lock field name.
+        field: String,
+        /// What is wrong (e.g. the recursive-acquire explanation).
         detail: String,
     },
 }
@@ -2340,6 +2457,21 @@ fn construct_instances_and_resolve_cross_references(
     // last — after every body is materialized, so it walks the recognized atomic
     // calls.
     atomic::validate_atomic_ops(&ctxt.model)?;
+    // Synchronization op / acquire-site recognition: walk the materialized
+    // bodies and record each `lock()` acquire + its paired guard release into
+    // the `SynchronizationTables` sibling table. Runs here — after the bodies
+    // are materialized and the item sort has re-keyed `synchronization.drivers`
+    // (so the lock fields recognized in Phase 4 are looked up under their final
+    // `ItemId`s) — the same placement discipline as `validate_isr_no_sleep`.
+    synchronization::recognise_acquire_sites(&mut ctxt.model)?;
+    // Synchronization context-marking analysis (M3 — the thesis component):
+    // produce the spinlock-held atomic-section markings over each spinning-kind
+    // guard's (approximated) live range, and run the §7.1 ISR-legality / §7.2
+    // wait-context / may-sleep-while-held / recursive-acquire checks over the
+    // joined IsrBinding + may-sleep markings. Runs after the acquire sites are
+    // recorded — the same placement discipline, and the first pass that both
+    // consumes and produces context markings (all intraprocedural/lexical, I04).
+    synchronization::analyse_sync_contexts(&mut ctxt.model)?;
     Ok(())
 }
 

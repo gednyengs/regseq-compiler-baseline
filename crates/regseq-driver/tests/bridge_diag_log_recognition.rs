@@ -281,6 +281,8 @@ fn item_log_levels(model: &RegseqModel, leaf: &str) -> Vec<LogLevel> {
             AttrData::IsrBinding { .. } => None,
             // Atomicity field markers (#7) are not log levels; skip them.
             AttrData::Atomic { .. } => None,
+            // Synchronization marker is not a log level; skip it.
+            AttrData::SyncResource { .. } => None,
         })
         .collect()
 }
