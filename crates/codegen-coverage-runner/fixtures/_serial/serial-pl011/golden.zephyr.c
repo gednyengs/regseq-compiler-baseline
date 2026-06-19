@@ -1011,11 +1011,17 @@ static int serialpl011_configure(const struct device *dev, const struct uart_con
 	default:                   return -ENOTSUP; /* 0.5/1.5 unrepresentable */
 	}
 
-	/* PL011 §3.3.8: reprogram LCR_H/IBRD/FBRD only while the port is disabled.
-	 * The port is re-enabled ONLY on success — a rejected format leaves the
-	 * port DISABLED (never bring an unconfigured/half-applied port into
-	 * service); on success this re-enable is the bring-into-service WHEN site. */
+	/* PL011 §3.3.8 / D17 / C03: reprogram baud + line-control only while the port
+	 * is disabled, and only AFTER the current transfer drains (FR.BUSY clear, via
+	 * tx_drain_query) so an in-flight char is not corrupted; the FEN-clear/FIFO
+	 * flush edge is deferred (no register-role metadata / no in-scope FIFO op).
+	 * The port is re-enabled ONLY on success - a rejected format leaves the port
+	 * DISABLED (never bring an unconfigured/half-applied port into service); on
+	 * success this re-enable is the bring-into-service WHEN site. */
 	serialpl011_port_service_set(&data->inner, (struct PortScope){ ._raw = { [0] = 0x0 } }, false);
+	while (!serialpl011_tx_drain_query(&data->inner)) {
+		/* drain the shift register (FR.BUSY clear) before reprogram */
+	}
 	__r = serialpl011_line_format_apply(&data->inner, lf);
 	if (__r._raw[0] == 0x1)
 		return -ENOTSUP; /* port stays disabled */

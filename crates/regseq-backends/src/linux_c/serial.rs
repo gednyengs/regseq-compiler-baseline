@@ -40,7 +40,7 @@ use regseq_model::{
 };
 
 use crate::capability;
-use crate::serial_scatter::{linux_scatter, LinuxSerialSite};
+use crate::serial_scatter::{linux_c02_schedule, linux_scatter, verify_c02, LinuxSerialSite};
 
 use super::body::{self, LowerCx};
 use super::naming::c_ident;
@@ -84,6 +84,11 @@ pub(super) fn emit_linux_serial(
             unit: "a post-first-light serial unit",
         });
     }
+    // T13 / O2 / G-E1: the linux scatter placement must satisfy the C02
+    // interrupt/source-ordering edges (clear-pending-before-unmask;
+    // disarm-before-teardown-disable) — build-failing on a violation.
+    verify_c02(&linux_c02_schedule())
+        .map_err(|v| unsup(format!("C02 source-ordering violation (T13/G-E1): {v}")))?;
     let irqd = serial
         .interrupt_driven
         .as_ref()
@@ -687,9 +692,14 @@ fn emit_serial_isr(
     Ok(out)
 }
 
-/// `set_termios` ← `line_format_apply` (C03), surfacing `ConfigResult::Unsupported`
-/// rather than silently defaulting (I03): an unrepresentable format reverts to
-/// the prior termios so userspace observes the rejection.
+/// `set_termios` ← `line_format_apply` (C03). Two design-intended M2 edges:
+/// **D17** — disable, then WAIT for the current transfer to drain (FR.BUSY clear,
+/// via the author's `tx_drain_query`) before reprogramming, so an in-flight
+/// character is not corrupted; **D18** — clear `CRTSCTS` from the returned termios
+/// (hw flow control is the deferred `SerialModemControl` plane, never silently
+/// honored — the idiomatic Linux mirror of Zephyr `configure`'s `-ENOTSUP`).
+/// The C03 FEN-clear/FIFO-flush edge is deferred (no register-role metadata for
+/// the FIFO-enable bit, no in-scope FIFO op — see the M2 record).
 fn emit_set_termios(
     cx: &mut LowerCx<'_>,
     drv: &str,
@@ -726,17 +736,13 @@ fn emit_set_termios(
     let scope_block = enum_carrier(cx, ops.port_service_set.inputs[1], &serial.types.port_scope, 0)?;
     let pss = ops.port_service_set.sym.clone();
 
-    // ConfigResult::Unsupported tag read.
-    let cr_ty = ops.line_format_apply.output;
-    let (cr_off, cr_size) = types::enum_tag_cell(cx.model, cr_ty)?;
-    if cr_size != 1 {
-        return Err(unsup("ConfigResult tag wider than one byte (first-light subset)"));
-    }
-    let unsupported_tag = enum_variant_tag(cx.model, cr_ty, &serial.types.config_result, 1)?; // Unsupported
-
-    let cr_cty = types::c_type(cx.model, &mut cx.names, cr_ty)?;
+    // The D17 busy-wait uses the author's `tx_drain_query`. Linux no longer reads
+    // the `ConfigResult` tag: `set_termios` has no error return, and unsupported
+    // hw flow is signaled by clearing `CRTSCTS` from the returned termios (D18) —
+    // so the revert-to-old path (D18's rejected alternative) and its tag read go.
+    let drain = ops.tx_drain_query.sym.clone();
     Ok(format!(
-        "static void {drv}_set_termios(struct uart_port *port, struct ktermios *termios,\n\t\t\t\t  const struct ktermios *old)\n{{\n\tstruct {drv}_priv *priv = {drv}_of(port);\n\tunsigned long flags;\n\tunsigned int baud;\n\t{lf_cty} lf;\n\t{cr_cty} __r;\n\n\tbaud = uart_get_baud_rate(port, termios, old, 0, port->uartclk / 16);\n\tlf.{baud_name} = baud;\n\tswitch (termios->c_cflag & CSIZE) {{\n\tcase CS5: lf.{db_name} = {db5}; break;\n\tcase CS6: lf.{db_name} = {db6}; break;\n\tcase CS7: lf.{db_name} = {db7}; break;\n\tdefault:  lf.{db_name} = {db8}; break;\n\t}}\n\tif (termios->c_cflag & PARENB)\n\t\tlf.{par_name} = (termios->c_cflag & PARODD) ? {par_odd} : {par_even};\n\telse\n\t\tlf.{par_name} = {par_none};\n\tlf.{sb_name} = (termios->c_cflag & CSTOPB) ? {sb_two} : {sb_one};\n\n\tuart_port_lock_irqsave(port, &flags);\n\tuart_update_timeout(port, termios->c_cflag, baud);\n\t/* PL011 §3.3.8: reprogram LCR_H/IBRD/FBRD only while the port is disabled */\n\t{pss}(&priv->inner, {scope_block}, false);\n\t__r = {apply}(&priv->inner, lf);\n\t{pss}(&priv->inner, {scope_block}, true);\n\t/* ConfigResult::Unsupported is SURFACED, not silently defaulted (I03):\n\t * revert to the prior termios so userspace observes the rejection. */\n\tif (__r._raw[{cr_off}] == {unsupported_tag:#x} && old)\n\t\t*termios = *old;\n\tuart_port_unlock_irqrestore(port, flags);\n}}\n\n",
+        "static void {drv}_set_termios(struct uart_port *port, struct ktermios *termios,\n\t\t\t\t  const struct ktermios *old)\n{{\n\tstruct {drv}_priv *priv = {drv}_of(port);\n\tunsigned long flags;\n\tunsigned int baud;\n\t{lf_cty} lf;\n\n\t/* D18: hw flow control (CRTSCTS) is the deferred SerialModemControl plane and\n\t * is never silently honored - clear it from the returned termios (the idiomatic\n\t * Linux \"flag not supported\" signal). Flow is permanently outside LineFormat. */\n\ttermios->c_cflag &= ~CRTSCTS;\n\n\tbaud = uart_get_baud_rate(port, termios, old, 0, port->uartclk / 16);\n\tlf.{baud_name} = baud;\n\tswitch (termios->c_cflag & CSIZE) {{\n\tcase CS5: lf.{db_name} = {db5}; break;\n\tcase CS6: lf.{db_name} = {db6}; break;\n\tcase CS7: lf.{db_name} = {db7}; break;\n\tdefault:  lf.{db_name} = {db8}; break;\n\t}}\n\tif (termios->c_cflag & PARENB)\n\t\tlf.{par_name} = (termios->c_cflag & PARODD) ? {par_odd} : {par_even};\n\telse\n\t\tlf.{par_name} = {par_none};\n\tlf.{sb_name} = (termios->c_cflag & CSTOPB) ? {sb_two} : {sb_one};\n\n\tuart_port_lock_irqsave(port, &flags);\n\tuart_update_timeout(port, termios->c_cflag, baud);\n\t/* PL011 §3.3.8 / D17 / C03: reprogram baud + line-control only while the port\n\t * is disabled, and only AFTER the current transfer drains (FR.BUSY clear, via\n\t * tx_drain_query) so an in-flight character is not corrupted. The C03\n\t * FEN-clear/FIFO-flush edge is deferred: the device-neutral backend has no\n\t * register-role metadata for the FIFO-enable bit and no in-scope FIFO op. */\n\t{pss}(&priv->inner, {scope_block}, false);\n\twhile (!{drain}(&priv->inner))\n\t\tcpu_relax();\n\t{apply}(&priv->inner, lf);\n\t{pss}(&priv->inner, {scope_block}, true);\n\tuart_port_unlock_irqrestore(port, flags);\n}}\n\n",
         apply = ops.line_format_apply.sym,
     ))
 }
@@ -872,32 +878,3 @@ fn struct_first_field_name(model: &RegseqModel, struct_ty: TyId) -> Option<Strin
         .map(|f| c_ident(model.strings.resolve(f.name)))
 }
 
-/// The tag value of the variant at canonical semantic position `ord` of binding
-/// `b`, for a tag-byte equality check.
-fn enum_variant_tag(
-    model: &RegseqModel,
-    enum_ty: TyId,
-    binding: &Option<EnumBinding>,
-    ord: usize,
-) -> Result<u64, EmitError> {
-    let variant = binding
-        .as_ref()
-        .and_then(|e| e.variants.get(ord).copied())
-        .ok_or_else(|| unsup("serial support enum variant map missing"))?;
-    let layout =
-        types::layout_of(model, enum_ty).ok_or_else(|| unsup("enum tag of non-aggregate"))?;
-    let LayoutKind::Enum {
-        shape: EnumShape::Multiple { variants, .. },
-    } = &layout.kind
-    else {
-        return Err(unsup("enum tag of an unsupported enum shape"));
-    };
-    let tag = variants
-        .get(variant.as_u32() as usize)
-        .and_then(|v| v.tag_value)
-        .ok_or_else(|| unsup("enum variant is untagged"))?;
-    if tag > u64::MAX as u128 {
-        return Err(unsup("128-bit enum tag value"));
-    }
-    Ok(tag as u64)
-}

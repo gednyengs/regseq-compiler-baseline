@@ -5,8 +5,9 @@
 //! `golden.linux.c`, plus the M2 STRUCTURE suite asserting the T08 acceptance by
 //! name (R08): the `uart_ops` vtable wiring, the per-source `irq_source_set`
 //! scatter at its Linux WHEN sites DISTINCT from the line plumbing (request_irq),
-//! `tx_empty` ← `tx_drain_query` (C05/T09), `set_termios` surfacing
-//! `ConfigResult::Unsupported` (I03), and the synthesized serial ISR.
+//! `tx_empty` ← `tx_drain_query` (C05/T09), `set_termios` with the two M2
+//! design-intended edges (D17 configure FR.BUSY drain-wait + D18 CRTSCTS-clear),
+//! and the synthesized serial ISR.
 //!
 //! **Validation boundary (T13):** snapshot (emission) validated. The live
 //! boot+IO Tier-2 campaign (amba-pl011 QEMU, R05) is gated on the T13 toolchain
@@ -118,16 +119,40 @@ fn linux_serial_pl011_snapshot_and_m2_structure() {
         "tx_empty must lower to the author tx_drain_query (FR.BUSY), not a constant"
     );
 
-    // -- set_termios ← line_format_apply, surfacing ConfigResult::Unsupported
-    //    (I03 — not silently defaulted) by reverting to the prior termios.
+    // -- set_termios ← line_format_apply, with the two design-intended M2 edges:
+    //    D17 — the configure busy-wait (FR.BUSY clear, via tx_drain_query) precedes
+    //    the reprogram (disable → drain → line_format_apply), so an in-flight char
+    //    is not corrupted; D18 — CRTSCTS is cleared from the returned termios (flow
+    //    is the deferred modem plane, never silently honored), and the revert-to-old
+    //    path (D18's rejected alternative) is gone.
     let set_termios = pos("static void serialpl011_set_termios(struct uart_port *port,");
-    let apply = tu[set_termios..]
-        .find("serialpl011_line_format_apply(&priv->inner, lf);")
+    let st_end = tu[set_termios..]
+        .find("\n}\n")
         .map(|o| set_termios + o)
+        .expect("set_termios body end");
+    let st_body = &tu[set_termios..st_end];
+    // D18: clear CRTSCTS (no silent flow acceptance); the revert-to-old is removed.
+    assert!(
+        st_body.contains("termios->c_cflag &= ~CRTSCTS;"),
+        "D18: set_termios must clear CRTSCTS from the returned termios (no silent flow acceptance)"
+    );
+    assert!(
+        !st_body.contains("*termios = *old;"),
+        "D18: the revert-to-old path (D18's rejected alternative) must be removed"
+    );
+    // D17/C03: disable → wait FR.BUSY clear (tx_drain_query) → line_format_apply.
+    let st_disable = st_body
+        .find("serialpl011_port_service_set(&priv->inner,")
+        .expect("set_termios must disable the port (§3.3.8 bracket)");
+    let st_drain = st_body
+        .find("while (!serialpl011_tx_drain_query(&priv->inner))")
+        .expect("D17: set_termios must busy-wait FR.BUSY clear (tx_drain_query) before reprogram");
+    let st_apply = st_body
+        .find("serialpl011_line_format_apply(&priv->inner, lf);")
         .expect("set_termios must call line_format_apply");
     assert!(
-        tu[apply..].contains("*termios = *old;"),
-        "set_termios must SURFACE ConfigResult::Unsupported (revert termios), not silently default"
+        st_disable < st_drain && st_drain < st_apply,
+        "D17/C03: disable → wait FR.BUSY clear (tx_drain_query) → line_format_apply"
     );
 
     // -- the compiler-synthesized serial ISR (B3): decode + dispatch.

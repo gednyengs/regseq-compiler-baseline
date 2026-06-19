@@ -47,7 +47,7 @@ use regseq_model::{
 };
 
 use crate::capability;
-use crate::serial_scatter::{zephyr_scatter, ZephyrSerialSite};
+use crate::serial_scatter::{verify_c02, zephyr_c02_schedule, zephyr_scatter, ZephyrSerialSite};
 
 use super::body::{self, LowerCx};
 use super::naming::c_ident;
@@ -100,6 +100,11 @@ pub(super) fn emit_zephyr_serial(
     drv: &str,
     driver_ty: TyId,
 ) -> Result<ZephyrEmit, EmitError> {
+    // T13 / O2 / G-E1: the zephyr scatter placement must satisfy the C02
+    // interrupt/source-ordering edges (clear-pending-before-unmask;
+    // disarm-before-teardown-disable) — build-failing on a violation.
+    verify_c02(&zephyr_c02_schedule())
+        .map_err(|v| unsup(format!("C02 source-ordering violation (T13/G-E1): {v}")))?;
     // -- the required planes (C01/C03/C05) -----------------------------------
     let irqd = serial.interrupt_driven.as_ref().ok_or_else(|| {
         unsup("serial M3 (Zephyr) requires the SerialInterruptDriven plane (C01)")
@@ -609,7 +614,9 @@ fn emit_uart_api(
 
 /// `configure` ← `line_format_apply` (C03), surfacing `ConfigResult::Unsupported`
 /// as `-ENOTSUP` (I03 — not silently defaulted), inside the §3.3.8
-/// disable→format→enable bracket.
+/// disable→drain(FR.BUSY)→format→enable bracket. **D17** adds the drain wait (via
+/// the author's `tx_drain_query`); the C03 FEN-clear/FIFO-flush edge is deferred
+/// (no register-role metadata for the FIFO-enable bit, no in-scope FIFO op).
 fn emit_configure(
     cx: &mut LowerCx<'_>,
     drv: &str,
@@ -655,9 +662,12 @@ fn emit_configure(
     }
     let unsupported_tag = enum_variant_tag(cx.model, cr_ty, &serial.types.config_result, 1)?;
     let cr_cty = types::c_type(cx.model, &mut cx.names, cr_ty)?;
+    // D17: the configure-sequencing busy-wait drains the shift register (FR.BUSY
+    // clear) via the author's tx_drain_query before reprogram (device-neutral).
+    let drain = ops.tx_drain_query.sym.clone();
 
     Ok(format!(
-        "/* configure <- line_format_apply (C03): translate uart_config -> LineFormat.\n * Zephyr's uart_config vocab is RICHER than the framework-pure surface\n * (9-bit, MARK/SPACE parity, 0.5/1.5 stop, hw flow control), so an\n * unrepresentable request is REJECTED as -ENOTSUP, never silently coerced\n * (I03); 9-bit routes through the author's line_format_apply -> Unsupported.\n * The modem/flow plane is the deferred SerialModemControl construct. The\n * §3.3.8 disable->format->enable bracket leaves the port enabled on success. */\nstatic int {drv}_configure(const struct device *dev, const struct uart_config *cfg)\n{{\n\tstruct {drv}_data *data = dev->data;\n\t{lf_cty} lf;\n\t{cr_cty} __r;\n\n\tif (cfg->flow_ctrl != UART_CFG_FLOW_CTRL_NONE)\n\t\treturn -ENOTSUP; /* hw flow control is the deferred modem plane */\n\tlf.{baud_name} = cfg->baudrate;\n\tswitch (cfg->data_bits) {{\n\tcase UART_CFG_DATA_BITS_5: lf.{db_name} = {db5}; break;\n\tcase UART_CFG_DATA_BITS_6: lf.{db_name} = {db6}; break;\n\tcase UART_CFG_DATA_BITS_7: lf.{db_name} = {db7}; break;\n\tcase UART_CFG_DATA_BITS_8: lf.{db_name} = {db8}; break;\n\tcase UART_CFG_DATA_BITS_9: lf.{db_name} = {db9}; break;\n\tdefault:                   return -ENOTSUP;\n\t}}\n\tswitch (cfg->parity) {{\n\tcase UART_CFG_PARITY_NONE: lf.{par_name} = {par_none}; break;\n\tcase UART_CFG_PARITY_ODD:  lf.{par_name} = {par_odd}; break;\n\tcase UART_CFG_PARITY_EVEN: lf.{par_name} = {par_even}; break;\n\tdefault:                   return -ENOTSUP; /* MARK/SPACE unrepresentable */\n\t}}\n\tswitch (cfg->stop_bits) {{\n\tcase UART_CFG_STOP_BITS_1: lf.{sb_name} = {sb_one}; break;\n\tcase UART_CFG_STOP_BITS_2: lf.{sb_name} = {sb_two}; break;\n\tdefault:                   return -ENOTSUP; /* 0.5/1.5 unrepresentable */\n\t}}\n\n\t/* PL011 §3.3.8: reprogram LCR_H/IBRD/FBRD only while the port is disabled.\n\t * The port is re-enabled ONLY on success — a rejected format leaves the\n\t * port DISABLED (never bring an unconfigured/half-applied port into\n\t * service); on success this re-enable is the bring-into-service WHEN site. */\n\t{pss}(&data->inner, {scope_block}, false);\n\t__r = {apply}(&data->inner, lf);\n\tif (__r._raw[{cr_off}] == {unsupported_tag:#x})\n\t\treturn -ENOTSUP; /* port stays disabled */\n\t{pss}(&data->inner, {scope_block}, true);\n\tdata->uart_cfg = *cfg;\n\treturn 0;\n}}\n",
+        "/* configure <- line_format_apply (C03): translate uart_config -> LineFormat.\n * Zephyr's uart_config vocab is RICHER than the framework-pure surface\n * (9-bit, MARK/SPACE parity, 0.5/1.5 stop, hw flow control), so an\n * unrepresentable request is REJECTED as -ENOTSUP, never silently coerced\n * (I03); 9-bit routes through the author's line_format_apply -> Unsupported.\n * The modem/flow plane is the deferred SerialModemControl construct. The\n * §3.3.8 disable->format->enable bracket leaves the port enabled on success. */\nstatic int {drv}_configure(const struct device *dev, const struct uart_config *cfg)\n{{\n\tstruct {drv}_data *data = dev->data;\n\t{lf_cty} lf;\n\t{cr_cty} __r;\n\n\tif (cfg->flow_ctrl != UART_CFG_FLOW_CTRL_NONE)\n\t\treturn -ENOTSUP; /* hw flow control is the deferred modem plane */\n\tlf.{baud_name} = cfg->baudrate;\n\tswitch (cfg->data_bits) {{\n\tcase UART_CFG_DATA_BITS_5: lf.{db_name} = {db5}; break;\n\tcase UART_CFG_DATA_BITS_6: lf.{db_name} = {db6}; break;\n\tcase UART_CFG_DATA_BITS_7: lf.{db_name} = {db7}; break;\n\tcase UART_CFG_DATA_BITS_8: lf.{db_name} = {db8}; break;\n\tcase UART_CFG_DATA_BITS_9: lf.{db_name} = {db9}; break;\n\tdefault:                   return -ENOTSUP;\n\t}}\n\tswitch (cfg->parity) {{\n\tcase UART_CFG_PARITY_NONE: lf.{par_name} = {par_none}; break;\n\tcase UART_CFG_PARITY_ODD:  lf.{par_name} = {par_odd}; break;\n\tcase UART_CFG_PARITY_EVEN: lf.{par_name} = {par_even}; break;\n\tdefault:                   return -ENOTSUP; /* MARK/SPACE unrepresentable */\n\t}}\n\tswitch (cfg->stop_bits) {{\n\tcase UART_CFG_STOP_BITS_1: lf.{sb_name} = {sb_one}; break;\n\tcase UART_CFG_STOP_BITS_2: lf.{sb_name} = {sb_two}; break;\n\tdefault:                   return -ENOTSUP; /* 0.5/1.5 unrepresentable */\n\t}}\n\n\t/* PL011 §3.3.8 / D17 / C03: reprogram baud + line-control only while the port\n\t * is disabled, and only AFTER the current transfer drains (FR.BUSY clear, via\n\t * tx_drain_query) so an in-flight char is not corrupted; the FEN-clear/FIFO\n\t * flush edge is deferred (no register-role metadata / no in-scope FIFO op).\n\t * The port is re-enabled ONLY on success - a rejected format leaves the port\n\t * DISABLED (never bring an unconfigured/half-applied port into service); on\n\t * success this re-enable is the bring-into-service WHEN site. */\n\t{pss}(&data->inner, {scope_block}, false);\n\twhile (!{drain}(&data->inner)) {{\n\t\t/* drain the shift register (FR.BUSY clear) before reprogram */\n\t}}\n\t__r = {apply}(&data->inner, lf);\n\tif (__r._raw[{cr_off}] == {unsupported_tag:#x})\n\t\treturn -ENOTSUP; /* port stays disabled */\n\t{pss}(&data->inner, {scope_block}, true);\n\tdata->uart_cfg = *cfg;\n\treturn 0;\n}}\n",
         apply = ops.line_format_apply.sym,
     ))
 }

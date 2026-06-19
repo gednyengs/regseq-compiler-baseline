@@ -1014,7 +1014,11 @@ static void serialpl011_set_termios(struct uart_port *port, struct ktermios *ter
 	unsigned long flags;
 	unsigned int baud;
 	struct LineFormat lf;
-	struct ConfigResult __r;
+
+	/* D18: hw flow control (CRTSCTS) is the deferred SerialModemControl plane and
+	 * is never silently honored - clear it from the returned termios (the idiomatic
+	 * Linux "flag not supported" signal). Flow is permanently outside LineFormat. */
+	termios->c_cflag &= ~CRTSCTS;
 
 	baud = uart_get_baud_rate(port, termios, old, 0, port->uartclk / 16);
 	lf.baud = baud;
@@ -1032,14 +1036,16 @@ static void serialpl011_set_termios(struct uart_port *port, struct ktermios *ter
 
 	uart_port_lock_irqsave(port, &flags);
 	uart_update_timeout(port, termios->c_cflag, baud);
-	/* PL011 §3.3.8: reprogram LCR_H/IBRD/FBRD only while the port is disabled */
+	/* PL011 §3.3.8 / D17 / C03: reprogram baud + line-control only while the port
+	 * is disabled, and only AFTER the current transfer drains (FR.BUSY clear, via
+	 * tx_drain_query) so an in-flight character is not corrupted. The C03
+	 * FEN-clear/FIFO-flush edge is deferred: the device-neutral backend has no
+	 * register-role metadata for the FIFO-enable bit and no in-scope FIFO op. */
 	serialpl011_port_service_set(&priv->inner, (struct PortScope){ ._raw = { [0] = 0x0 } }, false);
-	__r = serialpl011_line_format_apply(&priv->inner, lf);
+	while (!serialpl011_tx_drain_query(&priv->inner))
+		cpu_relax();
+	serialpl011_line_format_apply(&priv->inner, lf);
 	serialpl011_port_service_set(&priv->inner, (struct PortScope){ ._raw = { [0] = 0x0 } }, true);
-	/* ConfigResult::Unsupported is SURFACED, not silently defaulted (I03):
-	 * revert to the prior termios so userspace observes the rejection. */
-	if (__r._raw[0] == 0x1 && old)
-		*termios = *old;
 	uart_port_unlock_irqrestore(port, flags);
 }
 

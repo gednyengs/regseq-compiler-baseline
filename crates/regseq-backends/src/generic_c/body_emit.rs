@@ -6441,10 +6441,18 @@ fn emit_serial_synthesis(
     driver: &regseq_model::DriverLifecycle,
     serial: &regseq_model::DriverSerial,
 ) -> Result<(String, String), EmitError> {
-    use crate::serial_scatter::{generic_scatter, GenericSerialPhase};
+    use crate::serial_scatter::{
+        generic_c02_schedule, generic_scatter, verify_c02, GenericSerialPhase,
+    };
     use regseq_model::{Const, IrqSourceKind, IrqStateKind, SerialCause, UintKind, VariantIdx};
 
     let unsup = |m: &'static str| EmitError::Unsupported(m);
+
+    // T13 / O2 / G-E1: the oracle scatter schedule must satisfy the C02
+    // interrupt/source-ordering edges (clear-pending-before-unmask;
+    // disarm-before-teardown-disable) — build-failing on a violation.
+    verify_c02(&generic_c02_schedule())
+        .map_err(|_| unsup("C02 source-ordering violation in the serial oracle schedule (T13/G-E1)"))?;
 
     let driver_ty = driver_struct_ty(model, driver_item)
         .ok_or(unsup("serial driver struct has no emitted type"))?;
@@ -6493,6 +6501,13 @@ fn emit_serial_synthesis(
     let (lfa_sym, lfa_in, _) = sym_of(&lc.line_format_apply)?;
     let (iss_sym, iss_in, _) = sym_of(&irqd.irq_source_set)?;
     let (icd_sym, _, icd_out) = sym_of(&irqd.irq_cause_decode)?;
+    // D17/C03: the configure busy-wait drains the shift register (FR.BUSY clear)
+    // via the author's tx_drain_query before reprogram — device-neutral.
+    let qc = serial
+        .queue_control
+        .as_ref()
+        .ok_or(unsup("serial M2 oracle requires the SerialQueueControl plane (tx_drain_query)"))?;
+    let (drain_sym, _, _) = sym_of(&qc.tx_drain_query)?;
 
     // A fieldless enum literal of `ty` at `variant_idx` (no interning needed).
     let enum_lit = |vidx: VariantIdx, ty: TyId| -> Result<String, EmitError> {
@@ -6635,8 +6650,12 @@ fn emit_serial_synthesis(
         h.push_str(&format!("    {s}(&inst.inner);\n"));
     }
     h.push_str(&format!("    regseq_irq_enable({line}u);\n"));
-    // Bring-up: disable → line-format (while disabled) → enable (PL011 §3.3.8).
+    // Bring-up (PL011 §3.3.8 / D17 / C03): disable → wait FR.BUSY clear (via the
+    // author's tx_drain_query, so an in-flight char is not corrupted) → line-format
+    // (while disabled) → enable. The FEN-clear/FIFO-flush edge is deferred (no
+    // register-role metadata for the FIFO-enable bit, no in-scope FIFO op).
     h.push_str(&format!("    {pss_sym}(&inst.inner, {scope_block}, {on_false});\n"));
+    h.push_str(&format!("    while (!{drain_sym}(&inst.inner)) {{ }}\n"));
     h.push_str(&format!("    {lfa_sym}(&inst.inner, {line_format});\n"));
     h.push_str(&format!("    {pss_sym}(&inst.inner, {scope_block}, {on_true});\n"));
     // Arm RX + line-error (generic_scatter Startup).
