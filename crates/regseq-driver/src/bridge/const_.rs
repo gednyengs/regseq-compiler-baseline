@@ -511,11 +511,76 @@ fn translate_scalar_int<'tcx>(
             Const::NullPtr(translate_ty(cx, *pointee)?)
         }
         _ => {
-            return Err(BridgeError::UnsupportedConst {
-                const_repr: format!("scalar int {value:?} for {}", ty),
-            });
+            match translate_scalar_int_aggregate(cx, value, ty)? {
+                Some(aggregate) => aggregate,
+                None => {
+                    return Err(BridgeError::UnsupportedConst {
+                        const_repr: format!("scalar int {value:?} for {}", ty),
+                    });
+                }
+            }
         }
     })
+}
+
+/// Reconstruct the `Const::Aggregate` carrier for a scalar-ABI aggregate
+/// whose MIR `ConstValue` is a bare `Scalar` (e.g. a single-field newtype
+/// carrier such as `SerialErrors { bits: u8 }` or `Fv(u32)`, or a recursion
+/// of such). rustc collapses a struct/tuple whose layout is dominated by one
+/// non-ZST scalar field down to that field's scalar, so the const reaches
+/// `translate_scalar_int` with an aggregate *type* but a scalar *value*. The
+/// scalar maps onto the single non-ZST field (its bits equal the aggregate's
+/// by the scalar-ABI invariant); ZST siblings lower to `Const::ZST`. This
+/// mirrors the `Const::Aggregate` shape the valtree path already emits for
+/// `TyKind::Adt` / `TyKind::Tuple` in `translate_ty_const_value`, so both
+/// const-translation paths produce the same model shape. Returns `None` when
+/// `ty` is not a struct/tuple aggregate, so genuinely unsupported scalar
+/// consts are still rejected by the caller.
+fn translate_scalar_int_aggregate<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    value: ScalarInt,
+    ty: rustc_middle::ty::Ty<'tcx>,
+) -> Result<Option<Const>, BridgeError> {
+    let field_tys: Vec<rustc_middle::ty::Ty<'tcx>> = match ty.kind() {
+        TyKind::Adt(def, args) if def.is_struct() => def
+            .non_enum_variant()
+            .fields
+            .iter()
+            .map(|field| field.ty(cx.input.tcx, args))
+            .collect(),
+        TyKind::Tuple(elems) => elems.iter().collect(),
+        _ => return Ok(None),
+    };
+
+    let mut children = Vec::with_capacity(field_tys.len());
+    let mut non_zst_fields = 0usize;
+    for field_ty in field_tys {
+        let field_layout = cx
+            .input
+            .tcx
+            .layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(field_ty))
+            .map_err(|_| BridgeError::Layout {
+                ty_repr: field_ty.to_string(),
+            })?;
+        // The scalar-ABI invariant guarantees exactly one non-ZST field; it
+        // carries the same bits as the aggregate scalar, so recurse with the
+        // same value. ZST siblings (PhantomData, `()`, ...) carry no bits.
+        let child = if field_layout.is_zst() {
+            Const::ZST
+        } else {
+            non_zst_fields += 1;
+            translate_scalar_int(cx, value, field_ty)?
+        };
+        children.push(cx.model.consts.intern(child));
+    }
+    // A bare `Scalar` ConstValue only reaches here for a scalar-ABI aggregate,
+    // which has exactly one non-ZST field. Reject (rather than silently
+    // duplicate the scalar across fields) if that invariant does not hold — a
+    // multi-scalar aggregate would arrive as `ScalarPair`/`Indirect`, not here.
+    if non_zst_fields != 1 {
+        return Ok(None);
+    }
+    Ok(Some(Const::Aggregate(children)))
 }
 
 fn allocation_bytes<'tcx>(
@@ -609,7 +674,10 @@ pub(crate) fn instance_ref_for_function_provenance<'tcx>(
         None,
         move |cx| {
             let poly = cx.input.tcx.fn_sig(def_id).instantiate(cx.input.tcx, args);
-            super::fnsig::translate_fn_sig(cx, poly)
+            // Concrete instance signature: resolve associated-type projections
+            // (e.g. a `BitOr::Output` return reached via a fn-pointer const /
+            // `ReifyFnPointer`) before translation.
+            super::fnsig::translate_fn_sig_monomorphic(cx, poly)
         },
     )?;
     Ok(cx.model.instance_ref_of(id))

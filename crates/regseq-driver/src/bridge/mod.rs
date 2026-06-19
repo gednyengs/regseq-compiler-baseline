@@ -2684,7 +2684,13 @@ fn construct_function_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeE
             .tcx
             .fn_sig(def_id)
             .instantiate(ctxt.input.tcx, identity_args);
-        let fn_sig = match fnsig::translate_fn_sig(ctxt, poly_fn_sig) {
+        // For a concrete (non-generic) Function, associated-type projections in
+        // the signature (e.g. a `BitOr::Output` operator-overload return) are
+        // rigid-after-normalization; `translate_fn_sig_monomorphic` resolves
+        // them so the instance is created rather than falsely shunted to the
+        // bucket-4 signature-non-rigid path. RPIT `Alias(Opaque)` is left
+        // intact, preserving that carve-out.
+        let fn_sig = match fnsig::translate_fn_sig_monomorphic(ctxt, poly_fn_sig) {
             Ok(sig) => sig,
             Err(BridgeError::NonRigidTy { .. }) => {
                 // Bucket 4: record the carve-out flag and push no

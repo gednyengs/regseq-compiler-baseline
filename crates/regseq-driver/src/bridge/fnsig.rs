@@ -17,6 +17,30 @@ use super::{
     BridgeCtxt, BridgeError,
 };
 
+/// Translate the signature of a **fully-monomorphic** (post-instantiation)
+/// callee/instance, resolving concrete associated-type projections first.
+///
+/// Every site that builds a signature from a concrete instance —
+/// `fn_sig(def_id).instantiate(concrete_args)` — must funnel through this
+/// wrapper rather than calling [`translate_fn_sig`] directly, so a projection
+/// such as a `BitOr::Output` operator-overload return (rigid-after-
+/// normalization for a concrete `Self`) is resolved instead of falsely
+/// rejected as `NonRigidTy`. Pairing the normalization with the translation
+/// here keeps the two from drifting apart as new monomorphic sig sites are
+/// added (the four current callers: `callsite_fn_sig`,
+/// `instance_ref_for_function_provenance`, `compute_method_shim_fn_sig`, and
+/// the eager non-generic-Function bucket). `Alias(Opaque)` (RPIT) is left
+/// intact, so the bucket-4 signature-non-rigid carve-out is unaffected. The
+/// foreign-import path keeps using [`translate_fn_sig`] directly (a rigid C
+/// ABI carries no projections).
+pub fn translate_fn_sig_monomorphic<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    sig: rustc_middle::ty::PolyFnSig<'tcx>,
+) -> Result<FnSigId, BridgeError> {
+    let sig = super::ty::normalize_monomorphic_fn_sig(cx.input.tcx, sig);
+    translate_fn_sig(cx, sig)
+}
+
 /// Translate a rustc `PolyFnSig` into a `regseq_model::FnSigId`. Per
 /// spec.md section 14.3 schema. Region erasure runs first via
 /// `bridge::ty::erase_regions_or_reject`.

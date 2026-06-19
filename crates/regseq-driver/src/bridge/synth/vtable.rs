@@ -172,7 +172,10 @@ fn compute_method_shim_fn_sig<'tcx>(
         .tcx
         .fn_sig(instance.def_id())
         .instantiate(cx.input.tcx, instance.args);
-    let base_sig_id = crate::bridge::fnsig::translate_fn_sig(cx, poly_sig)?;
+    // Concrete (monomorphic) dyn-method instance: resolve associated-type
+    // projections in its signature (e.g. a method returning `Self::Out`) before
+    // translation, so a rigid-after-normalization projection is not rejected.
+    let base_sig_id = crate::bridge::fnsig::translate_fn_sig_monomorphic(cx, poly_sig)?;
     let unit_ty = cx.model.types.intern(Ty::Tuple {
         fields: Vec::new(),
         layout: UNIT_LAYOUT,
