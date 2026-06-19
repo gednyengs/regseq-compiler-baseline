@@ -1591,7 +1591,7 @@ struct input_ConfigResult input__impl_3__line_format_apply(struct input_SerialPl
         _13 = ((_11) | (_12));
         _14 = _8;
         _15 = ((_13) | (_14));
-        _16 = ((uint64_t)(((uint32_t)(48000000U))));
+        _16 = ((uint64_t)(((uint32_t)(24000000U))));
         _17 = _2.baud;
         _18 = ((uint64_t)(_17));
         _19 = _16;
