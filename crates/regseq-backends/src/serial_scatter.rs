@@ -157,6 +157,170 @@ pub fn zephyr_scatter(site: ZephyrSerialSite) -> Vec<ScatterIntent> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// C02 source-ordering enforcement (T13 / O2 / G-E1).
+// ---------------------------------------------------------------------------
+//
+// A typed, backend-agnostic gate over each backend's bring-up/teardown
+// *schedule* — a lifecycle linearization whose `Arm`/`Disarm` intents are pulled
+// from the scatter tables above (so the WHICH-source can't drift from the
+// scaffold), with the `IcrClear`/`TeardownQuiesce`/`PortDisable` lifecycle anchors
+// authored against the documented `on_init`/teardown contract (NOT mechanically
+// derived from emission — the oracle trace-diff in `serial_pl011_e2e` is the
+// behavioral backstop that the EMISSION matches this order). It machine-checks the
+// two C02 **interrupt/source-ordering** edges that bear on the scatter:
+//
+//   edge 3 — clear-pending-before-unmask: every `Arm` is preceded by `IcrClear`
+//            (else a stale latched cause fires the instant the source unmasks);
+//   edge 4 — teardown disarms before/with disable: at every `PortDisable` no
+//            source is left armed (else an interrupt fires after teardown).
+//
+// The configure-internal §3.3.8 wait-FR.BUSY + FEN-clear is a **C03** concern,
+// verified by the configure-bracket assertions (T11) — NOT here (no
+// double-ownership). `verify_c02` is called at serial emit time (build-failing)
+// and exercised by the tests below incl. the negative-fixture rejection.
+
+/// A lifecycle-ordered event in a backend's serial schedule. The `Arm`/`Disarm`
+/// intents are pulled from the scatter tables above; `IcrClear`/`TeardownQuiesce`/
+/// `PortDisable` are the lifecycle anchors the WHEN sites are ordered against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SerialOrderEvent {
+    /// Latched interrupts cleared (W1C ICR) — the author's `on_init`, invoked by
+    /// the scaffold before any source is armed.
+    IcrClear,
+    /// A source is armed at a compiler-emitted WHEN site (`irq_source_set(_,
+    /// Armed)`) — pulled from the scatter tables above.
+    Arm(IrqSourceKind),
+    /// A source is disarmed at a compiler-emitted WHEN site (`irq_source_set(_,
+    /// Disarmed)`) — e.g. Linux `stop_tx`/`stop_rx`/`shutdown` scatter.
+    Disarm(IrqSourceKind),
+    /// The authored teardown quiesce (`on_deinit` mask-all, IMSC=0) that the deinit
+    /// scaffold INVOKES before the port disable — it disarms every source. Modeled
+    /// DISTINCTLY from `Disarm` because the disarm itself is AUTHORED, not compiler
+    /// scatter: the compiler-owned guarantee is only the ORDERING (quiesce before
+    /// disable); that the quiesce actually masks all is confirmed behaviorally by
+    /// the oracle teardown trace, NOT by this static gate (Zephyr teardown path).
+    TeardownQuiesce,
+    /// The port is taken out of service (CR cleared) — teardown.
+    PortDisable,
+}
+
+/// A C02 partial-order violation found in a serial schedule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum C02Violation {
+    /// A source was armed before latched interrupts were cleared (edge 3).
+    ArmBeforeIcrClear(IrqSourceKind),
+    /// The port was disabled with one or more sources still armed (edge 4).
+    DisableWithArmedSources,
+}
+
+impl core::fmt::Display for C02Violation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            C02Violation::ArmBeforeIcrClear(s) => {
+                write!(f, "C02 edge 3: {s:?} armed before ICR-clear (clear-pending-before-unmask)")
+            }
+            C02Violation::DisableWithArmedSources => {
+                write!(f, "C02 edge 4: port disabled with sources still armed (disarm-before-disable)")
+            }
+        }
+    }
+}
+
+fn intent_event(it: ScatterIntent) -> SerialOrderEvent {
+    match it.state {
+        IrqStateKind::Armed => SerialOrderEvent::Arm(it.source),
+        IrqStateKind::Disarmed => SerialOrderEvent::Disarm(it.source),
+    }
+}
+
+/// Verify the C02 interrupt/source-ordering edges over a lifecycle schedule
+/// (R11 / O2 / G-E1). Backend-agnostic: every serial backend's schedule must
+/// pass. Edge 3 — every `Arm` is preceded by an `IcrClear`; edge 4 — at every
+/// `PortDisable` no source remains armed.
+pub fn verify_c02(schedule: &[SerialOrderEvent]) -> Result<(), C02Violation> {
+    let mut icr_cleared = false;
+    // Indexed by `IrqSourceKind as usize` (TxReady=0, RxData=1, LineError=2).
+    let mut armed = [false; 3];
+    for ev in schedule {
+        match ev {
+            SerialOrderEvent::IcrClear => icr_cleared = true,
+            SerialOrderEvent::Arm(s) => {
+                if !icr_cleared {
+                    return Err(C02Violation::ArmBeforeIcrClear(*s));
+                }
+                armed[*s as usize] = true;
+            }
+            SerialOrderEvent::Disarm(s) => armed[*s as usize] = false,
+            // The authored on_deinit mask-all disarms every source (Zephyr teardown).
+            SerialOrderEvent::TeardownQuiesce => armed = [false; 3],
+            SerialOrderEvent::PortDisable => {
+                if armed.iter().any(|&a| a) {
+                    return Err(C02Violation::DisableWithArmedSources);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The generic_c (oracle) serial C02 schedule — the `body_emit` scenario:
+/// `on_init` (ICR clear) → Startup/TxKick/IsrTxDrained/Teardown scatter → port
+/// disable. The teardown disarm is COMPILER scatter (the `Teardown` phase), so no
+/// `TeardownQuiesce` anchor is needed.
+pub fn generic_c02_schedule() -> Vec<SerialOrderEvent> {
+    let mut s = vec![SerialOrderEvent::IcrClear];
+    for ph in [
+        GenericSerialPhase::Startup,
+        GenericSerialPhase::TxKick,
+        GenericSerialPhase::IsrTxDrained,
+        GenericSerialPhase::Teardown,
+    ] {
+        s.extend(generic_scatter(ph).into_iter().map(intent_event));
+    }
+    s.push(SerialOrderEvent::PortDisable);
+    s
+}
+
+/// The linux_c serial C02 schedule — `on_init` (ICR clear) → `startup` (arm
+/// RX/error) → `start_tx`/`stop_tx`/`stop_rx` (runtime) → `shutdown` (disarm all)
+/// → port disable. The teardown disarm is COMPILER scatter (`shutdown` disarms
+/// every source), so no `TeardownQuiesce` anchor is needed.
+pub fn linux_c02_schedule() -> Vec<SerialOrderEvent> {
+    let mut s = vec![SerialOrderEvent::IcrClear];
+    for site in [
+        LinuxSerialSite::Startup,
+        LinuxSerialSite::StartTx,
+        LinuxSerialSite::StopTx,
+        LinuxSerialSite::StopRx,
+        LinuxSerialSite::Shutdown,
+    ] {
+        s.extend(linux_scatter(site).into_iter().map(intent_event));
+    }
+    s.push(SerialOrderEvent::PortDisable);
+    s
+}
+
+/// The zephyr_c serial C02 schedule — `on_init` (ICR clear) → the fine
+/// `irq_{tx,rx,err}_enable` arms (worst case: left armed at teardown) →
+/// `TeardownQuiesce` (the authored `on_deinit` mask-all the deinit scaffold orders
+/// before the disable) → port disable. Unlike Linux/generic, Zephyr's teardown
+/// disarm is NOT compiler scatter — it is the authored quiesce, modeled explicitly
+/// (its mask content is confirmed by the oracle trace, not this static gate).
+pub fn zephyr_c02_schedule() -> Vec<SerialOrderEvent> {
+    let mut s = vec![SerialOrderEvent::IcrClear];
+    for site in [
+        ZephyrSerialSite::IrqTxEnable,
+        ZephyrSerialSite::IrqRxEnable,
+        ZephyrSerialSite::IrqErrEnable,
+    ] {
+        s.extend(zephyr_scatter(site).into_iter().map(intent_event));
+    }
+    s.push(SerialOrderEvent::TeardownQuiesce);
+    s.push(SerialOrderEvent::PortDisable);
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +410,91 @@ mod tests {
             zephyr_scatter(ZephyrSerialSite::IrqRxEnable),
             vec![ScatterIntent::arm(IrqSourceKind::RxData)]
         );
+    }
+
+    // -- C02 source-ordering gate (T13 / O2 / G-E1) --------------------------
+
+    #[test]
+    fn c02_accepts_all_backend_schedules() {
+        verify_c02(&generic_c02_schedule()).expect("generic_c schedule satisfies C02");
+        verify_c02(&linux_c02_schedule()).expect("linux_c schedule satisfies C02");
+        verify_c02(&zephyr_c02_schedule()).expect("zephyr_c schedule satisfies C02");
+    }
+
+    #[test]
+    fn c02_each_schedule_clears_icr_before_every_arm() {
+        // Edge 3, stated positively: in every backend schedule the first event is
+        // the ICR-clear, so no arm can precede it.
+        for sched in [generic_c02_schedule(), linux_c02_schedule(), zephyr_c02_schedule()] {
+            assert_eq!(
+                sched.first(),
+                Some(&SerialOrderEvent::IcrClear),
+                "ICR-clear must lead every serial schedule"
+            );
+        }
+    }
+
+    #[test]
+    fn c02_rejects_arm_before_icr_clear() {
+        // Negative fixture: a deliberately mis-ordered arm (before ICR-clear).
+        let bad = vec![
+            SerialOrderEvent::Arm(IrqSourceKind::RxData),
+            SerialOrderEvent::IcrClear,
+            SerialOrderEvent::Disarm(IrqSourceKind::RxData),
+            SerialOrderEvent::PortDisable,
+        ];
+        assert_eq!(
+            verify_c02(&bad),
+            Err(C02Violation::ArmBeforeIcrClear(IrqSourceKind::RxData)),
+            "an arm before ICR-clear must be rejected (edge 3)"
+        );
+    }
+
+    #[test]
+    fn c02_rejects_disable_with_armed_source() {
+        // Negative fixture: teardown disables the port with TxReady still armed.
+        let bad = vec![
+            SerialOrderEvent::IcrClear,
+            SerialOrderEvent::Arm(IrqSourceKind::TxReady),
+            SerialOrderEvent::PortDisable,
+        ];
+        assert_eq!(
+            verify_c02(&bad),
+            Err(C02Violation::DisableWithArmedSources),
+            "disabling the port with a source still armed must be rejected (edge 4)"
+        );
+    }
+
+    #[test]
+    fn c02_dropping_a_teardown_disarm_is_caught() {
+        // Negative fixture rooted in a REAL schedule: take the linux schedule and
+        // drop the shutdown disarms — the port-disable then trips edge 4.
+        let mut sched = vec![SerialOrderEvent::IcrClear];
+        sched.extend(linux_scatter(LinuxSerialSite::Startup).into_iter().map(intent_event));
+        // (no stop_tx/stop_rx/shutdown disarms) → RX + LineError stay armed.
+        sched.push(SerialOrderEvent::PortDisable);
+        assert_eq!(verify_c02(&sched), Err(C02Violation::DisableWithArmedSources));
+    }
+
+    #[test]
+    fn c02_teardown_quiesce_disarms_all_before_disable() {
+        // The authored on_deinit mask-all (Zephyr teardown) clears every source.
+        let ok = vec![
+            SerialOrderEvent::IcrClear,
+            SerialOrderEvent::Arm(IrqSourceKind::TxReady),
+            SerialOrderEvent::Arm(IrqSourceKind::RxData),
+            SerialOrderEvent::Arm(IrqSourceKind::LineError),
+            SerialOrderEvent::TeardownQuiesce,
+            SerialOrderEvent::PortDisable,
+        ];
+        assert_eq!(verify_c02(&ok), Ok(()));
+        // ...and without it, the still-armed sources trip edge 4 (the Zephyr
+        // teardown's safety rests on the authored quiesce being present).
+        let bad = vec![
+            SerialOrderEvent::IcrClear,
+            SerialOrderEvent::Arm(IrqSourceKind::RxData),
+            SerialOrderEvent::PortDisable,
+        ];
+        assert_eq!(verify_c02(&bad), Err(C02Violation::DisableWithArmedSources));
     }
 }

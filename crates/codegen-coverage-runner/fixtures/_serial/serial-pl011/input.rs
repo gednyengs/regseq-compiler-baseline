@@ -17,9 +17,14 @@ include!("../../_interrupt_surface.rs");
 include!("../../_serial_pl011_surface.rs");
 include!("../../_serial_surface.rs");
 
-/// UART input clock for divisor programming (QEMU virt PL011: 24 MHz; this
-/// fixture pins 48 MHz for a clean 115200 divisor).
-const UART_CLOCK_HZ: u32 = 48_000_000;
+/// UART input clock for divisor programming (D19: hardcoded spec constant).
+/// 24 MHz = the QEMU virt PL011 ground truth on BOTH OSes: Linux DTB /apb-pclk
+/// clock-frequency (hw/arm/virt.c) and Zephyr qemu-virt-a53.dtsi apb-pclk are
+/// both 24_000_000, and the Linux scaffold's port.uartclk = 24_000_000. The
+/// spec divisor math must use the SAME clock as the framework negotiates against
+/// and as the refined drivers read (clk_get_rate / clk_freq), or IBRD/FBRD
+/// disagree by 2x and configure-equivalence breaks (M3/T16 reconciliation).
+const UART_CLOCK_HZ: u32 = 24_000_000;
 
 // LCR_H field encodings (PL011 TRM §3.3.7).
 const LCR_H_FEN: u32 = 1 << 4;

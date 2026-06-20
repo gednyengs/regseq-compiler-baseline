@@ -134,8 +134,8 @@ fn zephyr_serial_pl011_snapshot_and_m3_structure() {
     );
 
     // -- configure ← line_format_apply, surfacing ConfigResult::Unsupported as
-    //    -ENOTSUP (I03 — not silently defaulted), in the §3.3.8 disable→format→
-    //    enable bracket.
+    //    -ENOTSUP (I03 — not silently defaulted), in the §3.3.8 disable→drain→
+    //    format→enable bracket (D17 adds the FR.BUSY drain-wait).
     let configure = pos("static int serialpl011_configure(const struct device *dev,");
     let apply = tu[configure..]
         .find("serialpl011_line_format_apply(&data->inner, lf);")
@@ -144,6 +144,21 @@ fn zephyr_serial_pl011_snapshot_and_m3_structure() {
     assert!(
         tu[apply..].contains("return -ENOTSUP;"),
         "configure must SURFACE ConfigResult::Unsupported (-ENOTSUP), not silently default"
+    );
+    // D17/C03: disable → wait FR.BUSY clear (tx_drain_query) → line_format_apply,
+    //    so an in-flight char is not corrupted (the FEN-clear edge is deferred —
+    //    see the M2 record).
+    let cfg_disable = tu[configure..apply]
+        .find("serialpl011_port_service_set(&data->inner,")
+        .map(|o| configure + o)
+        .expect("configure must disable the port (§3.3.8 bracket)");
+    let cfg_drain = tu[configure..apply]
+        .find("while (!serialpl011_tx_drain_query(&data->inner))")
+        .map(|o| configure + o)
+        .expect("D17: configure must busy-wait FR.BUSY clear (tx_drain_query) before reprogram");
+    assert!(
+        cfg_disable < cfg_drain && cfg_drain < apply,
+        "D17/C03: disable → wait FR.BUSY clear (tx_drain_query) → line_format_apply"
     );
 
     // -- the TX prime-kick: irq_tx_enable arms TxReady THEN calls the callback
@@ -204,6 +219,24 @@ fn zephyr_serial_pl011_snapshot_and_m3_structure() {
         "a delivered serial class must NOT carry the deferred-class NULL-api comment"
     );
     assert!(vtable < define, "the vtable is defined before the instantiation");
+
+    // -- C02 edge 4 (T13): in the deinit scaffold the authored on_deinit quiesce
+    //    (mask-all) is ORDERED BEFORE the port disable — the compiler-owned half of
+    //    Zephyr's teardown disarm-before-disable (the authored mask content is the
+    //    spec body). This is the structural backing for the schedule's TeardownQuiesce.
+    let deinit = pos("static int serialpl011_deinit(const struct device *dev)");
+    let deinit_quiesce = tu[deinit..]
+        .find("serialpl011_on_deinit(&data->inner)")
+        .map(|o| deinit + o)
+        .expect("deinit must run the authored on_deinit quiesce");
+    let deinit_disable = tu[deinit..]
+        .find("serialpl011_port_service_set(&data->inner,")
+        .map(|o| deinit + o)
+        .expect("deinit must disable the port");
+    assert!(
+        deinit_quiesce < deinit_disable,
+        "C02 edge 4: on_deinit (mask-all quiesce) must precede the port disable in deinit"
+    );
 
     // -- the single-instance guard + the A-1/D11 cross-check (DUT at 0x9040000).
     pos("BUILD_ASSERT(DT_NUM_INST_STATUS_OKAY(DT_DRV_COMPAT) == 1");

@@ -1591,7 +1591,7 @@ struct input_ConfigResult input__impl_3__line_format_apply(struct input_SerialPl
         _13 = ((_11) | (_12));
         _14 = _8;
         _15 = ((_13) | (_14));
-        _16 = ((uint64_t)(((uint32_t)(48000000U))));
+        _16 = ((uint64_t)(((uint32_t)(24000000U))));
         _17 = _2.baud;
         _18 = ((uint64_t)(_17));
         _19 = _16;
@@ -2543,6 +2543,7 @@ static void __rseq_serial_0_serialpl011(void) {
     input__impl_1__on_init(&inst.inner);
     regseq_irq_enable(37u);
     input__impl_2__port_service_set(&inst.inner, (struct input_PortScope){ .tag = ((uint8_t)(0U)) }, 0);
+    while (!input__impl_5__tx_drain_query(&inst.inner)) { }
     input__impl_3__line_format_apply(&inst.inner, (struct input_LineFormat){ ((uint32_t)(115200U)), (struct input_DataBits){ .tag = ((uint8_t)(3U)) }, (struct input_Parity){ .tag = ((uint8_t)(0U)) }, (struct input_StopBits){ .tag = ((uint8_t)(0U)) } });
     input__impl_2__port_service_set(&inst.inner, (struct input_PortScope){ .tag = ((uint8_t)(0U)) }, 1);
     input__impl_4__irq_source_set(&inst.inner, (struct input_SerialIrqSource){ .tag = ((uint8_t)(1U)) }, (struct input_IrqSourceState){ .tag = ((uint8_t)(0U)) });

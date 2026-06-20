@@ -247,6 +247,71 @@ fn is_authorized_pointee_self<'tcx>(
     }
 }
 
+/// Resolve concrete associated-type *projection* aliases in a
+/// post-monomorphization callee/instance signature to their rigid form,
+/// leaving every `Alias(Opaque)` (RPIT) node untouched.
+///
+/// The `normalize_authorized_aliases` folder deliberately normalizes only the
+/// two regseq-driver-70 projection families (`Pointee::Metadata`,
+/// `Fn*::Output` over fn-pointers); every other `Alias(Projection)` short-
+/// circuits to `NonRigidTy`. That is correct for *generic*/identity-signature
+/// translation, where a projection over a type param is genuinely non-rigid.
+/// But a *fully-monomorphic* instance signature (e.g. `<SerialErrors as
+/// core::ops::BitOr>::bitor`, whose return type is `<SerialErrors as
+/// BitOr>::Output`) carries projections that are rigid-after-normalization
+/// (`== SerialErrors`); rejecting them as `NonRigidTy` is a false negative
+/// that drops a usable operator-overload / trait-method instance.
+///
+/// This helper is applied (via `fnsig::translate_fn_sig_monomorphic`) ONLY at
+/// the post-monomorphization signature sites, where `generic_args` are
+/// concrete, so each `Alias(Projection)` is closed and resolves. It stays
+/// node-local and conservative (matching the regseq-driver-70 no-widening
+/// rationale): a projection that still carries a generic param or an escaping
+/// bound var is left untouched (so it cannot reach `normalize_erasing_regions`,
+/// which a non-rigid projection would ICE on, and so a genuinely-generic
+/// signature still short-circuits to `NonRigidTy` exactly as before).
+/// `Alias(Opaque)` is never matched here, so the bucket-4 signature-non-rigid
+/// (RPIT) carve-out is preserved verbatim.
+pub(crate) fn normalize_monomorphic_fn_sig<'tcx>(
+    tcx: ty::TyCtxt<'tcx>,
+    sig: ty::PolyFnSig<'tcx>,
+) -> ty::PolyFnSig<'tcx> {
+    if !sig.has_aliases() {
+        return sig;
+    }
+    let mut folder = MonomorphicProjectionFolder { tcx };
+    sig.fold_with(&mut folder)
+}
+
+struct MonomorphicProjectionFolder<'tcx> {
+    tcx: ty::TyCtxt<'tcx>,
+}
+
+impl<'tcx> TypeFolder<ty::TyCtxt<'tcx>> for MonomorphicProjectionFolder<'tcx> {
+    fn cx(&self) -> ty::TyCtxt<'tcx> {
+        self.tcx
+    }
+
+    fn fold_ty(&mut self, ty: rustc_middle::ty::Ty<'tcx>) -> rustc_middle::ty::Ty<'tcx> {
+        if let TyKind::Alias(AliasTyKind::Projection, _) = ty.kind() {
+            // Normalize ONLY a fully-concrete projection. A projection that
+            // still references a generic param or an escaping bound var is not
+            // rigid-after-normalization; leaving it untouched both avoids an
+            // ICE in `normalize_erasing_regions` and keeps a genuinely-generic
+            // signature on the existing `NonRigidTy` path (no acceptance
+            // widening for generic code).
+            if !ty.has_param() && !ty.has_escaping_bound_vars() {
+                let normalized = self
+                    .tcx
+                    .normalize_erasing_regions(ty::TypingEnv::fully_monomorphized(), ty);
+                // Re-fold to resolve any projection nested in the result.
+                return normalized.fold_with(self);
+            }
+        }
+        ty.super_fold_with(self)
+    }
+}
+
 fn translate_erased_ty_inner<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     ty: rustc_middle::ty::Ty<'tcx>,

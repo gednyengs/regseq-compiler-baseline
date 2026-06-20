@@ -120,6 +120,17 @@ fn serial_pl011_six_stage_oracle() {
         "line-format must be programmed while the UART is disabled (PL011 §3.3.8)"
     );
 
+    // (1b) D17/C03: BEFORE reprogramming, the configure scaffold WAITS for the
+    //      current transfer to drain (FR.BUSY clear, via the author tx_drain_query)
+    //      — an FR read between the CR-disable and the divisor/LCR_H writes, so an
+    //      in-flight character is not corrupted. (The FEN-clear/FIFO-flush edge is
+    //      deferred: no register-role metadata, no in-scope FIFO op — see M2 record.)
+    let drain_poll = pos("R32 @0x18 = 0x00000000");
+    assert!(
+        cr_disable < drain_poll && drain_poll < lcr_h,
+        "D17: the FR.BUSY drain poll (tx_drain_query) precedes the line-format reprogram"
+    );
+
     // (2) The per-source interrupt arming (irq_source_set → IMSC) is a
     //     regseq_mmio_write DISTINCT from the line-level regseq_irq_enable
     //     (Codex F1 / I01): the line enable precedes the per-source arms, and the
@@ -130,6 +141,16 @@ fn serial_pl011_six_stage_oracle() {
     assert!(
         line_enable < rx_arm && rx_arm < tx_arm,
         "the line enable must precede the per-source IMSC arms (distinct ops, I01)"
+    );
+
+    // (2b) C02 edge 3 (clear-pending-before-unmask, T13/G-E1): the W1C ICR clear
+    //      (in on_init) precedes every per-source IMSC arm — a stale latched cause
+    //      must not be able to fire the instant a source unmasks (the behavioral
+    //      confirmation of the verify_c02 source-ordering gate).
+    let icr_clear = pos("W32 @0x44 = 0x000007ff");
+    assert!(
+        icr_clear < rx_arm && icr_clear < tx_arm,
+        "C02 edge 3: ICR-clear (on_init) must precede the per-source IMSC arms"
     );
 
     // (3) The synthesized ISR DECODES (reads MIS) on each fire and dispatches:

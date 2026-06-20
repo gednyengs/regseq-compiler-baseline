@@ -930,7 +930,8 @@ fn reject_call_site_intrinsics<'tcx>(
 }
 
 /// Translate a callee's post-monomorphization function signature via
-/// `tcx.fn_sig(def_id).instantiate(generic_args)` -> `translate_fn_sig`.
+/// `tcx.fn_sig(def_id).instantiate(generic_args)` -> `translate_fn_sig_monomorphic`
+/// (which resolves concrete associated-type projections before translation).
 /// Shared by the reactive direct-call path and the regseq-driver-74
 /// orphan-instantiation post-pass so both produce an identical
 /// `FnSigId` for the same `(def_id, generic_args)` pair.
@@ -944,7 +945,10 @@ pub(crate) fn callsite_fn_sig<'tcx>(
         .tcx
         .fn_sig(def_id)
         .instantiate(cx.input.tcx, generic_args);
-    crate::bridge::fnsig::translate_fn_sig(cx, poly)
+    // Post-monomorphization callee signature: resolve concrete associated-type
+    // projections (e.g. a `BitOr::Output` operator-overload return) before
+    // translation. See `translate_fn_sig_monomorphic`.
+    crate::bridge::fnsig::translate_fn_sig_monomorphic(cx, poly)
 }
 
 pub(crate) fn lookup_or_create_direct_instance<'tcx>(
