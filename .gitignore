@@ -25,6 +25,10 @@ __pycache__/
 .claude/sekekama/grill-to-plan/*
 !.claude/sekekama/grill-to-plan/specs/
 
+# Session-handoff scratch (per-session continuity notes; not project records).
+# (.claude/sekekama/session-handoff/ is already covered by the .claude/sekekama/* rule above.)
+.handoff/
+
 # Tool config
 .mcp.json
 *.swp
