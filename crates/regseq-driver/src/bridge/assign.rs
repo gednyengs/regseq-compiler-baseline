@@ -1,8 +1,8 @@
 //! Phase 4 final `ItemId` assignment and side-table population.
 
 use super::{
-    atomic, device_lifecycle, framework_type, interrupt, intrinsic, synchronization, timed_delay,
-    BridgeCtxt, BridgeError,
+    atomic, clock, device_lifecycle, framework_type, interrupt, intrinsic, synchronization,
+    timed_delay, BridgeCtxt, BridgeError,
 };
 
 /// Assigns dense `ItemId`s and populates item side tables in lock-step.
@@ -35,6 +35,16 @@ pub(crate) fn assign_item_ids_and_populate_sidetables(
     // Synchronization: classify lock fields on the same driver map. Runs after
     // device-lifecycle (the walk root) and interrupt (sibling resource fields).
     synchronization::materialise_synchronization(ctxt)?;
+    // Peripheral-clock-management (clock construct): recognize `Clock` resource
+    // fields on the same driver map. Runs after device-lifecycle (the walk root)
+    // and after interrupt (sibling resource fields) — order among sibling
+    // resources is irrelevant; the preamble ordering is derived downstream from
+    // `model.clock` (GRILL D16).
+    clock::materialise_clocks(ctxt)?;
+    // Clock intrinsic legality (C06 N22): every recognized `clock_*` intrinsic
+    // must be a method on the `Clock` shell. Runs after `materialise_intrinsics`
+    // recorded the markers it walks (mirrors `atomic::validate_atomic_signatures`).
+    clock::validate_clock_signatures(ctxt)?;
     Ok(())
 }
 

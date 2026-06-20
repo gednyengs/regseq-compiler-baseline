@@ -183,6 +183,7 @@ fn root_struct_exposes_spec_field_set() {
         interrupt,
         serial,
         synchronization,
+        clock,
     } = m;
 
     assert_eq!(primary_crate, CrateId::ZERO);
@@ -207,6 +208,7 @@ fn root_struct_exposes_spec_field_set() {
     assert_eq!(interrupt, crate::InterruptTables::default());
     assert_eq!(serial, crate::SerialTables::default());
     assert_eq!(synchronization, crate::SynchronizationTables::default());
+    assert_eq!(clock, crate::ClockTables::default());
 }
 
 // ------------------------------------------------------------------

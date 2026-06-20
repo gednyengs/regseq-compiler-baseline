@@ -1,0 +1,18 @@
+LC register pl011clk match=amba:0x41011/0xfffff
+BUS register_driver path=amba binding=bound
+LC create
+LC associate
+LC preamble regs
+BUS claim_regions bar=-1
+BUS get_handle
+BUS map base=0x9000000 size=0x1000 bar=-1
+CLK acquire uartclk
+LC call on_init
+CLK enable uartclk
+CLK rate uartclk = 0x16e3600
+W32 @0x9000000 = 0x016e3600
+LC teardown present=1
+LC call on_deinit
+CLK disable uartclk
+CLK release uartclk
+LC postamble regs

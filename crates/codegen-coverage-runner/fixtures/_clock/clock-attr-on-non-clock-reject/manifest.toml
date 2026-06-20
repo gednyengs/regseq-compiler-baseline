@@ -1,0 +1,9 @@
+name   = "clock-attr-on-non-clock-reject"
+kind   = "rust"
+# C06 N13: a `#[rseq::clock(...)]` attribute on a field that is not a `Clock`.
+covers = ["CLK-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "CLK-ERR-ATTR-ON-NON-CLOCK"

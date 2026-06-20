@@ -185,6 +185,9 @@ fn diag_logging_post_peel_shape_and_attrs() {
                 AttrData::SyncResource { .. } => {
                     panic!("spurious AttrData on log callee: SyncResource")
                 }
+                AttrData::ClockResource { .. } => {
+                    panic!("spurious AttrData on log callee: ClockResource")
+                }
             }
         }
     }

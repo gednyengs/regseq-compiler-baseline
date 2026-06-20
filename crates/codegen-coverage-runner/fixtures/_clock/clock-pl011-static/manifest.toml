@@ -1,0 +1,12 @@
+name   = "clock-pl011-static"
+kind   = "rust"
+# The peripheral-clock-management M1 behavioral-oracle (STATIC half, PLAN T13):
+# the SAME driver as clock-pl011-managed, bound to a STATIC [clock.uartclk]
+# (mode="static", no provider). The backend const-folds: enable()/disable() →
+# no-op (no CLK enable/disable trace), get_rate() → default_frequency (no CLK
+# rate hook). acquire_clock/release are still emitted. expected.stdout shows the
+# acquire/release framing + the FOLDED rate in the W write — distinct from the
+# managed pair member (D09). Covers aggregation rides clock_covers.
+covers = ["CLK-1", "CLK-5", "CLK-6"]
+lifecycle_scenario = "orderly"
+expect = "pass"

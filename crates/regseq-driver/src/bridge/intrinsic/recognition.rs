@@ -8,8 +8,8 @@
 //! family-specific logic lives in each construct's bridge module.
 
 use regseq_model::{
-    AtomicOp, AttrData, ConfigOp, DefPathData, FetchOp, IntrinsicKind, ItemId, LogLevel, MmioOp,
-    RegseqModel,
+    AtomicOp, AttrData, ClockOp, ConfigOp, DefPathData, FetchOp, IntrinsicKind, ItemId, LogLevel,
+    MmioOp, RegseqModel,
 };
 use rustc_span::{def_id::DefId, Symbol as RustcSymbol};
 
@@ -113,6 +113,12 @@ fn intrinsic_kind_for_name(name: &str) -> Option<IntrinsicKind> {
         "atomic_bit_test_set" => Some(IntrinsicKind::Atomic(AtomicOp::BitTestSet)),
         "atomic_bit_test_clear" => Some(IntrinsicKind::Atomic(AtomicOp::BitTestClear)),
         "atomic_fence" => Some(IntrinsicKind::Atomic(AtomicOp::Fence)),
+        // Peripheral-clock-management intrinsics (clock construct): the `Clock`
+        // wrapper methods (`enable`/`disable`/`get_rate`). Keep in sync with
+        // `regseq_model::IntrinsicKind::from_name`.
+        "clock_enable" => Some(IntrinsicKind::Clock(ClockOp::Enable)),
+        "clock_disable" => Some(IntrinsicKind::Clock(ClockOp::Disable)),
+        "clock_get_rate" => Some(IntrinsicKind::Clock(ClockOp::GetRate)),
         _ => None,
     }
 }
@@ -166,6 +172,15 @@ fn fn_name_matches_kind(name: &str, kind: &IntrinsicKind) -> bool {
             AtomicOp::BitTestSet => name == "bit_test_set",
             AtomicOp::BitTestClear => name == "bit_test_clear",
             AtomicOp::Fence => name == "fence",
+        },
+        // The `Clock` wrapper methods (peripheral-clock-management construct).
+        // The `#[rseq::intrinsic("clock_*")]` attribute is the authority; the
+        // leaf method name is a redundant gate (the leaf is the short form:
+        // `enable`, `disable`, `get_rate`).
+        IntrinsicKind::Clock(op) => match op {
+            ClockOp::Enable => name == "enable",
+            ClockOp::Disable => name == "disable",
+            ClockOp::GetRate => name == "get_rate",
         },
     }
 }

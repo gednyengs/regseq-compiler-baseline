@@ -935,6 +935,17 @@ fn validate_attr_data_payload(
         // The sync-resource marker carries a closed `SyncKind` enum with no
         // nested model IDs, so there is nothing to range-check here.
         AttrData::SyncResource { .. } => Ok(()),
+        // The clock-resource marker carries the interned resource id;
+        // range-check it against the string table (and `required` is a plain
+        // bool — no nested model IDs).
+        AttrData::ClockResource { id, .. } => {
+            if id.index() >= model.strings.len() {
+                return Err(InvariantViolation::DomainAttrMalformed {
+                    reason: "ClockResource id StringId is out of range",
+                });
+            }
+            Ok(())
+        }
     }
 }
 

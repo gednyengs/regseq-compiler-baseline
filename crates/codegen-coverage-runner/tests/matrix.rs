@@ -118,6 +118,37 @@ fn committed_matrix_carries_the_os_capability_row_deferred() {
 }
 
 #[test]
+fn committed_matrix_carries_the_peripheral_clock_rows_deferred() {
+    // peripheral-clock-management T18: the CLK-1..CLK-9 rows (7 behavioral + 2
+    // reject families) are present and `deferred` (the LC/OS/IRQ precedent —
+    // `_clock` is outside Mode-A discovery, so `covered` would mint
+    // covered_without_green drift; the real gate is tests/clock_covers.rs + the
+    // sole-binary clock e2es).
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../docs/discussions/generic-c-backend/phase-1/01-construct-surface-and-matrix.md",
+    );
+    let rows = matrix::parse(&path).expect("the committed Doc-1 matrix must parse");
+    let clk: std::collections::BTreeSet<&str> = rows
+        .iter()
+        .map(|r| r.id.as_str())
+        .filter(|id| id.starts_with("CLK-"))
+        .collect();
+    for n in 1..=9 {
+        let id = format!("CLK-{n}");
+        assert!(clk.contains(id.as_str()), "matrix must contain {id}");
+    }
+    assert_eq!(clk.len(), 9, "exactly 9 peripheral-clock rows");
+    for r in rows.iter().filter(|r| r.id.starts_with("CLK-")) {
+        assert_eq!(
+            r.status,
+            Status::Deferred,
+            "{} is `deferred`; its coverage gate is the dedicated covers test",
+            r.id
+        );
+    }
+}
+
+#[test]
 fn rejects_duplicate_ids() {
     let md = "\
 | id | construct | C lowering | status | spec ref | notes |\n\

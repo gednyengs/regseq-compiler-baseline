@@ -1,0 +1,9 @@
+name   = "clock-malformed-attr-reject"
+kind   = "rust"
+# C06 N12: a `#[rseq::clock(...)]` with an unknown key (clock admits only `id`).
+covers = ["CLK-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "CLK-ERR-MALFORMED-ATTR"

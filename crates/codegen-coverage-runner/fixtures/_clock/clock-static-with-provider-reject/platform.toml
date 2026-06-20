@@ -1,0 +1,15 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "qemu-virt"
+arch = "aarch64"
+
+[mmio.regs]
+base = 0x09000000
+size = 0x1000
+
+[clock.uartclk]
+mode = "static"
+default_frequency = 48000000
+provider = "uartclk"

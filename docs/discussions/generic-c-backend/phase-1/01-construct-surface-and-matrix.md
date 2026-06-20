@@ -554,6 +554,36 @@ sole-binary e2es (`tests/irq_pl011_e2e.rs`, `tests/irq_initfail_e2e.rs`,
 | IRQ-12 | Option/array lowering reached | emit-stage `EmitError` — the form is recognized whole, the lowering loudly deferred (never partial) | deferred | GRILL D06/R02/I05 | **IRQ-FORM-EMIT-REJECT**: witnessed by `irq-option-lowering-reject` |
 | IRQ-13 | reachable `DeferWork` | emit-stage `EmitError` naming `deferred-work-item-scheduling` (fail-loud on Unknown too) | deferred | GRILL R09/D04/I05 | **IRQ-DEFERWORK-REJECT**: witnessed by `irq-deferwork-reject` |
 
+### Peripheral-clock rows (peripheral-clock-management unit, construct #7)
+
+The compiler-managed peripheral input clock: a typed `Clock` field
+(`#[rseq::clock(id)]`) the author `enable()`/`disable()`/`get_rate()`s, with a
+compiler-synthesized `acquire`/`release` framing slotted after the bus
+`map_region` keystone and before the interrupt register (exact-reverse at
+teardown, C07). The integrator's `[clock.<id>]` selects **managed** (real OS
+clock framework → live `CLK enable`/`CLK rate` hooks) or **static** (fixed
+`default_frequency` → the backend const-folds `enable`/`disable` to no-ops and
+`get_rate` to the literal); the generic_c `CLK …` trace is the lowering made
+observable (C05). Status is `deferred` by the LC/IRQ precedent: the witness
+fixtures live under `fixtures/_clock/` (interner-isolated, outside Mode-A
+`discover`), so a `covered` status would mint `covered_without_green` drift in
+`ledger::build`; the REAL gate is the dedicated covers-aggregation test
+(`tests/clock_covers.rs`) plus the sole-binary e2es
+(`tests/clock_pl011_managed_e2e.rs`, `tests/clock_pl011_static_e2e.rs`,
+`tests/clock_composed_e2e.rs`, `tests/clock_reject_e2e.rs`).
+
+| id | construct | C lowering | status | spec ref | notes |
+| -- | --------- | ---------- | ------ | -------- | ----- |
+| CLK-1 | acquire/release framing | `CLK acquire <id>` after the bus `map` keystone + before `LC call on_init`; `CLK release <id>` LIFO at teardown (after `on_deinit`, before region unmap) — compiler-synthesized, never authored | deferred | peripheral-clock-management GRILL R04/R05/I01/I08, C07 | **CLK-FRAMING**: all three of `clock-pl011-managed`/`-static`/`-composed` |
+| CLK-2 | managed enable lowering | `CLK enable <id>` for the author `enable()` call (generic-c managed hook) | deferred | GRILL R02/R07, C04 managed | **CLK-ENABLE**: `clock-pl011-managed`/`-composed` |
+| CLK-3 | managed get_rate live query | `CLK rate <id> = <hz>` raw live query, no fallback (the rate recorded at acquire) | deferred | GRILL R10/I04, C04 managed | **CLK-RATE-LIVE**: `clock-pl011-managed`/`-composed` |
+| CLK-4 | managed disable lowering | `CLK disable <id>` for the author `disable()` call in `on_deinit` (generic-c managed hook) | deferred | GRILL R02/R07, C04 managed | **CLK-DISABLE**: `clock-pl011-managed`/`-composed` |
+| CLK-5 | static enable/disable no-op fold | a static binding folds `enable()`/`disable()` to no-ops — NO `CLK enable`/`CLK disable` in the trace despite the author calls | deferred | GRILL R08/D07, C04 static | **CLK-STATIC-NOOP**: backend const-fold; `clock-pl011-static` |
+| CLK-6 | static get_rate const-fold | static `get_rate()` folds to `default_frequency` (no `CLK rate` hook); the folded Hz flows into the register write | deferred | GRILL R08/R10/I04/D10, C04 static | **CLK-STATIC-FOLD**: `clock-pl011-static` |
+| CLK-7 | composed C07 cross-construct ordering | preamble `BUS map → CLK acquire → IRQ register` (before `LC call on_init`); teardown exact-reverse `IRQ unregister → CLK release → LC postamble` (the region resource postamble), with the clock alive across `on_init`/`on_deinit` | deferred | GRILL I08/C07, D16 | **CLK-COMPOSED-ORDER**: clock interleaved with region + interrupt; `clock-pl011-composed` |
+| CLK-8 | recognition C06 reject family | acquire-stage `CLK-ERR-*` rejection: missing-id (N1), unsupported `Option<Clock>` form (N2/N14), malformed/unknown attr key (N12), attr on non-`Clock` field (N13), duplicate L1 id (N15), forbidden L1 key (N21), spoofed `clock_*` receiver (N22) | deferred | GRILL C06/D13/D17 | **CLK-C06-RECOGNITION**: one reject fixture per check, `fires it and only it` via stage+diagnostic |
+| CLK-9 | binding C06 reject family | bind-stage `CLK-L2-*` rejection: missing `[clock.<id>]` (N3), orphan section (N4), missing/zero `default_frequency` (N5/N18), bad/missing mode (N6), managed-without-provider (N7), static-with-provider (N8) | deferred | GRILL C06/C02/D14/D17 | **CLK-C06-BINDING**: one reject fixture per check, `fires it and only it` via stage+diagnostic |
+
 ---
 
 ## Output of this doc — the gap list

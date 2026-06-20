@@ -1,0 +1,10 @@
+name   = "clock-spoofed-receiver-reject"
+kind   = "rust"
+# C06 N22: a `#[rseq::intrinsic("clock_enable")]` tag on a method whose receiver
+# is not the `Clock` shell — a spoofed clock op.
+covers = ["CLK-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "CLK-ERR-SPOOFED-RECEIVER"

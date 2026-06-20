@@ -26,6 +26,7 @@
 //! emit-what-we-can branch (I06).
 
 mod body;
+mod clock;
 mod naming;
 mod serial;
 mod sync;
@@ -884,6 +885,16 @@ fn emit_init_fn(
         ));
     } else if !uses_data {
         out.push_str("\tARG_UNUSED(dev);\n");
+    }
+    // Peripheral-clock-management acquire preamble (clock construct, C07/D12):
+    // AFTER the region map, BEFORE the interrupt connect — the managed clock
+    // controller readiness gate (`device_is_ready` → -ENODEV, a hard init error,
+    // I02). Empty for a clock-less / static-only driver (I07).
+    if clock::has_managed_clock(cx.model, cx.driver.driver_ty) {
+        cx.extra_includes.insert("<zephyr/drivers/clock_control.h>");
+        cx.extra_includes.insert("<errno.h>");
+        let acquire = clock::acquire_lines(cx.model, cx.driver.driver_ty);
+        out.push_str(&acquire);
     }
     // Interrupt preamble (construct #6, D14): the static connect — LAST
     // among the resource preambles. The sw_isr_table install is BUILD-TIME

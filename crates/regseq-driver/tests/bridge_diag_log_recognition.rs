@@ -283,6 +283,8 @@ fn item_log_levels(model: &RegseqModel, leaf: &str) -> Vec<LogLevel> {
             AttrData::Atomic { .. } => None,
             // Synchronization marker is not a log level; skip it.
             AttrData::SyncResource { .. } => None,
+            // Clock-construct marker is not a log level; skip it.
+            AttrData::ClockResource { .. } => None,
         })
         .collect()
 }

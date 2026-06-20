@@ -385,6 +385,8 @@ fn run_bridge_phase5_peels_all_four_severities() {
                         AttrData::Atomic { .. } => {}
                         // Synchronization marker; this fixture produces none.
                         AttrData::SyncResource { .. } => {}
+                        // Clock-construct marker; this fixture produces none.
+                        AttrData::ClockResource { .. } => {}
                     }
                 }
             }

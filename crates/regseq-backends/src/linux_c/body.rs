@@ -14,9 +14,10 @@
 use std::collections::BTreeMap;
 
 use regseq_model::{
-    AggregateKind, AtomicElement, AtomicOp, AttrData, BinOp, CallCallee, CastKind, Const, EnumShape,
-    FetchOp, FieldIdx, InstanceId, InstanceKind, IntrinsicKind, ItemId, LayoutKind, LocalId, Operand,
-    Place, PlaceElem, RegseqModel, Rvalue, StatementKind, TerminatorKind, Ty, TyId, UnOp,
+    AggregateKind, AtomicElement, AtomicOp, AttrData, BinOp, CallCallee, CastKind, ClockBinding,
+    ClockMode, ClockOp, Const, EnumShape, FetchOp, FieldIdx, FieldPath, InstanceId, InstanceKind,
+    IntrinsicKind, ItemId, LayoutKind, LocalId, Operand, Place, PlaceElem, RegseqModel, Rvalue,
+    StatementKind, TerminatorKind, Ty, TyId, UnOp, VariantIdx,
 };
 
 use super::types::{self, TypeNames};
@@ -223,6 +224,29 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
         cx.elided_locals.insert(*g);
     }
 
+    // Peripheral-clock-management (clock construct, M3/T14): a clock op's receiver
+    // borrow temp (`_t = &self.<clock>`, typed to the `&Clock` facade) is DEAD in
+    // the emitted body — `emit_clock` recovers the bound field directly — and its
+    // facade type no longer matches the morphed `struct clk *` field, so leaving
+    // it would not compile. Elide it (mirrors the sync receiver elision); the
+    // taint fixpoint then drops its derived borrow temps.
+    for bb in body.basic_blocks.iter() {
+        if let TerminatorKind::Call {
+            callee: CallCallee::Direct(callee),
+            args,
+            ..
+        } = &bb.terminator.kind
+        {
+            if matches!(cx.intrinsic_of(*callee), Some(IntrinsicKind::Clock(_))) {
+                if let Some(Operand::Copy(p) | Operand::Move(p)) = args.first() {
+                    if p.projection.is_empty() {
+                        cx.elided_locals.insert(p.local);
+                    }
+                }
+            }
+        }
+    }
+
     // Taint to fixpoint: borrow/copy temps deriving from an elided local are
     // elided too (they exist only symbolically, for the receiver chase). A
     // non-elided use of any of them still fails loud in `place_lvalue`.
@@ -415,31 +439,98 @@ fn emit_assign(
         Rvalue::Aggregate(kind, operands) => emit_aggregate(cx, body, &lv, kind, operands, out),
         Rvalue::Discriminant(src) => {
             // The discriminant of an enum `match` (`_t = Discriminant(e); switchInt(_t)`).
-            // For the fieldless byte carriers the subset lowers, the stored tag
-            // byte IS the discriminant value, so read it from the carrier and
-            // cast to the discriminant local's type (SwitchInt compares against
-            // the same per-variant tag values).
+            // The SwitchInt compares against the Rust semantic DISCRIMINANT, so the
+            // stored tag/niche byte must be DECODED to that discriminant. When the
+            // stored tag IS the discriminant (a Direct-encoded enum) the raw byte
+            // already is the SwitchInt value — read it directly (the legacy form,
+            // no golden churn). Otherwise (a niche-encoded `Result<(), E>`, whose
+            // Ok/Err niche bytes are not the discriminant) emit the tag→discriminant
+            // decode ternary — without it `enable()?` (the first fallible author op
+            // `?`'d in a per-target body) would mis-route every branch.
             let src_ty = place_ty(cx.model, body, src)?;
             let src_lv = place_lvalue(cx, body, src)?;
             let (offset, size) = types::enum_tag_cell(cx.model, src_ty)?;
             let dest_c = types::c_type(cx.model, &mut cx.names, dest_ty)?;
-            match size {
-                1 => out.push_str(&format!("\t{lv} = ({dest_c}){src_lv}._raw[{offset}];\n")),
-                2 | 4 | 8 => {
-                    let rd = match size {
-                        2 => "u16",
-                        4 => "u32",
-                        _ => "u64",
-                    };
-                    out.push_str(&format!(
-                        "\t{{ {rd} __d; memcpy(&__d, &{src_lv}._raw[{offset}], sizeof(__d)); {lv} = ({dest_c})__d; }}\n"
-                    ));
-                }
+            let rd = match size {
+                1 => "u8",
+                2 => "u16",
+                4 => "u32",
+                8 => "u64",
                 other => {
                     return Err(EmitError::Unsupported(format!(
                         "enum discriminant tag width {other} (first-light subset)"
                     )))
                 }
+            };
+            let layout = types::layout_of(cx.model, src_ty).ok_or_else(|| {
+                EmitError::Unsupported("discriminant of a non-aggregate".into())
+            })?;
+            let LayoutKind::Enum {
+                shape: EnumShape::Multiple { variants, .. },
+            } = &layout.kind
+            else {
+                return Err(EmitError::Unsupported(
+                    "discriminant of an unsupported enum shape (first-light subset)".into(),
+                ));
+            };
+            // The raw tag/niche byte equals the SwitchInt value (the Rust
+            // DISCRIMINANT, not the variant index) exactly when every variant's
+            // stored tag IS its discriminant — i.e. a Direct (tag-)encoded enum,
+            // including explicit discriminants. Then read it directly (the legacy
+            // form, no golden churn). A niche-encoded enum (an untagged data
+            // variant, e.g. `Result<(), E>`) needs the tag→discriminant decode.
+            let is_identity = variants.iter().all(|v| v.tag_value == Some(v.discriminant));
+            let to_u64 = |x: u128| -> Result<u64, EmitError> {
+                (x <= u64::MAX as u128).then_some(x as u64).ok_or_else(|| {
+                    EmitError::Unsupported("128-bit enum tag/discriminant (first-light subset)".into())
+                })
+            };
+            if is_identity && size == 1 {
+                out.push_str(&format!("\t{lv} = ({dest_c}){src_lv}._raw[{offset}];\n"));
+            } else if is_identity {
+                out.push_str(&format!(
+                    "\t{{ {rd} __d; memcpy(&__d, &{src_lv}._raw[{offset}], sizeof(__d)); {lv} = ({dest_c})__d; }}\n"
+                ));
+            } else {
+                // Decode the stored tag → the Rust discriminant (what SwitchInt
+                // compares). The else is the untagged niche data variant, or the
+                // last variant for a fully-tagged enum (dead — every raw value
+                // then matches a case).
+                let untagged: Vec<usize> = variants
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, v)| v.tag_value.is_none())
+                    .map(|(i, _)| i)
+                    .collect();
+                if untagged.len() > 1 {
+                    return Err(EmitError::Unsupported(
+                        "enum with multiple untagged variants (first-light subset)".into(),
+                    ));
+                }
+                let else_idx = untagged
+                    .first()
+                    .copied()
+                    .unwrap_or(variants.len().saturating_sub(1));
+                let mut ternary = format!("{:#x}", to_u64(variants[else_idx].discriminant)?);
+                for (i, v) in variants.iter().enumerate().rev() {
+                    if i == else_idx {
+                        continue;
+                    }
+                    let tag = v.tag_value.ok_or_else(|| {
+                        EmitError::Unsupported(
+                            "untagged enum variant outside the niche-else position".into(),
+                        )
+                    })?;
+                    ternary = format!(
+                        "(__d == {:#x} ? {:#x} : {})",
+                        to_u64(tag)?,
+                        to_u64(v.discriminant)?,
+                        ternary
+                    );
+                }
+                out.push_str(&format!(
+                    "\t{{ {rd} __d; memcpy(&__d, &{src_lv}._raw[{offset}], sizeof(__d)); {lv} = ({dest_c})({ternary}); }}\n"
+                ));
             }
             Ok(())
         }
@@ -791,6 +882,11 @@ fn emit_call(
             IntrinsicKind::Atomic(op) => {
                 emit_atomic(cx, op, *instance, body, args, destination, out)
             }
+            // Peripheral-clock-management lowering (clock construct, M3/T14,
+            // C04/D08): managed enable/disable/get_rate route to the Linux clk
+            // framework over the morphed `struct clk *` field; static enable/
+            // disable are no-ops and get_rate const-folds (D07).
+            IntrinsicKind::Clock(op) => emit_clock(cx, op, body, args, destination, out),
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {
@@ -877,9 +973,109 @@ pub(crate) fn operand_expr_typed(
     consumer: Option<TyId>,
 ) -> Result<String, EmitError> {
     match op {
-        Operand::Copy(place) | Operand::Move(place) => place_lvalue(cx, body, place),
+        Operand::Copy(place) | Operand::Move(place) => {
+            // An enum-variant payload READ (`(_e as Variant).0`) appears in the
+            // `?`-operator desugar of a fallible author op (the clock construct's
+            // `enable()?` is the first to reach linux_c). The opaque `_raw`
+            // carrier has no union view, so read the variant field through an
+            // alignment-/aliasing-safe memcpy statement-expression rather than
+            // routing the `Downcast` through `place_lvalue` (which rejects it, so
+            // a `Downcast` in a write / `&` position still fails loud).
+            if place
+                .projection
+                .iter()
+                .any(|e| matches!(e, PlaceElem::Downcast(_)))
+            {
+                read_downcast_payload(cx, body, place)
+            } else {
+                place_lvalue(cx, body, place)
+            }
+        }
         Operand::Constant(id) => const_expr(cx, *id, consumer),
     }
+}
+
+/// Read an enum-variant payload place (`<prefix> as Variant).<field>`) as a C
+/// value expression: walk the prefix to the enum carrier lvalue, then read the
+/// variant field from the opaque `_raw[..]` carrier at its layout offset via a
+/// memcpy statement-expression (alignment-/aliasing-safe, the `Rvalue::Discriminant`
+/// memcpy idiom). v1 supports the `?`-desugar shape — a single `Downcast`
+/// immediately followed by its payload `Field`, with no trailing projection.
+fn read_downcast_payload(
+    cx: &mut LowerCx<'_>,
+    body: &regseq_model::Body,
+    place: &Place,
+) -> Result<String, EmitError> {
+    let mut expr = local_name(cx.model, body, place.local);
+    let mut ty = body.local_decls[place.local].ty;
+    let mut iter = place.projection.iter().peekable();
+    while let Some(elem) = iter.next() {
+        match elem {
+            PlaceElem::Deref => {
+                expr = format!("(*{expr})");
+                ty = match &cx.model.types[ty] {
+                    Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                    other => {
+                        return Err(EmitError::Unsupported(format!(
+                            "deref of non-pointer {other:?} in a downcast read"
+                        )))
+                    }
+                };
+            }
+            PlaceElem::Field(idx, field_ty) => {
+                // A struct field BEFORE any downcast (the enum sits in a field).
+                let fname = field_c_name(cx.model, ty, idx.as_u32() as usize)?;
+                expr = format!("{expr}.{fname}");
+                ty = *field_ty;
+            }
+            PlaceElem::Downcast(variant) => {
+                let Some(PlaceElem::Field(fidx, field_ty)) = iter.next() else {
+                    return Err(EmitError::Unsupported(
+                        "Downcast not followed by a Field (malformed place)".into(),
+                    ));
+                };
+                if iter.peek().is_some() {
+                    return Err(EmitError::Unsupported(
+                        "projection after a downcast variant field (first-light subset)".into(),
+                    ));
+                }
+                // The variant field's byte offset in the carrier (layout borrow
+                // scoped so it ends before the `&mut cx.names` type spelling).
+                let offset = {
+                    let layout = types::layout_of(cx.model, ty).ok_or_else(|| {
+                        EmitError::Unsupported("downcast read of a type with no layout".into())
+                    })?;
+                    let LayoutKind::Enum {
+                        shape: EnumShape::Multiple { variants, .. },
+                    } = &layout.kind
+                    else {
+                        return Err(EmitError::Unsupported(
+                            "downcast read of a non-tagged enum (first-light subset)".into(),
+                        ));
+                    };
+                    let vlayout = variants.get(variant.as_u32() as usize).ok_or_else(|| {
+                        EmitError::Unsupported("downcast variant index out of range".into())
+                    })?;
+                    let f = vlayout.fields.get(fidx.as_u32() as usize).ok_or_else(|| {
+                        EmitError::Unsupported("downcast variant field index out of range".into())
+                    })?;
+                    f.offset
+                };
+                let fty = types::c_type(cx.model, &mut cx.names, *field_ty)?;
+                return Ok(format!(
+                    "({{ {fty} __cv; memcpy(&__cv, &{expr}._raw[{offset}], sizeof(__cv)); __cv; }})"
+                ));
+            }
+            other => {
+                return Err(EmitError::Unsupported(format!(
+                    "downcast-read projection {other:?} (first-light subset)"
+                )))
+            }
+        }
+    }
+    // No `Downcast` in the projection — the caller gates on its presence, so this
+    // is unreachable; fall back to the ordinary place lvalue.
+    place_lvalue(cx, body, place)
 }
 
 /// Render an operand with no consumer-type context.
@@ -1180,6 +1376,170 @@ fn emit_atomic(
             out.push_str("\t  } }\n");
         }
         AtomicOp::Fence => unreachable!("fence handled before receiver recovery"),
+    }
+    Ok(())
+}
+
+/// Recover the `(struct clk * field lvalue, binding)` named by a `Clock`
+/// wrapper-method `&self.clk` receiver (peripheral-clock-management construct,
+/// M3/T14): chase the receiver to the borrowed driver-struct field place, read
+/// the recognized `AttrData::ClockResource { id }` marker for the L1 id, and pull
+/// the L2-resolved `ClockBinding` from `model.clock`. The field lvalue
+/// (`(*self).<f>`) is the morphed `struct clk *` member for a MANAGED clock; for a
+/// STATIC clock it is computed but never used by the caller (enable/disable
+/// no-op, get_rate const-folds — the ZST `Clock` field is dropped). Mirrors
+/// `recover_atomic_field` + the generic-c `recover_clock`.
+fn recover_clock(
+    cx: &mut LowerCx<'_>,
+    body: &regseq_model::Body,
+    recv: &Operand,
+) -> Result<(String, ClockBinding), EmitError> {
+    let src = cx.resolve_receiver_src(body, recv, 0)?;
+    let mut ty = body.local_decls[src.local].ty;
+    let mut field: Option<(ItemId, FieldIdx)> = None;
+    for elem in src.projection.iter() {
+        match elem {
+            PlaceElem::Deref => {
+                ty = match &cx.model.types[ty] {
+                    Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                    _ => {
+                        return Err(EmitError::Unsupported(
+                            "clock receiver deref of a non-pointer type".into(),
+                        ))
+                    }
+                };
+            }
+            PlaceElem::Field(idx, fty) => {
+                if let Ty::Struct { item, .. } = &cx.model.types[ty] {
+                    field = Some((*item, *idx));
+                }
+                ty = *fty;
+            }
+            PlaceElem::Index(_) | PlaceElem::ConstantIndex { .. } => {
+                return Err(EmitError::Unsupported(
+                    "clock receiver indexes an array (the array form is not built in v1)".into(),
+                ));
+            }
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "clock receiver has an unsupported projection element".into(),
+                ))
+            }
+        }
+    }
+    let (item, fidx) = field.ok_or_else(|| {
+        EmitError::Unsupported("clock receiver does not resolve to a driver field".into())
+    })?;
+    let field_path = FieldPath {
+        item,
+        variant: VariantIdx::from_u32(0),
+        field: fidx,
+    };
+    let id = cx
+        .model
+        .domain_attrs
+        .field_attrs
+        .get(&field_path)
+        .and_then(|attrs| {
+            attrs.iter().find_map(|a| match a {
+                AttrData::ClockResource { id, .. } => Some(*id),
+                _ => None,
+            })
+        })
+        .ok_or_else(|| {
+            EmitError::Unsupported("clock receiver field has no recorded ClockResource marker".into())
+        })?;
+    let binding = cx
+        .model
+        .clock
+        .drivers
+        .get(&item)
+        .and_then(|d| d.resources.iter().find(|r| r.id == id))
+        .map(|r| r.binding.clone())
+        .ok_or_else(|| {
+            EmitError::Unsupported("clock receiver field has no resolved ClockResource binding".into())
+        })?;
+    let lv = place_lvalue(cx, body, &src)?;
+    Ok((lv, binding))
+}
+
+/// Peripheral-clock-management author-op lowering (clock construct, M3/T14,
+/// C04/D08): lower an `IntrinsicKind::Clock(op)` wrapper-method Call over the
+/// receiver's resolved clock binding.
+///   * MANAGED — `enable` → `clk_prepare_enable`; `disable` →
+///     `clk_disable_unprepare`; `get_rate` → raw `clk_get_rate` (no fallback,
+///     D10/R10), over the morphed `struct clk *` field. A `clk_prepare_enable`
+///     failure PROPAGATES as `Err` (the author's `?` returns it; the scaffold
+///     adapter maps it to the kernel errno) — never silently swallowed; v1 maps
+///     it to `RegseqError`'s first variant (→ -EIO). Only the sleepable
+///     `clk_prepare_enable` path is emitted in v1 (the atomic split is
+///     designed-in, not built — D11).
+///   * STATIC — `enable`/`disable` are no-ops; `get_rate` const-folds to the
+///     resolved `default_frequency` (D07). The field is dropped; no `clk_*` emits.
+/// The caller (`emit_terminator`) appends the `goto bb_<target>`.
+fn emit_clock(
+    cx: &mut LowerCx<'_>,
+    op: ClockOp,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    destination: &Place,
+    out: &mut String,
+) -> Result<(), EmitError> {
+    let recv = args
+        .first()
+        .ok_or_else(|| EmitError::Unsupported("clock op call without a receiver".into()))?;
+    let (field_lv, binding) = recover_clock(cx, body, recv)?;
+    let is_static = binding.mode == ClockMode::Static;
+    if !is_static {
+        cx.extra_includes.insert("<linux/clk.h>");
+    }
+    match op {
+        ClockOp::Enable => {
+            let dst_ty = place_ty(cx.model, body, destination)?;
+            let dst = place_lvalue(cx, body, destination)?;
+            if is_static {
+                // static: no-op enable → Ok(()) (variant 0, unit payload).
+                emit_enum_tag_write(cx, dst_ty, &dst, VariantIdx::from_u32(0), out)?;
+            } else {
+                // managed: a `clk_prepare_enable` failure PROPAGATES (the author's
+                // `?` returns the Err, which the scaffold adapter maps to the
+                // kernel errno) — it is NOT silently swallowed. v1 maps any enable
+                // failure to `RegseqError`'s first variant (→ -EIO): a precise
+                // errno→RegseqError policy is out of scope (only the `devm_clk_get`
+                // acquire carries the native PTR_ERR channel). `memset` zeroes the
+                // niche-encoded `Result<(), RegseqError>` carrier to `Err(<first>)`.
+                out.push_str(&format!("\tif (clk_prepare_enable({field_lv}) != 0) {{\n"));
+                out.push_str(&format!("\t\tmemset(&{dst}, 0, sizeof({dst}));\n"));
+                emit_enum_tag_write(cx, dst_ty, &dst, VariantIdx::from_u32(1), out)?;
+                out.push_str("\t} else {\n");
+                emit_enum_tag_write(cx, dst_ty, &dst, VariantIdx::from_u32(0), out)?;
+                out.push_str("\t}\n");
+            }
+        }
+        ClockOp::Disable => {
+            // Infallible (`-> ()`): no destination write. static → no-op.
+            if !is_static {
+                out.push_str(&format!("\tclk_disable_unprepare({field_lv});\n"));
+            }
+        }
+        ClockOp::GetRate => {
+            let dst = place_lvalue(cx, body, destination)?;
+            let dst_ty = place_ty(cx.model, body, destination)?;
+            let cty = types::c_type(cx.model, &mut cx.names, dst_ty)?;
+            if is_static {
+                // static: const-fold to default_frequency (D07/D10). A resolved
+                // static binding always carries a frequency (CLK-L2 enforces it).
+                let freq = binding.default_frequency.ok_or_else(|| {
+                    EmitError::Unsupported(
+                        "static clock get_rate without a resolved default_frequency".into(),
+                    )
+                })?;
+                out.push_str(&format!("\t{dst} = ({cty}){freq}u;\n"));
+            } else {
+                // managed: the raw live rate query (no fallback, D10/R10).
+                out.push_str(&format!("\t{dst} = ({cty})clk_get_rate({field_lv});\n"));
+            }
+        }
     }
     Ok(())
 }

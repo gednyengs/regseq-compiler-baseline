@@ -1,0 +1,9 @@
+name   = "clock-missing-section-reject"
+kind   = "rust"
+# Bind-stage reject (CLK-L2-001).
+covers = ["CLK-9"]
+expect = "reject"
+
+[expected]
+stage = "bind"
+diagnostic = "CLK-L2-001"

@@ -1,0 +1,13 @@
+name   = "clock-pl011-composed"
+kind   = "rust"
+# The peripheral-clock-management COMPOSED-interaction fixture (PLAN T17): one
+# driver carrying region + MANAGED clock + interrupt, witnessing the C07 phase
+# ordering — preamble map_region -> acquire_clock -> interrupt-register, teardown
+# in exact reverse (interrupt-deregister -> clock-release -> LC postamble for the
+# region resource — the trace's `LC postamble regs`, the conceptual region unmap). The
+# orderly scenario drives the lifecycle; expected.stdout is the generic-c oracle
+# trace (the placement made observable). Covers aggregation rides clock_covers
+# (the _clock corpus is interner-isolated, like _irq).
+covers = ["CLK-1", "CLK-2", "CLK-3", "CLK-4", "CLK-7"]
+lifecycle_scenario = "orderly"
+expect = "pass"

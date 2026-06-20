@@ -248,7 +248,33 @@ pub(super) fn emit_linux_serial(
             sync_field_decls.insert(fname.clone(), super::sync::lock_field_decl(res.kind, &fname));
         }
     }
-    let type_defs = super::emit_type_defs(&mut cx, driver_ty, &resource_names, &sync_field_decls)?;
+    // Peripheral-clock-management is NOT integrated into the serial-uart path
+    // (construct #7) yet: the serial scaffold hardcodes `port.uartclk` (its own
+    // TODO), and the clock acquire/morph is witnessed on the MAIN linux_c path.
+    // Reject a clock-bearing serial driver loudly rather than morph a `struct
+    // clk *` field the serial scaffold never acquires (never-wrong-code, I06).
+    if model
+        .clock
+        .drivers
+        .get(&driver_item)
+        .is_some_and(|d| !d.resources.is_empty())
+    {
+        return Err(EmitError::Unsupported(
+            "a #[rseq::clock] field on a #[rseq::serial] driver is not yet integrated \
+             into the serial-uart lowering (the main linux_c path is the clock witness; \
+             the serial path hardcodes port.uartclk)"
+                .into(),
+        ));
+    }
+    let clock_field_decls: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    let type_defs = super::emit_type_defs(
+        &mut cx,
+        driver_ty,
+        &resource_names,
+        &sync_field_decls,
+        &clock_field_decls,
+    )?;
 
     // -- assemble the TU.
     let mut tu = String::new();

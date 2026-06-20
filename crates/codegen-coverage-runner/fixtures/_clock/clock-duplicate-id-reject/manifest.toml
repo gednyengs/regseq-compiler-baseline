@@ -1,0 +1,9 @@
+name   = "clock-duplicate-id-reject"
+kind   = "rust"
+# C06 N15: two `Clock` fields on one driver declare the same L1 id.
+covers = ["CLK-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "CLK-ERR-DUPLICATE-ID"

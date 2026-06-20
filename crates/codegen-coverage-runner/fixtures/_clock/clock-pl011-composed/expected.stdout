@@ -1,0 +1,29 @@
+LC register pl011composed match=amba:0x41011/0xfffff
+BUS register_driver path=amba binding=bound
+LC create
+LC associate
+LC preamble regs
+BUS claim_regions bar=-1
+BUS get_handle
+BUS map base=0x9000000 size=0x1000 bar=-1
+CLK acquire uartclk
+IRQ register line=37
+IRQ binding line=37 trigger_type=level trigger_polarity=active_high shared=0 priority=-1
+LC call on_init
+CLK enable uartclk
+CLK rate uartclk = 0x16e3600
+W32 @0x9000000 = 0x016e3600
+W32 @0x9000038 = 0x00000000
+W32 @0x9000044 = 0x000007ff
+W32 @0x9000030 = 0x00000201
+IRQ enable line=37
+LC teardown present=1
+LC call on_deinit
+W32 @0x9000038 = 0x00000000
+W32 @0x9000030 = 0x00000000
+W32 @0x9000044 = 0x000007ff
+CLK disable uartclk
+IRQ disable line=37
+IRQ unregister line=37
+CLK release uartclk
+LC postamble regs

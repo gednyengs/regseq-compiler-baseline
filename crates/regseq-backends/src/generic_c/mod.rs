@@ -367,6 +367,23 @@ fn emit_generic_c_inner(
             out.push_str(&init);
         }
     }
+    // Peripheral-clock-management host clock model (clock construct, C05):
+    // the `regseq_clock_*` hooks + per-`clk_id` state. Gated on resource
+    // presence (NOT intrinsic presence) — `acquire_clock`/`release` are
+    // synthesized from the clock FIELD even when the author calls no `clock_*`
+    // op (D06/I07). A clock-less TU's `.c` is byte-unchanged (no golden churn).
+    if body_emit::model_has_clock_resource(model) {
+        // Size the slot table to the TU's exact clock-resource count (no fixed
+        // cap): the `#define` precedes the prelude block, which declares
+        // `regseq_clock_slot_table[REGSEQ_CLOCK_SLOTS]`. Sized like
+        // `REGSEQ_ATOMIC_CELLS`, so the table can never overflow and a clock is
+        // never silently dropped. At least 1 so it is not a zero-length array.
+        out.push_str(&format!(
+            "#define REGSEQ_CLOCK_SLOTS {}u\n",
+            body_emit::clock_resource_count(model).max(1)
+        ));
+        out.push_str(prelude::CLOCK_HELPERS);
+    }
     out.push_str(&bank2);
     out.push_str(&bank3);
     out.push_str(&bank4);
