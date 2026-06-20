@@ -1,0 +1,10 @@
+name   = "clock-zero-frequency-reject"
+kind   = "rust"
+# C06 N18: default_frequency = 0 (a 0 Hz clock cannot compute a baud divisor,
+# D15). Distinct input from N5 (missing) though both produce CLK-L2-003.
+covers = ["CLK-9"]
+expect = "reject"
+
+[expected]
+stage = "bind"
+diagnostic = "CLK-L2-003"

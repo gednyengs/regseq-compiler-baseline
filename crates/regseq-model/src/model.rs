@@ -138,6 +138,14 @@ pub struct RegseqModel {
     /// construct existed deserializable.
     #[serde(default)]
     pub synchronization: crate::synchronization::SynchronizationTables,
+
+    /// Peripheral-clock-management sibling table, keyed by the `#[rseq::driver]`
+    /// struct's Item. A peripheral clock is a capability layered on the device
+    /// (an input it consumes), so it gets its own top-level table rather than
+    /// living on `DriverHandle` (GRILL D03/I05). `#[serde(default)]` keeps
+    /// models serialized before the construct existed deserializable (I06).
+    #[serde(default)]
+    pub clock: crate::clock::ClockTables,
 }
 
 #[cfg(test)]
@@ -1098,6 +1106,7 @@ impl RegseqModel {
             interrupt: crate::interrupt::InterruptTables::default(),
             serial: crate::serial::SerialTables::default(),
             synchronization: crate::synchronization::SynchronizationTables::default(),
+            clock: crate::clock::ClockTables::default(),
         }
     }
 
@@ -1414,6 +1423,15 @@ impl RegseqModel {
         for (old_id, driver) in old_synchronization {
             let new_id = remap[old_id.index()];
             self.synchronization.drivers.insert(new_id, driver);
+        }
+
+        // `clock.drivers` is keyed by the same driver-struct `ItemId` (its
+        // values carry no `ItemId` references — StringId/u32/bool only), so
+        // re-key it by the same remap, exactly like `interrupt`/`device_lifecycle`.
+        let old_clocks = std::mem::take(&mut self.clock.drivers);
+        for (old_id, driver) in old_clocks {
+            let new_id = remap[old_id.index()];
+            self.clock.drivers.insert(new_id, driver);
         }
 
         #[cfg(debug_assertions)]

@@ -24,8 +24,17 @@ trigger_type = "level"
 trigger_polarity = "active_high"
 shared = false
 
-[clock.uart_clk]
-default_frequency = 48000000
+# [clock.uart_clk] — aspirational, commented out under path A. The
+# peripheral-clock-management construct is now IMPLEMENTED, so its `[clock.<id>]`
+# sections are validated by the regseq-l2 clock tenant: an `[clock.uart_clk]`
+# matching no `#[rseq::clock(id = "uart_clk")]` resource is a reverse-join reject
+# (CLK-L2-006). The frozen PL011 union is NOT re-wired for clock under path A
+# (the D19 `uart-clock-hz` property literal stays), so there is no clock resource
+# to join. Restore this section (with `mode` + `provider`/static) when the union
+# wires a `#[rseq::clock]` field post-path-A. (Unlike clock, the [reset]/[pinctrl]
+# sections below are still UNKNOWN section types — those constructs are
+# unimplemented — so they remain tolerated/ignored, GRILL D02.)
+# default_frequency = 48000000
 
 [reset.reset]
 reset_line_id = "uart_rst0"

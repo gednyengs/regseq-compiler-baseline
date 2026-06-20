@@ -16,6 +16,7 @@ use regseq_model::{
 
 mod assign;
 mod atomic;
+mod clock;
 pub mod body;
 pub mod const_;
 pub mod def_path;
@@ -650,6 +651,12 @@ pub enum BridgeError {
     #[error("device-interrupt validation: {0}")]
     InterruptValidation(InterruptDiagnostic),
 
+    /// A peripheral-clock-management frontend (recognition) check failed
+    /// (clock construct, contract C06 — the `CLK-*` recognition set). The
+    /// binding-side `CLK-L2-*` set lives in `regseq-l2`.
+    #[error("peripheral-clock-management validation: {0}")]
+    ClockValidation(ClockDiagnostic),
+
     /// A timed-cpu-delay-and-sleep frontend check failed (TCD construct,
     /// contracts C03/C05).
     #[error("timed-cpu-delay-and-sleep validation: {0}")]
@@ -1094,6 +1101,123 @@ pub enum InterruptDiagnostic {
     DriverCallableLineControl {
         /// The offending method name.
         method: String,
+    },
+}
+
+/// Per-construct peripheral-clock-management frontend (recognition) diagnostics
+/// (clock construct, contract C06; GRILL D04/D13/D17). Carried by
+/// [`BridgeError::ClockValidation`]. The `CLK-ERR-*` family is the recognition
+/// half (this enum); the binding half is the `regseq-l2` `CLK-L2-*` family.
+/// This is the M1/T04 subset (mandatory-id, unsupported-form, duplicate-id);
+/// T09 completes the C06 recognition set (forbidden/unknown attr keys, spoofed
+/// `clock_*` receiver). Concrete numbering is blessed here within the locked
+/// `CLK-ERR-*` family (GRILL D17/O3).
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum ClockDiagnostic {
+    /// `CLK-ERR-MISSING-ID`: a `Clock` field without a usable
+    /// `#[rseq::clock(id = "…")]` join key — absent attribute, absent `id`, or
+    /// an empty/whitespace id (R01/D13 — mandatory, no field-name fallback;
+    /// C06 N1/N12).
+    #[error(
+        "CLK-ERR-MISSING-ID: driver `{driver}` clock field `{field}` carries no usable \
+         `#[rseq::clock(id = \"…\")]` join key (the id is mandatory and non-empty; there is \
+         no field-name fallback)"
+    )]
+    MissingId {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+    },
+    /// `CLK-ERR-UNSUPPORTED-FORM`: a recognized clock field in a form v1 does
+    /// not build — `Option<Clock>` (optional form, design-in) or `[Clock; N]`
+    /// (array form). v1 builds only the required `Clock` form (C06 N2/N14).
+    #[error(
+        "CLK-ERR-UNSUPPORTED-FORM: driver `{driver}` clock field `{field}` uses the \
+         unsupported `{form}` form; v1 builds only the required `Clock` form \
+         (`Option<Clock>` and arrays are designed-in, not built)"
+    )]
+    UnsupportedForm {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+        /// The recognized-but-rejected form (e.g. `Option<Clock>`).
+        form: String,
+    },
+    /// `CLK-ERR-DUPLICATE-ID`: two `Clock` fields on one driver declare the same
+    /// L1 `id` (C06 N15; the clock id namespace is construct-local and the L1 id
+    /// must be unique within a driver, GRILL D13).
+    #[error(
+        "CLK-ERR-DUPLICATE-ID: driver `{driver}` declares more than one clock resource with \
+         id `{id}` (a clock id must be unique within a driver)"
+    )]
+    DuplicateId {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The duplicated clock id.
+        id: String,
+    },
+    /// `CLK-ERR-MALFORMED-ATTR`: the `#[rseq::clock(...)]` attribute is
+    /// structurally bad — a duplicate `id` key, or an unknown key that is not a
+    /// recognized clock attribute (C06 N12). Clock's L1 attribute admits ONLY
+    /// `id` (unlike `#[rseq::mmio]`/`#[rseq::interrupt]`, clock rejects unknown
+    /// keys rather than ignoring them, GRILL D13).
+    #[error(
+        "CLK-ERR-MALFORMED-ATTR: driver `{driver}` clock field `{field}`: {detail} \
+         (the `#[rseq::clock(...)]` attribute admits only `id = \"…\"`)"
+    )]
+    MalformedAttr {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+        /// What is malformed (e.g. `duplicate \`id\` key`, `unknown key \`foo\``).
+        detail: String,
+    },
+    /// `CLK-ERR-ATTR-ON-NON-CLOCK`: a `#[rseq::clock(...)]` attribute on a field
+    /// whose type is not the `Clock` resource shell (C06 N13).
+    #[error(
+        "CLK-ERR-ATTR-ON-NON-CLOCK: driver `{driver}` field `{field}` carries \
+         `#[rseq::clock(...)]` but is not a `Clock` resource"
+    )]
+    AttrOnNonClock {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+    },
+    /// `CLK-ERR-FORBIDDEN-KEY`: a forbidden L1 attribute key (C06 N21). Keys like
+    /// `required`/`mode`/`default_frequency` belong in the `[clock.<id>]` PLATFORM
+    /// section, not the L1 attribute; `set_rate`/`clk_bulk_*`/`clock_auto_enable`
+    /// are reserved/out-of-scope. Distinct from an unknown key (N12) so the
+    /// diagnostic can point the author at the right surface.
+    #[error(
+        "CLK-ERR-FORBIDDEN-KEY: driver `{driver}` clock field `{field}`: key `{key}` is not \
+         permitted on `#[rseq::clock(...)]` (mode/default_frequency/provider belong in the \
+         `[clock.<id>]` platform section; set_rate/clk_bulk/clock_auto_enable are reserved)"
+    )]
+    ForbiddenAttrKey {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+        /// The forbidden key.
+        key: String,
+    },
+    /// `CLK-ERR-SPOOFED-RECEIVER`: a `#[rseq::intrinsic("clock_*")]` tag on a
+    /// method whose receiver is not the `Clock` resource shell (C06 N22) — a
+    /// spoofed clock op (the `clock_*` intrinsics are compiler-managed on the
+    /// `Clock` facade only).
+    #[error(
+        "CLK-ERR-SPOOFED-RECEIVER: method `{method}` is tagged a `clock_*` intrinsic but its \
+         receiver is `{receiver}`, not the `Clock` resource (the clock ops exist only on `Clock`)"
+    )]
+    SpoofedReceiver {
+        /// The offending method name.
+        method: String,
+        /// The receiver type the method is declared on.
+        receiver: String,
     },
 }
 

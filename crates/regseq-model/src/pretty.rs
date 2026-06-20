@@ -1946,6 +1946,15 @@ impl<'a> PrettyPrinter<'a> {
                     };
                     out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
                 }
+                // Peripheral-clock-management author intrinsics (clock construct).
+                AttrData::Intrinsic(IntrinsicKind::Clock(op)) => {
+                    let label = match op {
+                        crate::ClockOp::Enable => "clock_enable",
+                        crate::ClockOp::Disable => "clock_disable",
+                        crate::ClockOp::GetRate => "clock_get_rate",
+                    };
+                    out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
+                }
                 // The framework-type marker has no DSL attribute render
                 // form in this phase; its render rule (if any) lands with
                 // the bridge/backend stages that consume it. Emit nothing.
@@ -1971,6 +1980,10 @@ impl<'a> PrettyPrinter<'a> {
                 // (`field_attrs`); it never appears in the item-attr stream.
                 // Emit nothing if it does.
                 AttrData::SyncResource { .. } => {}
+                // The clock-resource marker is likewise a field attribute
+                // (`field_attrs`); it never appears in the item-attr stream.
+                // Emit nothing if it does.
+                AttrData::ClockResource { .. } => {}
             }
         }
         out

@@ -121,6 +121,22 @@ pub enum AttrData {
         /// The lock kind, given by the field's wrapper type.
         kind: SyncKind,
     } = 5,
+    /// Peripheral-clock-management resource field marker
+    /// (`#[rseq::clock(id = "…")]`, peripheral-clock-management construct),
+    /// stored in `DomainAttrTables.field_attrs`. Carries the mandatory resource
+    /// id (the `[clock.<id>]` join key, GRILL D13) and whether the declaration
+    /// is the required `Clock` form (`required = true`; the future
+    /// `Option<Clock>` form would set it `false`). The joined per-driver facts
+    /// (mode / default_frequency / provider) live in the `ClockTables` sibling
+    /// table. Appended at discriminant 6 (next-free after `SyncResource = 5`),
+    /// append-only (GRILL I06/D04).
+    ClockResource {
+        /// The interned resource id (`#[rseq::clock(id = "…")]`).
+        id: StringId,
+        /// Whether this is the required `Clock` form (v1 always `true`;
+        /// `Option<Clock>` is recognized-and-rejected, C06 N2).
+        required: bool,
+    } = 6,
 }
 
 /// Closed, append-only framework-type taxonomy.
@@ -183,6 +199,16 @@ pub enum IntrinsicKind {
     /// const operand (the model `Call` terminator is unchanged — C06/I08).
     /// Appended at discriminant 6, preserving the discriminants above.
     Atomic(AtomicOp) = 6,
+    /// Peripheral-clock-management operation family
+    /// (peripheral-clock-management construct). The author ops on a typed
+    /// driver-local `Clock` field (`enable`/`disable`/`get_rate`), tagged via
+    /// the facade `#[rseq::intrinsic("clock_*")]` markers. The compiler-managed
+    /// `acquire_clock`/`release` are NOT intrinsics — they are synthesized from
+    /// the clock *field* (the `model.clock` resource), so they have no
+    /// `IntrinsicKind`. `ClockOp::SetRate` is reserved (not added) until
+    /// `set_rate` is built. Appended at discriminant 7, preserving the
+    /// discriminants above (GRILL D04/C03).
+    Clock(ClockOp) = 7,
 }
 
 /// Config-space operation carried by [`IntrinsicKind::Config`]
@@ -324,6 +350,25 @@ pub enum LogLevel {
     Error = 3,
 }
 
+/// Peripheral-clock-management author operation carried by
+/// [`IntrinsicKind::Clock`] (peripheral-clock-management construct). These
+/// correspond to the `#[rseq::intrinsic("clock_*")]`-tagged wrapper methods on
+/// the `Clock` resource. Closed, append-only — `SetRate` is reserved (not
+/// added) until `set_rate` is built (GRILL D04, Out of Scope).
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ClockOp {
+    /// `clock_enable`: gate the clock on (managed → `clk_prepare_enable`;
+    /// static → no-op). Author-called, fallible (`-> Result`).
+    Enable = 0,
+    /// `clock_disable`: gate the clock off (managed → `clk_disable_unprepare`;
+    /// static → no-op). Author-called, infallible.
+    Disable = 1,
+    /// `clock_get_rate`: read the clock rate in Hz (managed → raw live query,
+    /// no fallback, D10; static → const-fold `default_frequency`).
+    GetRate = 2,
+}
+
 impl IntrinsicKind {
     /// Closed-vocabulary lookup from dash-form attribute NAME to an
     /// intrinsic kind.
@@ -370,6 +415,13 @@ impl IntrinsicKind {
             "atomic_bit_test_set" => Some(IntrinsicKind::Atomic(AtomicOp::BitTestSet)),
             "atomic_bit_test_clear" => Some(IntrinsicKind::Atomic(AtomicOp::BitTestClear)),
             "atomic_fence" => Some(IntrinsicKind::Atomic(AtomicOp::Fence)),
+            // Peripheral-clock-management intrinsics (underscore form, matching
+            // the facade `#[rseq::intrinsic("clock_*")]` tags). `clock_set_rate`
+            // is NOT in the vocabulary (reserved, Out of Scope) and `acquire`/
+            // `release` are compiler-managed, not author-called intrinsics.
+            "clock_enable" => Some(IntrinsicKind::Clock(ClockOp::Enable)),
+            "clock_disable" => Some(IntrinsicKind::Clock(ClockOp::Disable)),
+            "clock_get_rate" => Some(IntrinsicKind::Clock(ClockOp::GetRate)),
             _ => None,
         }
     }
@@ -1096,6 +1148,171 @@ mod tests {
         ] {
             assert_json_round_trip(AttrData::SyncResource { kind });
         }
+    }
+
+    #[test]
+    fn clock_from_name_round_trip_and_discriminants() {
+        // Peripheral-clock-management: every `clock_*` author op maps from its
+        // underscore-form NAME, round-trips through JSON, and the `Clock` family
+        // appends at IntrinsicKind discriminant 7 with every prior family
+        // unmoved (Log=0 / Mmio=1 / PollUntil=2 / Config=3 / BusyWait=4 /
+        // Sleep=5 / Atomic=6).
+        let cases = [
+            ("clock_enable", ClockOp::Enable),
+            ("clock_disable", ClockOp::Disable),
+            ("clock_get_rate", ClockOp::GetRate),
+        ];
+        for (name, op) in cases {
+            assert_eq!(
+                IntrinsicKind::from_name(symbol(name)),
+                Some(IntrinsicKind::Clock(op)),
+                "from_name({name})"
+            );
+            assert_json_round_trip(IntrinsicKind::Clock(op));
+        }
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Log(LogLevel::Debug)), 0);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Mmio(MmioOp::Read)), 1);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::PollUntil), 2);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)), 3);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::BusyWait), 4);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Sleep), 5);
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::Atomic(AtomicOp::Load)),
+            6
+        );
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::Clock(ClockOp::Enable)),
+            7
+        );
+        // `AttrData::Intrinsic` stays at 0 regardless of which family it carries.
+        assert_eq!(
+            attr_data_tag(&AttrData::Intrinsic(IntrinsicKind::Clock(ClockOp::GetRate))),
+            0
+        );
+        // `clock_set_rate` is reserved (Out of Scope); `acquire`/`release` are
+        // compiler-managed (not intrinsics); dash-forms are rejected (clock uses
+        // underscore form, matching the facade tags).
+        assert_eq!(IntrinsicKind::from_name(symbol("clock_set_rate")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("clock_acquire")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("clock_release")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("clock-enable")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("clock")), None);
+    }
+
+    #[test]
+    fn clock_op_inner_discriminants_are_stable() {
+        // `ClockOp` is fieldless, so `as u8` yields its pinned discriminant.
+        assert_eq!(ClockOp::Enable as u8, 0);
+        assert_eq!(ClockOp::Disable as u8, 1);
+        assert_eq!(ClockOp::GetRate as u8, 2);
+    }
+
+    #[test]
+    fn attr_data_clock_resource_discriminant_and_round_trip() {
+        // The `ClockResource` field-attr variant appends at AttrData
+        // discriminant 6 (next-free after `SyncResource = 5`) without shifting
+        // any prior variant, and round-trips through JSON for both `required`
+        // values.
+        assert_eq!(
+            attr_data_tag(&AttrData::ClockResource {
+                id: StringId::from_u32(1),
+                required: true,
+            }),
+            6
+        );
+        assert_eq!(attr_data_tag(&attr(LogLevel::Debug)), 0);
+        assert_eq!(
+            attr_data_tag(&AttrData::FrameworkType(FrameworkType::RegseqError)),
+            1
+        );
+        assert_eq!(
+            attr_data_tag(&AttrData::InterruptResource {
+                id: StringId::from_u32(1),
+                form: InterruptForm::Single,
+            }),
+            2
+        );
+        assert_eq!(
+            attr_data_tag(&AttrData::IsrBinding {
+                field: None,
+                array_bind: false,
+            }),
+            3
+        );
+        assert_eq!(
+            attr_data_tag(&AttrData::Atomic {
+                element: AtomicElement::U32,
+                initial_value: None,
+            }),
+            4
+        );
+        assert_eq!(
+            attr_data_tag(&AttrData::SyncResource {
+                kind: SyncKind::Mutex,
+            }),
+            5
+        );
+        for required in [true, false] {
+            assert_json_round_trip(AttrData::ClockResource {
+                id: StringId::from_u32(7),
+                required,
+            });
+        }
+    }
+
+    #[test]
+    fn attr_data_and_intrinsic_kind_discriminants_have_no_collision() {
+        // Explicit no-collision check (PLAN T01): the clock additions must not
+        // alias any existing occupant. One instance per variant; their tag
+        // bytes must all be distinct.
+        let attr_variants = [
+            AttrData::Intrinsic(IntrinsicKind::PollUntil),
+            AttrData::FrameworkType(FrameworkType::RegseqError),
+            AttrData::InterruptResource {
+                id: StringId::from_u32(1),
+                form: InterruptForm::Single,
+            },
+            AttrData::IsrBinding {
+                field: None,
+                array_bind: false,
+            },
+            AttrData::Atomic {
+                element: AtomicElement::U32,
+                initial_value: None,
+            },
+            AttrData::SyncResource {
+                kind: SyncKind::Mutex,
+            },
+            AttrData::ClockResource {
+                id: StringId::from_u32(1),
+                required: true,
+            },
+        ];
+        let attr_tags: std::collections::BTreeSet<u8> =
+            attr_variants.iter().map(attr_data_tag).collect();
+        assert_eq!(
+            attr_tags.len(),
+            attr_variants.len(),
+            "AttrData discriminant collision"
+        );
+
+        let intrinsic_variants = [
+            IntrinsicKind::Log(LogLevel::Debug),
+            IntrinsicKind::Mmio(MmioOp::Read),
+            IntrinsicKind::PollUntil,
+            IntrinsicKind::Config(ConfigOp::Read),
+            IntrinsicKind::BusyWait,
+            IntrinsicKind::Sleep,
+            IntrinsicKind::Atomic(AtomicOp::Load),
+            IntrinsicKind::Clock(ClockOp::Enable),
+        ];
+        let intrinsic_tags: std::collections::BTreeSet<u8> =
+            intrinsic_variants.iter().map(intrinsic_kind_tag).collect();
+        assert_eq!(
+            intrinsic_tags.len(),
+            intrinsic_variants.len(),
+            "IntrinsicKind discriminant collision"
+        );
     }
 
     #[test]

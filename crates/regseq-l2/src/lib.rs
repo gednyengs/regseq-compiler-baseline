@@ -23,6 +23,7 @@
 //!   state).
 
 pub mod bus_resource;
+pub mod clock;
 mod error;
 pub mod interrupt;
 
@@ -59,6 +60,7 @@ pub trait L2Binder: Sync {
 const REGISTRY: &[&dyn L2Binder] = &[
     &bus_resource::BusResourceBinder,
     &interrupt::InterruptBinder,
+    &clock::ClockBinder,
 ];
 
 /// Bind every tenant's platform metadata into `model`. This is the production

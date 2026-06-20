@@ -1,0 +1,13 @@
+name   = "clock-pl011-managed"
+kind   = "rust"
+# The peripheral-clock-management M1 behavioral-oracle (MANAGED half, PLAN T08):
+# one #[rseq::clock(id="uartclk")] on a PL011-shaped AMBA driver, bound to a
+# MANAGED [clock.uartclk] (mode="managed" + provider). The orderly scenario
+# synthesizes acquire_clock (after map_region, before interrupt) + release (LIFO
+# at teardown); the author body enable()s, reads get_rate() (the live recorded
+# rate), and programs DR from it. expected.stdout is the CLK trace oracle (C05);
+# this fixture FREEZES the `CLK …` trace spelling (OI-3). Covers aggregation
+# rides clock_covers (the _clock corpus is interner-isolated, like _irq).
+covers = ["CLK-1", "CLK-2", "CLK-3", "CLK-4"]
+lifecycle_scenario = "orderly"
+expect = "pass"

@@ -1,0 +1,10 @@
+name   = "clock-missing-id-reject"
+kind   = "rust"
+# C06 N1: a `Clock` field without the mandatory `#[rseq::clock(id = "…")]` join
+# key (R01/D13 — no field-name fallback). Rejected at Acquire with CLK-ERR-MISSING-ID.
+covers = ["CLK-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "CLK-ERR-MISSING-ID"

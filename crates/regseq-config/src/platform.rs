@@ -64,6 +64,27 @@ pub struct InterruptBindingSpec {
     pub shared: bool,
 }
 
+/// One `[clock.<id>]` binding parsed from a platform file
+/// (peripheral-clock-management construct, contract C01). Structural parse only:
+/// `mode` / `provider` are captured **verbatim** (the `managed | static`
+/// vocabulary check and the mode↔provider invariant are the `regseq-l2` clock
+/// tenant's, GRILL D14/D15); `default_frequency` is parsed as a non-negative
+/// `u32` (the `> 0` requirement is the tenant's, GRILL D15). All fields are
+/// `Option` at parse time — required-ness is enforced by the L2 tenant's
+/// `validate`, not the parser (GRILL D14, mirroring `InterruptBindingSpec`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClockBindingSpec {
+    /// `mode` token, verbatim (`"managed"` | `"static"`); validated downstream.
+    pub mode: Option<String>,
+    /// `default_frequency` in Hz. Non-integer / negative / `> u32::MAX` is a
+    /// parse reject; the `> 0` and presence requirements are the L2 tenant's.
+    pub default_frequency: Option<u32>,
+    /// `provider` — the backend-interpreted controller reference (con-id /
+    /// DT clock spec), verbatim. Required iff managed, forbidden iff static
+    /// (enforced downstream, GRILL D14).
+    pub provider: Option<String>,
+}
+
 /// The L2 bindings parsed from a platform file: the `[mmio.<id>]` and
 /// `[interrupt.<id>]` sections keyed by resource id.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -75,6 +96,11 @@ pub struct PlatformBindings {
     /// (`#[rseq::interrupt(id = "<id>")]`). An absent section is absence in
     /// the map (Option semantics are the L2 tenant's, C03).
     pub interrupt: BTreeMap<String, InterruptBindingSpec>,
+    /// `[clock.<id>]` sections, keyed by the resource id
+    /// (`#[rseq::clock(id = "<id>")]`, peripheral-clock-management construct).
+    /// An absent section is absence in the map; required-ness is the L2 tenant's
+    /// (C01).
+    pub clock: BTreeMap<String, ClockBindingSpec>,
 }
 
 /// The raw, structurally-parsed `[platform]` identity (R5/D8). `regseq-config`
@@ -135,6 +161,16 @@ pub enum PlatformParseError {
         key: String,
         detail: String,
     },
+    /// A `[clock.<id>]` section or one of its keys has the wrong shape
+    /// (peripheral-clock-management construct). Distinct from
+    /// [`PlatformParseError::BadValue`] so the diagnostic is labelled
+    /// `[clock.…]`, not `[mmio.…]`.
+    #[error("[clock.{id}] {key}: {detail}")]
+    BadClock {
+        id: String,
+        key: String,
+        detail: String,
+    },
 }
 
 /// Parse a platform-file string in a single pass (Codex A1 / R5) into its
@@ -189,10 +225,35 @@ pub fn parse_platform_file_str(input: &str) -> Result<PlatformFile, PlatformPars
         }
     }
 
+    let mut clock = BTreeMap::new();
+    if let Some(clock_val) = table.get("clock") {
+        let toml::Value::Table(clock_tbl) = clock_val else {
+            return Err(PlatformParseError::BadClock {
+                id: "*".to_string(),
+                key: "clock".to_string(),
+                detail: "expected a `[clock.<id>]` table".to_string(),
+            });
+        };
+        for (id, val) in clock_tbl {
+            let toml::Value::Table(section) = val else {
+                return Err(PlatformParseError::BadClock {
+                    id: id.clone(),
+                    key: "<section>".to_string(),
+                    detail: "expected a table".to_string(),
+                });
+            };
+            clock.insert(id.clone(), parse_clock_section(id, section)?);
+        }
+    }
+
     let identity = parse_platform_identity(&table)?;
 
     Ok(PlatformFile {
-        bindings: PlatformBindings { mmio, interrupt },
+        bindings: PlatformBindings {
+            mmio,
+            interrupt,
+            clock,
+        },
         identity,
     })
 }
@@ -345,6 +406,47 @@ fn parse_interrupt_section(
         spec.shared = *b;
     }
     Ok(spec)
+}
+
+/// Parse one `[clock.<id>]` section's C01 keys (`mode` / `default_frequency` /
+/// `provider`). Unknown keys are ignored (forward-compat, matching
+/// `[mmio.<id>]` / `[interrupt.<id>]` — this introduces no clock-specific
+/// unknown-key rule). Structural checks only: `default_frequency` must be a
+/// non-negative integer that fits `u32` (the `> 0` requirement is the
+/// `regseq-l2` tenant's, D15), and `mode` / `provider` must be strings (captured
+/// verbatim — the `managed | static` vocabulary and the mode↔provider invariant
+/// are the tenant's, D14/D15).
+fn parse_clock_section(
+    id: &str,
+    section: &toml::Table,
+) -> Result<ClockBindingSpec, PlatformParseError> {
+    let bad = |key: &str, detail: String| PlatformParseError::BadClock {
+        id: id.to_string(),
+        key: key.to_string(),
+        detail,
+    };
+    let u32_key = |key: &str| -> Result<Option<u32>, PlatformParseError> {
+        match section.get(key) {
+            None => Ok(None),
+            Some(toml::Value::Integer(i)) if *i >= 0 => Ok(Some(
+                u32::try_from(*i).map_err(|_| bad(key, format!("{i} does not fit u32")))?,
+            )),
+            Some(toml::Value::Integer(_)) => Err(bad(key, "must be non-negative".to_string())),
+            Some(_) => Err(bad(key, "expected an integer".to_string())),
+        }
+    };
+    let str_key = |key: &str| -> Result<Option<String>, PlatformParseError> {
+        match section.get(key) {
+            None => Ok(None),
+            Some(toml::Value::String(s)) => Ok(Some(s.clone())),
+            Some(_) => Err(bad(key, "expected a string".to_string())),
+        }
+    };
+    Ok(ClockBindingSpec {
+        mode: str_key("mode")?,
+        default_frequency: u32_key("default_frequency")?,
+        provider: str_key("provider")?,
+    })
 }
 
 /// Coerce a TOML value to a non-negative `u64`, or a typed error.
@@ -528,6 +630,112 @@ shared = false
             err.to_string().starts_with("[interrupt.a]"),
             "got {err}"
         );
+    }
+
+    // --- [clock.<id>] (peripheral-clock-management construct, C01): structural
+    // parse only; the `managed | static` vocabulary, the mode↔provider
+    // invariant, and the `default_frequency > 0` requirement are validated
+    // downstream by the regseq-l2 clock tenant, not here (D14/D15). ---
+
+    #[test]
+    fn parses_clock_section_managed_and_static() {
+        let input = r#"
+version = "1"
+[platform]
+os = "linux"
+[clock.uartclk]
+mode = "managed"
+default_frequency = 24000000
+provider = "uartclk"
+[clock.refclk]
+mode = "static"
+default_frequency = 48000000
+"#;
+        let b = parse_platform_bindings_str(input).expect("parse");
+        let managed = b.clock.get("uartclk").expect("uartclk section");
+        assert_eq!(managed.mode.as_deref(), Some("managed"));
+        assert_eq!(managed.default_frequency, Some(24_000_000));
+        assert_eq!(managed.provider.as_deref(), Some("uartclk"));
+        let static_clk = b.clock.get("refclk").expect("refclk section");
+        assert_eq!(static_clk.mode.as_deref(), Some("static"));
+        assert_eq!(static_clk.default_frequency, Some(48_000_000));
+        assert_eq!(static_clk.provider, None);
+    }
+
+    #[test]
+    fn absent_clock_section_parses_to_absence() {
+        let b = parse_platform_bindings_str("[mmio.regs]\nbase = 0\nsize = 16\n").unwrap();
+        assert!(b.clock.is_empty());
+    }
+
+    #[test]
+    fn clock_default_frequency_zero_parses_here_rejected_downstream() {
+        // 0 is a valid non-negative u32 at parse time; the `> 0` requirement
+        // (D15) is the L2 tenant's, not the parser's.
+        let b = parse_platform_bindings_str("[clock.a]\nmode = \"static\"\ndefault_frequency = 0\n")
+            .unwrap();
+        assert_eq!(b.clock.get("a").unwrap().default_frequency, Some(0));
+    }
+
+    #[test]
+    fn clock_unknown_keys_are_ignored() {
+        // Forward-compat, matching the `[mmio.<id>]` / `[interrupt.<id>]`
+        // discipline (no clock-specific unknown-key rule).
+        let b = parse_platform_bindings_str(
+            "[clock.a]\nmode = \"static\"\ndefault_frequency = 1\nfuture = 1\n",
+        )
+        .unwrap();
+        assert_eq!(b.clock.get("a").unwrap().default_frequency, Some(1));
+    }
+
+    #[test]
+    fn clock_rejects_non_integer_default_frequency() {
+        let err =
+            parse_platform_bindings_str("[clock.a]\ndefault_frequency = \"x\"\n").unwrap_err();
+        assert!(
+            matches!(&err, PlatformParseError::BadClock { id, key, .. }
+                if id == "a" && key == "default_frequency"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn clock_rejects_negative_and_oversized_default_frequency() {
+        let err = parse_platform_bindings_str("[clock.a]\ndefault_frequency = -1\n").unwrap_err();
+        assert!(matches!(&err, PlatformParseError::BadClock { .. }), "got {err:?}");
+        let err =
+            parse_platform_bindings_str("[clock.a]\ndefault_frequency = 4294967296\n").unwrap_err();
+        assert!(matches!(&err, PlatformParseError::BadClock { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn clock_rejects_non_string_mode_and_provider() {
+        let err = parse_platform_bindings_str("[clock.a]\nmode = 1\n").unwrap_err();
+        assert!(
+            matches!(&err, PlatformParseError::BadClock { key, .. } if key == "mode"),
+            "got {err:?}"
+        );
+        let err = parse_platform_bindings_str("[clock.a]\nprovider = 1\n").unwrap_err();
+        assert!(
+            matches!(&err, PlatformParseError::BadClock { key, .. } if key == "provider"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn clock_error_is_labelled_clock_not_mmio() {
+        let err = parse_platform_bindings_str("[clock.a]\nmode = 1\n").unwrap_err();
+        assert!(err.to_string().starts_with("[clock.a]"), "got {err}");
+    }
+
+    #[test]
+    fn duplicate_clock_section_is_a_toml_parse_error() {
+        // A duplicate `[clock.<id>]` table is a free TOML parse error (D13/D15,
+        // C06 N16) — not a clock-specific reject.
+        let err =
+            parse_platform_bindings_str("[clock.a]\nmode = \"static\"\n[clock.a]\nmode = \"static\"\n")
+                .unwrap_err();
+        assert!(matches!(&err, PlatformParseError::InvalidToml(_)), "got {err:?}");
     }
 
     // --- [platform] identity (T6b, R5): structural parse only; os vocabulary is

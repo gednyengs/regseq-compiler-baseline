@@ -19,6 +19,7 @@
 //! Structurally there is no emit-what-we-can branch (I06).
 
 mod body;
+mod clock;
 mod naming;
 mod serial;
 mod sync;
@@ -316,6 +317,17 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         }
     }
 
+    // -- peripheral-clock-management (clock construct, M3/T14, C04/D08): a MANAGED
+    //    clock FIELD morphs to a `struct clk *` member (the field_override, below);
+    //    the acquire preamble (`devm_clk_get`) rides the probe scaffold. A STATIC
+    //    clock leaves the ZST `Clock` field dropped. `<linux/clk.h>` declares the
+    //    morphed type + the clk_* ops; `<linux/err.h>` carries IS_ERR/PTR_ERR. ----
+    let clock_field_decls = clock::field_decls(model, driver_ty);
+    if !clock_field_decls.is_empty() {
+        cx.extra_includes.insert("<linux/clk.h>");
+        cx.extra_includes.insert("<linux/err.h>");
+    }
+
     let callbacks = [
         ("on_init", &driver.ops.on_init),
         ("on_deinit", &driver.ops.on_deinit),
@@ -402,7 +414,13 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     };
 
     // -- type definitions (D04 bank 2/3), now that every use is known -------
-    let type_defs = emit_type_defs(&mut cx, driver_ty, &resource_names, &sync_field_decls)?;
+    let type_defs = emit_type_defs(
+        &mut cx,
+        driver_ty,
+        &resource_names,
+        &sync_field_decls,
+        &clock_field_decls,
+    )?;
 
     // -- match table + driver struct + module macros ------------------------
     let tail = match bus {
@@ -920,6 +938,11 @@ fn emit_scaffold(
             );
         }
     }
+    // Peripheral-clock-management acquire preamble (clock construct, C07/D08):
+    // AFTER the region map, BEFORE the interrupt request — `devm_clk_get` per
+    // managed clock with PTR_ERR propagation (a hard init error, I02). Empty for
+    // a clock-less / static-only driver (I07).
+    out.push_str(&clock::acquire_lines(model, driver_ty, "&adev->dev")?);
     // Interrupt preamble (construct #6, D14): register the handler with the
     // line DISABLED (IRQF_NO_AUTOEN — D02, generalizing G-INT-04), LAST among
     // the resource preambles, via the manual request/free pair (D09, no
@@ -1145,6 +1168,11 @@ fn emit_scaffold_pci(
             );
         }
     }
+    // Peripheral-clock-management acquire preamble (clock construct, C07/D08):
+    // AFTER the region map — `devm_clk_get` per managed clock with PTR_ERR
+    // propagation (a hard init error, I02). Empty for a clock-less / static-only
+    // driver (I07). (PL011 is AMBA; this keeps a clock-bearing PCI driver sound.)
+    out.push_str(&clock::acquire_lines(model, driver_ty, "&pdev->dev")?);
     // Atomicity (R10/S10): seed the Atomic fields before any callback, regardless
     // of whether on_init is authored (the fields live in the private struct, so
     // a non-zero initial must be applied even with no on_init).
@@ -1452,6 +1480,7 @@ fn emit_type_defs(
     driver_ty: TyId,
     resource_names: &[String],
     sync_field_decls: &BTreeMap<String, String>,
+    clock_field_decls: &BTreeMap<String, String>,
 ) -> Result<String, EmitError> {
     // Snapshot the names registered during body/scaffold emission, then emit
     // definitions; definition emission may register nested names, so loop to
@@ -1495,15 +1524,21 @@ fn emit_type_defs(
                 let rn = resource_names.to_vec();
                 let af = atomic_fields;
                 let sync = sync_field_decls.clone();
+                let clk = clock_field_decls.clone();
                 types::emit_aggregate_def(model, &mut cx.names, ty, &move |fname: &str| {
                     if rn.iter().any(|r| r == fname) {
                         Some(format!("void __iomem *{fname}"))
                     } else if let Some((_, storage)) = af.iter().find(|(n, _)| n == fname) {
                         Some(format!("{storage} {fname}"))
-                    } else {
+                    } else if let Some(decl) = sync.get(fname) {
                         // T07/C02: a recognized lock field lowers to its per-OS
                         // lock object (the payload `T` is not stored this slice).
-                        sync.get(fname).cloned()
+                        Some(decl.clone())
+                    } else {
+                        // clock construct (C04/D08): a MANAGED clock field morphs
+                        // to a `struct clk *`; a STATIC clock is absent here (its
+                        // ZST `Clock` field is dropped — nothing references it).
+                        clk.get(fname).cloned()
                     }
                 })
                 .map_err(with_ctx)?

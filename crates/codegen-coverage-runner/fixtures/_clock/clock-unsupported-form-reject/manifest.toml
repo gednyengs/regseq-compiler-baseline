@@ -1,0 +1,9 @@
+name   = "clock-unsupported-form-reject"
+kind   = "rust"
+# C06 N2/N14: `Option<Clock>` — the optional form is designed-in, not built in v1.
+covers = ["CLK-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "CLK-ERR-UNSUPPORTED-FORM"

@@ -13,6 +13,7 @@ mod body_ty;
 mod bridge_input;
 mod build;
 mod cabi;
+mod clock;
 mod const_interner;
 mod const_value;
 mod crate_info;
@@ -69,13 +70,14 @@ pub use crate_info::{CrateInfo, StableCrateId};
 pub use def_path::{
     def_path_data_sort_rank, render_def_path, DefPath, DefPathData, DefPathHash, DefPathSegment,
 };
+pub use clock::{ClockBinding, ClockMode, ClockResource, ClockTables, DriverClocks};
 pub use device_lifecycle::{
     BarType, BusType, ClassTag, DeviceLifecycleTables, DriverDescriptor, DriverHandle,
     DriverLifecycle, LifecycleOps, MatchEntry, MmioBinding, ResourceField, ResourceKind,
     UserDataField, UserDataKind,
 };
 pub use domain_attr::{
-    AtomicElement, AtomicOp, AttrData, ConfigOp, DomainAttrTables, FetchOp, FieldPath,
+    AtomicElement, AtomicOp, AttrData, ClockOp, ConfigOp, DomainAttrTables, FetchOp, FieldPath,
     FrameworkType, IntrinsicKind, LogLevel, MmioOp,
 };
 pub use fn_sig::{canonical_fn_sig, FnSig};

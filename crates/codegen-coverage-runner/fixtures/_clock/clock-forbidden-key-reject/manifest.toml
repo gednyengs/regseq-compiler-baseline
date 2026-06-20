@@ -1,0 +1,9 @@
+name   = "clock-forbidden-key-reject"
+kind   = "rust"
+# C06 N21: a forbidden L1 key (`mode` belongs in the [clock.<id>] platform section).
+covers = ["CLK-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "CLK-ERR-FORBIDDEN-KEY"

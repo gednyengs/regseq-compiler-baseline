@@ -1,0 +1,9 @@
+name   = "clock-managed-no-provider-reject"
+kind   = "rust"
+# Bind-stage reject (CLK-L2-004).
+covers = ["CLK-9"]
+expect = "reject"
+
+[expected]
+stage = "bind"
+diagnostic = "CLK-L2-004"

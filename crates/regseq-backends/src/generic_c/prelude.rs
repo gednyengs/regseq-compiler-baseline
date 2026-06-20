@@ -400,6 +400,96 @@ __attribute__((unused)) static void regseq_bus_on_config_write(uint32_t off, uin
 }
 "#;
 
+/// Peripheral-clock-management host clock model (clock construct, GRILL C05).
+///
+/// Emitted ONLY for a TU that has a recognized `Clock` resource (the caller
+/// gates on `model_has_clock_resource`), so a no-clock TU's `.c` is
+/// byte-unchanged (I07) — no golden churn. The host model is a GLOBAL singleton
+/// with no device handle (matching `regseq_mmio_read(off,width)`): every hook is
+/// keyed by the `const char* clk_id` (the L1 id), which is both the per-clock
+/// state key and the trace identity. Each hook prints a `CLK <event>` line to
+/// stdout — that trace IS the behavioral oracle for the clock contract (C05).
+///
+/// `acquire`/`release` are the generic-c realization of the compiler-managed
+/// `acquire_clock` (C07): `acquire` records the clock's resolved
+/// `default_frequency` so a later managed `get_rate` returns it (the oracle
+/// value, D10); `release` clears the slot. They are emitted under BOTH modes
+/// (static still records the frequency; no provider lookup). The static
+/// const-fold of `enable`/`disable`/`get_rate` happens in the BACKEND (D07/T12),
+/// so under a static binding those three ops do not reach these hooks at all.
+/// `enable` returns `int` (`0` = ok) so the author's fallible `enable()?` lowers
+/// against a status. The exact `CLK …` spelling is blessed at the first golden
+/// (OI-3); the shape (five `clk_id`-keyed hooks, `CLK <event>` trace) is the
+/// contract.
+pub const CLOCK_HELPERS: &str = r#"
+/* ---------------------------------------------------------------------------
+ * Peripheral-clock-management host clock model (clock construct, C05). Each hook
+ * prints a "CLK <event>" line to stdout -- this trace IS the behavioral oracle.
+ * Emitted only for a TU with a Clock resource. GLOBAL singleton, no device
+ * handle; keyed by the const char* clk_id. `acquire` records the resolved
+ * default_frequency so a managed `get_rate` returns it (the oracle value).
+ * REGSEQ_CLOCK_SLOTS is #defined just above this block, sized by the caller to
+ * the TU's exact clock-resource count (like REGSEQ_ATOMIC_CELLS) -- so the slot
+ * table can never overflow and a clock is never silently dropped. */
+typedef struct {
+    const char *clk_id;
+    uint32_t rate;  /* recorded default_frequency in Hz (set at acquire) */
+    int state;      /* 0 = released, 1 = acquired, 2 = enabled */
+} regseq_clock_slot_t;
+static regseq_clock_slot_t regseq_clock_slot_table[REGSEQ_CLOCK_SLOTS] __attribute__((unused));
+__attribute__((unused)) static regseq_clock_slot_t *regseq_clock_slot(const char *clk_id) {
+    for (uint32_t i = 0; i < REGSEQ_CLOCK_SLOTS; i++) {
+        if (regseq_clock_slot_table[i].clk_id
+            && strcmp(regseq_clock_slot_table[i].clk_id, clk_id) == 0) {
+            return &regseq_clock_slot_table[i];
+        }
+    }
+    return 0;
+}
+__attribute__((unused)) static void regseq_clock_acquire(const char *clk_id, uint32_t default_frequency) {
+    printf("CLK acquire %s\n", clk_id);
+    regseq_clock_slot_t *slot = regseq_clock_slot(clk_id);
+    if (!slot) {
+        for (uint32_t i = 0; i < REGSEQ_CLOCK_SLOTS; i++) {
+            if (!regseq_clock_slot_table[i].clk_id) {
+                slot = &regseq_clock_slot_table[i];
+                break;
+            }
+        }
+    }
+    if (slot) {
+        slot->clk_id = clk_id;
+        slot->rate = default_frequency;
+        slot->state = 1; /* acquired, not yet enabled */
+    }
+}
+__attribute__((unused)) static void regseq_clock_release(const char *clk_id) {
+    printf("CLK release %s\n", clk_id);
+    regseq_clock_slot_t *slot = regseq_clock_slot(clk_id);
+    if (slot) {
+        slot->state = 0;
+        slot->clk_id = 0; /* free the slot (a released clock is reclaimable) */
+    }
+}
+__attribute__((unused)) static int regseq_clock_enable(const char *clk_id) {
+    printf("CLK enable %s\n", clk_id);
+    regseq_clock_slot_t *slot = regseq_clock_slot(clk_id);
+    if (slot) slot->state = 2;
+    return 0; /* 0 = ok */
+}
+__attribute__((unused)) static void regseq_clock_disable(const char *clk_id) {
+    printf("CLK disable %s\n", clk_id);
+    regseq_clock_slot_t *slot = regseq_clock_slot(clk_id);
+    if (slot) slot->state = 1;
+}
+__attribute__((unused)) static uint32_t regseq_clock_get_rate(const char *clk_id) {
+    regseq_clock_slot_t *slot = regseq_clock_slot(clk_id);
+    uint32_t rate = slot ? slot->rate : 0u;
+    printf("CLK rate %s = 0x%x\n", clk_id, (unsigned)rate);
+    return rate;
+}
+"#;
+
 /// Timed-cpu-delay-and-sleep host fake-clock hooks (TCD construct, C06/D08): the
 /// extern DECLARATIONS the `busy_wait`/`sleep` lowering (`emit_delay`) calls,
 /// emitted only for a TU that uses a delay intrinsic. Unlike the other host

@@ -43,7 +43,7 @@ use std::cell::RefCell;
 use regseq_model::{
     args_key_for_generic_args, AggregateKind, ArmReachability, AssertKind, AtomicElement, AtomicOp,
     AttrData, BinOp, BlockId, Byte,
-    CallCallee, CastKind, CompletionOpKind, ConfigOp, Const,
+    CallCallee, CastKind, ClockMode, ClockOp, CompletionOpKind, ConfigOp, Const,
     ConstId, DriverInterrupts, Endian, EnumShape, FetchOp, FieldIdx, FieldPath, FloatKind,
     GenericArg, InstanceId, InstanceKind,
     InstanceRef, InterruptForm, IntKind, IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel,
@@ -1340,6 +1340,16 @@ impl BodyEmit<'_> {
                                 }
                             }
                         }
+                    } else if self.is_zst(*field_ty) {
+                        // A ZST field is dropped from the emitted aggregate
+                        // (`layout_emit` filters ZSTs), so `(*p).zst_field` would
+                        // name a member that does not exist. A ZST field's lvalue
+                        // is never materialised for data (a ZST read/write is
+                        // ZST-elided); the only place it is taken is a borrow of a
+                        // ZST resource receiver (e.g. `&self.clk` for a clock op).
+                        // Leave `lv` at the parent so `ref_expr` can take a valid,
+                        // never-dereferenced address (cast to the receiver type).
+                        // `ty` still advances to the ZST field type below.
                     } else {
                         let (name, _) = layout_emit::field_c_name_ty(self.model, ty, idx.index())
                             .ok_or(EmitError::Unsupported(
@@ -1526,7 +1536,22 @@ impl BodyEmit<'_> {
                         "address of a misaligned packed field (section 14.7)",
                     ));
                 }
-                Ok(format!("&({})", self.place_lvalue(place)?))
+                let lv = self.place_lvalue(place)?;
+                // A borrow of a ZST place reached through a dropped ZST FIELD
+                // (e.g. a clock receiver `&self.clk`): `place_walk` left `lv` at
+                // the parent (the ZST field has no C member), so `&(lv)` has the
+                // PARENT's pointer type. The resulting `&zst` is never
+                // dereferenced for data (Rust semantics); cast the parent address
+                // to the receiver pointer type so the assignment is type-correct.
+                // A BARE ZST local (`&local`, empty projection) is excluded: it is
+                // declared as a real zero-sized object (`bare_borrowed_zst_locals`),
+                // so `&(local)` is already correctly typed — casting it would churn
+                // the existing closure goldens.
+                if !place.projection.is_empty() && self.is_zst(self.place_ty(place)) {
+                    let cty = types::c_type(self.model, self.names, dest_ty);
+                    return Ok(format!("({cty})&({lv})"));
+                }
+                Ok(format!("&({lv})"))
             }
         }
     }
@@ -2307,6 +2332,18 @@ impl BodyEmit<'_> {
                 let op = *op;
                 return self.emit_atomic(op, callee, args, destination, target);
             }
+            // Peripheral-clock-management interception (clock construct): a Direct
+            // callee carrying `IntrinsicKind::Clock(op)` (the `Clock` wrapper
+            // methods `enable`/`disable`/`get_rate`) lowers against the receiver's
+            // bound `clk_id`. A managed binding routes to the `regseq_clock_*`
+            // host hooks (the oracle); a static binding const-folds in the backend
+            // (D07): `enable`/`disable` → no-op, `get_rate` → `default_frequency`.
+            // The compiler-managed `acquire_clock`/`release` are NOT here — they
+            // are synthesized in `emit_lifecycle_synthesis`, not author-called.
+            if let Some(IntrinsicKind::Clock(op)) = self.model.instance_intrinsic(*inst) {
+                let op = *op;
+                return self.emit_clock(op, callee, args, destination, target);
+            }
             // (Device-lifecycle is no longer call-intercepted: the harness verbs
             // were removed, RD-1; the synthesized `main` drives the lifecycle —
             // see `emit_lifecycle_synthesis`.)
@@ -2705,6 +2742,174 @@ impl BodyEmit<'_> {
             "atomic receiver does not resolve to a single Atomic field",
         ))?;
         self.atomic_cell_lookup(&field_path)
+    }
+
+    /// Recover the `(clk_id, binding)` named by the `&self` receiver of a `Clock`
+    /// wrapper-method call (peripheral-clock-management construct). Chases the
+    /// receiver to the place that borrows the `Clock` field (the shared
+    /// `resolve_receiver_src`), walks the projection to the final struct-field —
+    /// its `(parent struct ItemId, field index)` is the `Clock` field's
+    /// `FieldPath` — then reads the recognized `AttrData::ClockResource { id, .. }`
+    /// marker to get the L1 id (the `clk_id` trace key) and the L2-resolved
+    /// `ClockBinding` (mode / default_frequency) from `model.clock`. v1 has only
+    /// the required (single) form, so there is no array-index case.
+    fn recover_clock(
+        &self,
+        recv: &Operand,
+    ) -> Result<(String, regseq_model::ClockBinding), EmitError> {
+        let src = self.resolve_receiver_src(recv, 0)?;
+        let mut ty = self.body.local_decls[src.local].ty;
+        let mut field_path: Option<FieldPath> = None;
+        for elem in src.projection.iter() {
+            match elem {
+                PlaceElem::Deref => {
+                    ty = match &self.model.types[ty] {
+                        Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                        _ => {
+                            return Err(EmitError::Unsupported(
+                                "clock receiver deref of a non-pointer type",
+                            ))
+                        }
+                    };
+                }
+                PlaceElem::Field(idx, field_ty) => {
+                    let item = match &self.model.types[ty] {
+                        Ty::Struct { item, .. } => *item,
+                        _ => {
+                            return Err(EmitError::Unsupported(
+                                "clock receiver field projection of a non-struct type",
+                            ))
+                        }
+                    };
+                    field_path = Some(FieldPath {
+                        item,
+                        variant: VariantIdx::ZERO,
+                        field: FieldIdx::from_u32(idx.index() as u32),
+                    });
+                    ty = *field_ty;
+                }
+                PlaceElem::Index(_) | PlaceElem::ConstantIndex { .. } => {
+                    return Err(EmitError::Unsupported(
+                        "clock receiver indexes an array (the array form is not built in v1)",
+                    ));
+                }
+                PlaceElem::Downcast(_) | PlaceElem::Subslice { .. } => {
+                    return Err(EmitError::Unsupported(
+                        "clock receiver has an unsupported projection element",
+                    ));
+                }
+            }
+        }
+        let field_path = field_path.ok_or(EmitError::Unsupported(
+            "clock receiver does not resolve to a single Clock field",
+        ))?;
+        let id = self
+            .model
+            .domain_attrs
+            .field_attrs
+            .get(&field_path)
+            .and_then(|attrs| {
+                attrs.iter().find_map(|a| match a {
+                    AttrData::ClockResource { id, .. } => Some(*id),
+                    _ => None,
+                })
+            })
+            .ok_or(EmitError::Unsupported(
+                "clock receiver field has no recorded ClockResource marker",
+            ))?;
+        let clk_id = self.model.strings.resolve(id).to_string();
+        let binding = self
+            .model
+            .clock
+            .drivers
+            .get(&field_path.item)
+            .and_then(|d| d.resources.iter().find(|r| r.id == id))
+            .map(|r| r.binding.clone())
+            .ok_or(EmitError::Unsupported(
+                "clock receiver field has no resolved ClockResource binding",
+            ))?;
+        Ok((clk_id, binding))
+    }
+
+    /// Peripheral-clock-management author-op lowering (clock construct): lower an
+    /// `IntrinsicKind::Clock(op)` wrapper-method Call against the receiver's bound
+    /// `clk_id`. The mode chooses the lowering (D07, the static const-fold is
+    /// backend-owned):
+    ///   * **managed** — `enable`/`disable`/`get_rate` route to the
+    ///     `regseq_clock_*` host hooks (the trace oracle); `get_rate` returns the
+    ///     live recorded rate (no fallback, D10/R10).
+    ///   * **static** — `enable`/`disable` are no-ops; `get_rate` const-folds to
+    ///     the resolved `default_frequency`. `acquire`/`release` are still
+    ///     synthesized in the preamble (T07), so the host slot still records the
+    ///     frequency — but static `get_rate` never calls the hook.
+    ///
+    /// `enable` is fallible (`-> Result<(), RegseqError>`); its destination Result
+    /// is constructed `Ok(())` (the generic-c host clock never fails — the
+    /// acquisition failure path is a real-backend concern, T14). `disable` returns
+    /// `()` (no destination write); `get_rate` returns `u32`.
+    fn emit_clock(
+        &self,
+        op: ClockOp,
+        _callee: &CallCallee,
+        args: &[Operand],
+        destination: &Place,
+        target: Option<regseq_model::BlockId>,
+    ) -> Result<String, EmitError> {
+        let target = target.ok_or(EmitError::Unsupported("clock call with no target"))?;
+        let recv = args
+            .first()
+            .ok_or(EmitError::Unsupported("clock call with no receiver"))?;
+        let (clk_id, binding) = self.recover_clock(recv)?;
+        let clk_lit = format!("{clk_id:?}"); // a quoted, escaped C string literal
+        let is_static = binding.mode == ClockMode::Static;
+        let stmt = match op {
+            ClockOp::Enable => {
+                // The destination is `Result<(), RegseqError>`; construct `Ok(())`
+                // (variant 0, unit payload — no field write), mirroring the
+                // `compare_exchange` enum-construction precedent. The managed hook
+                // is called for its trace + state transition; its `int` status is
+                // discarded (the host never fails — I02's hard-error path is the
+                // Linux `devm_clk_get`/`PTR_ERR` concern, T14).
+                let dst = self.place_lvalue(destination)?;
+                let dst_ty = self.place_ty(destination);
+                let shape = enum_emit::enum_shape(self.model, dst_ty).ok_or(
+                    EmitError::Unsupported(
+                        "clock enable destination is not an enum (expected Result<(), RegseqError>)",
+                    ),
+                )?;
+                let ok_tag = self.emit_set_discriminant(&dst, shape, 0)?.unwrap_or_default();
+                if is_static {
+                    // static: no-op enable → Ok(()).
+                    ok_tag
+                } else {
+                    format!("(void)regseq_clock_enable({clk_lit}); {ok_tag}")
+                }
+            }
+            ClockOp::Disable => {
+                // Infallible (`-> ()`): no destination write. static → no-op.
+                if is_static {
+                    String::new()
+                } else {
+                    format!("regseq_clock_disable({clk_lit});")
+                }
+            }
+            ClockOp::GetRate => {
+                let dst = self.place_lvalue(destination)?;
+                let dst_cty = types::c_type(self.model, self.names, self.place_ty(destination));
+                if is_static {
+                    // static: const-fold to default_frequency (D07/D10). A resolved
+                    // static binding always carries a frequency (CLK-L2 enforces it).
+                    let freq = binding.default_frequency.ok_or(EmitError::Unsupported(
+                        "static clock get_rate without a resolved default_frequency",
+                    ))?;
+                    format!("{dst} = ({dst_cty}){freq}u;")
+                } else {
+                    // managed: the raw live rate query (no fallback, D10/R10).
+                    format!("{dst} = ({dst_cty})regseq_clock_get_rate({clk_lit});")
+                }
+            }
+        };
+        Ok(format!("{stmt} goto bb_{};", target.as_u32()))
     }
 
     /// Register-access MMIO lowering (register-access construct, Form B): lower
@@ -5550,6 +5755,38 @@ pub(crate) fn model_has_delay_intrinsic(model: &RegseqModel) -> bool {
     })
 }
 
+/// Whether the model has any recognized `Clock` resource
+/// (peripheral-clock-management construct) — the demand gate for emitting the
+/// [`super::prelude::CLOCK_HELPERS`] host clock model. Gated on RESOURCE presence
+/// (NOT intrinsic presence, D06/S07): the compiler-managed `acquire_clock`/
+/// `release` are synthesized from the clock FIELD even when the author calls no
+/// `clock_*` op (acquire-only / get_rate-only), so the hooks must be present
+/// whenever a clock resource is — which subsumes the intrinsic case (a `clock_*`
+/// call implies a clock field). A clock-less TU's `.c` is byte-unchanged (I07).
+pub(crate) fn model_has_clock_resource(model: &RegseqModel) -> bool {
+    model
+        .clock
+        .drivers
+        .values()
+        .any(|d| !d.resources.is_empty())
+}
+
+/// The total number of `Clock` resources across all drivers in the model — the
+/// size of the generic-c host clock slot table (the global singleton is
+/// TU-wide). The caller emits `#define REGSEQ_CLOCK_SLOTS {count}` before the
+/// [`super::prelude::CLOCK_HELPERS`] block (mirroring `REGSEQ_ATOMIC_CELLS`), so
+/// the slot table is sized to the exact clock count and can never overflow — no
+/// clock is ever silently dropped (a dropped clock's `get_rate` would otherwise
+/// return 0 instead of its recorded rate).
+pub(crate) fn clock_resource_count(model: &RegseqModel) -> usize {
+    model
+        .clock
+        .drivers
+        .values()
+        .map(|d| d.resources.len())
+        .sum()
+}
+
 /// Whether the model uses ANY atomic operation — an `Atomic<T>` field OR a
 /// recognized atomic intrinsic (the field-less `atomic::fence` free fn included).
 /// This is the demand gate for the `ATOMIC_HELPERS` prelude: a fence-only TU has
@@ -6216,6 +6453,14 @@ pub(crate) fn emit_lifecycle_synthesis(
                 }
             }
 
+            // Peripheral-clock-management acquire_clock (clock construct,
+            // C07/D16/D05): synthesized immediately after the bus/map_region
+            // keystone, in clock declaration order, BEFORE the sync init +
+            // interrupt preamble below. Compiler-managed (no author call); each
+            // records its resolved default_frequency in the host slot. Empty for a
+            // clock-less driver (no golden churn).
+            out.push_str(&clock_acquire_block(model, driver_item, "    "));
+
             // Synchronization init_primitives (C05/I05): initialize every declared
             // lock/completion HERE — after the bus/map_region keystone, BEFORE the
             // interrupt register-disabled below and before `on_init` (which may
@@ -6308,6 +6553,12 @@ pub(crate) fn emit_lifecycle_synthesis(
                 None => String::new(),
             };
 
+            // Peripheral-clock-management release lines (clock construct,
+            // C07/D16): reverse declaration order (LIFO). Empty for a clock-less
+            // driver. The 4-space indent matches the function-body teardown
+            // (orderly/surprise); init-fail rebuilds it at its deeper indent.
+            let clock_teardown = clock_release_block(model, driver_item, "    ");
+
             // Scenario-specific on_init handling + teardown/shutdown suffix.
             match scenario {
                 // Orderly teardown (device present, M2): on_init Result discarded
@@ -6335,6 +6586,7 @@ pub(crate) fn emit_lifecycle_synthesis(
                         &resource_names,
                         &irq_teardown,
                         &sync_teardown,
+                        &clock_teardown,
                         &mut out,
                     );
                     if let Some((_, e)) = irq_view {
@@ -6368,6 +6620,7 @@ pub(crate) fn emit_lifecycle_synthesis(
                         &resource_names,
                         &irq_teardown,
                         &sync_teardown,
+                        &clock_teardown,
                         &mut out,
                     );
                 }
@@ -6380,11 +6633,16 @@ pub(crate) fn emit_lifecycle_synthesis(
                 // is not overridden (the trait-default `Ok` can never take the
                 // failure path) except an interrupt driver's enable.
                 LifecycleScenario::InitFail => {
+                    // The init-fail unwind runs inside the `if (__disc != Ok)`
+                    // block (8-space indent), so the clock release is rebuilt at
+                    // that depth.
+                    let clock_unwind = clock_release_block(model, driver_item, "        ");
                     emit_init_fail_body(
                         &on_init_capture,
                         &on_init_failure_sym,
                         irq_view,
                         options,
+                        &clock_unwind,
                         &mut out,
                     );
                 }
@@ -6679,6 +6937,43 @@ fn emit_serial_synthesis(
     Ok((defs, format!("    {helper}();\n")))
 }
 
+/// Compiler-managed `acquire_clock` preamble lines (peripheral-clock-management
+/// construct, C07/D16/D05): one `regseq_clock_acquire("<id>", <freq>u)` per clock
+/// resource in DECLARATION order, slotted after the bus/`map_region` keystone and
+/// before the interrupt preamble. Each records its resolved `default_frequency`
+/// in the host clock slot, so a later managed `get_rate` returns it (the oracle
+/// value). Emitted under BOTH modes (static still records the frequency, no
+/// provider lookup). Empty for a clock-less driver (no golden churn).
+fn clock_acquire_block(model: &RegseqModel, driver_item: &ItemId, indent: &str) -> String {
+    let mut out = String::new();
+    if let Some(clocks) = model.clock.drivers.get(driver_item) {
+        for res in &clocks.resources {
+            let id = model.strings.resolve(res.id);
+            let freq = res.binding.default_frequency.unwrap_or(0);
+            out.push_str(&format!("{indent}regseq_clock_acquire({id:?}, {freq}u);\n"));
+        }
+    }
+    out
+}
+
+/// Compiler-managed clock `release` postamble lines (peripheral-clock-management
+/// construct, C07/D16/D05): one `regseq_clock_release("<id>")` per clock resource
+/// in REVERSE declaration order (LIFO), slotted after the device is quiesced
+/// (after the interrupt teardown + sync destroy) and before the resource
+/// postambles (the `map_region` unmap markers) — the exact reverse of the
+/// preamble. The compiler releases only; it never synthesizes `disable`
+/// (author-owned). Empty for a clock-less driver.
+fn clock_release_block(model: &RegseqModel, driver_item: &ItemId, indent: &str) -> String {
+    let mut out = String::new();
+    if let Some(clocks) = model.clock.drivers.get(driver_item) {
+        for res in clocks.resources.iter().rev() {
+            let id = model.strings.resolve(res.id);
+            out.push_str(&format!("{indent}regseq_clock_release({id:?});\n"));
+        }
+    }
+    out
+}
+
 /// Emit a teardown-dispatch suffix shared by the orderly (M2) and surprise (M4)
 /// scenarios: the `present` dispatch marker, then the teardown callback's marker
 /// ALWAYS (CR-3 — the trait-default no-op still counts as invoked), then the
@@ -6693,6 +6988,7 @@ fn emit_teardown_dispatch(
     resource_names: &[String],
     irq_teardown: &str,
     sync_teardown: &str,
+    clock_teardown: &str,
     out: &mut String,
 ) {
     out.push_str(&format!("    regseq_lc_teardown({present});\n"));
@@ -6711,6 +7007,12 @@ fn emit_teardown_dispatch(
     // Empty for a lock-less driver; on Zephyr/Linux destroy is a no-op (this is
     // the generic-c oracle's realization).
     out.push_str(sync_teardown);
+    // Peripheral-clock-management release (clock construct, C07/D16): AFTER the
+    // device is quiesced (interrupt disable + sync destroy), BEFORE the resource
+    // postambles (the `map_region` unmap markers) — the exact reverse of the
+    // preamble, where `acquire_clock` came after `map_region`. Empty for a
+    // clock-less driver.
+    out.push_str(clock_teardown);
     let skipped = if present == 0 { 1 } else { 0 };
     for res in resource_names.iter().rev() {
         out.push_str(&format!("    regseq_lc_postamble(\"{res}\", {skipped});\n"));
@@ -6775,6 +7077,7 @@ fn emit_init_fail_body(
     on_init_failure_sym: &Option<String>,
     irq: Option<(&DriverInterrupts, &IrqEmission)>,
     options: &BackendOptions,
+    clock_teardown: &str,
     out: &mut String,
 ) {
     let Some((capture, ok_disc_render)) = on_init_capture else {
@@ -6792,14 +7095,19 @@ fn emit_init_fail_body(
     if let Some(fsym) = on_init_failure_sym {
         out.push_str(&format!("        {fsym}(&inst.inner);\n"));
     }
+    // `acquire_clock` ran in the preamble (before on_init), so the clock is
+    // released on the Err rollback path too (LIFO, after the interrupt unwind —
+    // C07/D16). Empty for a clock-less driver.
     match irq {
         Some((interrupts, e)) => {
             out.push_str(&e.unwind_block(interrupts, "        "));
+            out.push_str(clock_teardown);
             out.push_str("    } else {\n");
             out.push_str(&e.enable_block(interrupts, options, false, "        "));
             out.push_str("    }\n");
         }
         None => {
+            out.push_str(clock_teardown);
             out.push_str("    }\n");
         }
     }
