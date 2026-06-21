@@ -1066,18 +1066,24 @@ static int serialpl011_fifo_read(const struct device *dev, uint8_t *rx, const in
 	return n;
 }
 
-/* irq_tx_enable: record the arm (gates irq_tx_ready), arm TxReady
- * (scatter) + prime-kick the callback (the level TX IRQ does not fire for an
- * already-empty FIFO — confirmed live: arm-only sends 0 bytes). The prime runs
- * under irq_lock so the now-armed TX IRQ cannot PREEMPT it and re-enter the
- * callback concurrently (the live byte-IO double-send finding; the upstream
- * pl011 serializes the same dispatch with a spinlock) */
+/* irq_tx_enable: arm TxReady, then prime-kick the callback. The arm shadow
+ * (tx_irq_on) and the HW IMSC.TXIM mask are TWO mirrors of one arm state and MUST
+ * be set together under irq_lock: a re-entrant disarm (from the synthesized ISR's
+ * callback path) that tears them apart leaves HW TXIM set while the shadow reads
+ * false — a permanent, unserviceable level TX-IRQ storm (the M3 shell-burst
+ * wedge). THEN prime-kick (the level TX IRQ does not fire for an already-empty
+ * FIFO — confirmed live: arm-only sends 0 bytes); the prime runs under its own
+ * irq_lock so the now-armed TX IRQ cannot PREEMPT it and re-enter the callback
+ * concurrently (the live byte-IO double-send finding; the upstream
+ * pl011_irq_tx_enable serializes the same dispatch with a spinlock) */
 static void serialpl011_irq_tx_enable(const struct device *dev)
 {
 	struct serialpl011_data *data = dev->data;
 
+	unsigned int __arm_key = irq_lock();
 	data->tx_irq_on = true;
 	serialpl011_irq_source_set(&data->inner, (struct SerialIrqSource){ ._raw = { [0] = 0x0 } }, (struct IrqSourceState){ ._raw = { [0] = 0x0 } });
+	irq_unlock(__arm_key);
 	if (data->cb) {
 		unsigned int __key = irq_lock();
 		data->cb(dev, data->cb_data);
@@ -1085,12 +1091,16 @@ static void serialpl011_irq_tx_enable(const struct device *dev)
 	}
 }
 
+/* irq_tx_disable: disarm TxReady + clear the shadow, together under irq_lock
+ * (the same atomicity irq_tx_enable needs — shadow and HW IMSC are one state) */
 static void serialpl011_irq_tx_disable(const struct device *dev)
 {
 	struct serialpl011_data *data = dev->data;
 
+	unsigned int __disarm_key = irq_lock();
 	serialpl011_irq_source_set(&data->inner, (struct SerialIrqSource){ ._raw = { [0] = 0x0 } }, (struct IrqSourceState){ ._raw = { [0] = 0x1 } });
 	data->tx_irq_on = false;
+	irq_unlock(__disarm_key);
 }
 
 /* irq_tx_ready: TX armed AND FR.TXFF clear (FIFO has space). The arm gate
@@ -1115,20 +1125,27 @@ static int serialpl011_irq_tx_complete(const struct device *dev)
 	return serialpl011_tx_drain_query(&data->inner);
 }
 
+/* irq_rx_enable: arm RxData + set the shadow, together under irq_lock (the
+ * same shadow/IMSC atomicity the TX path needs) */
 static void serialpl011_irq_rx_enable(const struct device *dev)
 {
 	struct serialpl011_data *data = dev->data;
 
+	unsigned int __rxen_key = irq_lock();
 	data->rx_irq_on = true;
 	serialpl011_irq_source_set(&data->inner, (struct SerialIrqSource){ ._raw = { [0] = 0x1 } }, (struct IrqSourceState){ ._raw = { [0] = 0x0 } });
+	irq_unlock(__rxen_key);
 }
 
+/* irq_rx_disable: disarm RxData + clear the shadow, together under irq_lock */
 static void serialpl011_irq_rx_disable(const struct device *dev)
 {
 	struct serialpl011_data *data = dev->data;
 
+	unsigned int __rxdis_key = irq_lock();
 	serialpl011_irq_source_set(&data->inner, (struct SerialIrqSource){ ._raw = { [0] = 0x1 } }, (struct IrqSourceState){ ._raw = { [0] = 0x1 } });
 	data->rx_irq_on = false;
+	irq_unlock(__rxdis_key);
 }
 
 /* irq_rx_ready: RX armed AND FR.RXFE clear (data present). Gated on the arm
@@ -1141,18 +1158,26 @@ static int serialpl011_irq_rx_ready(const struct device *dev)
 	return data->rx_irq_on && serialpl011_data_ready_query(&data->inner, (struct ReadyDir){ ._raw = { [0] = 0x1 } });
 }
 
+/* irq_err_enable: arm LineError under irq_lock — every writer of the shared
+ * IMSC shadow serializes (a public-API err arm must not race a TX/RX disarm on
+ * imsc_shadow and re-commit a stale mask) */
 static void serialpl011_irq_err_enable(const struct device *dev)
 {
 	struct serialpl011_data *data = dev->data;
 
+	unsigned int __erren_key = irq_lock();
 	serialpl011_irq_source_set(&data->inner, (struct SerialIrqSource){ ._raw = { [0] = 0x2 } }, (struct IrqSourceState){ ._raw = { [0] = 0x0 } });
+	irq_unlock(__erren_key);
 }
 
+/* irq_err_disable: disarm LineError under irq_lock (imsc_shadow atomicity) */
 static void serialpl011_irq_err_disable(const struct device *dev)
 {
 	struct serialpl011_data *data = dev->data;
 
+	unsigned int __errdis_key = irq_lock();
 	serialpl011_irq_source_set(&data->inner, (struct SerialIrqSource){ ._raw = { [0] = 0x2 } }, (struct IrqSourceState){ ._raw = { [0] = 0x1 } });
+	irq_unlock(__errdis_key);
 }
 
 /* irq_is_pending <- the upstream predicate (rx_ready || tx_ready) */

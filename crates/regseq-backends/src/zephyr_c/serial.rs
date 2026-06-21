@@ -544,15 +544,16 @@ fn emit_uart_api(
     // app's TX cursor (the live byte-IO double-send finding; the upstream
     // pl011_irq_tx_enable serializes the same dispatch with a spinlock, R18-noted).
     out.push_str(&format!(
-        "/* irq_tx_enable: record the arm (gates irq_tx_ready), arm TxReady\n * (scatter) + prime-kick the callback (the level TX IRQ does not fire for an\n * already-empty FIFO — confirmed live: arm-only sends 0 bytes). The prime runs\n * under irq_lock so the now-armed TX IRQ cannot PREEMPT it and re-enter the\n * callback concurrently (the live byte-IO double-send finding; the upstream\n * pl011 serializes the same dispatch with a spinlock) */\nstatic void {drv}_irq_tx_enable(const struct device *dev)\n{{\n\tstruct {drv}_data *data = dev->data;\n\n\tdata->tx_irq_on = true;\n"
+        "/* irq_tx_enable: arm TxReady, then prime-kick the callback. The arm shadow\n * (tx_irq_on) and the HW IMSC.TXIM mask are TWO mirrors of one arm state and MUST\n * be set together under irq_lock: a re-entrant disarm (from the synthesized ISR's\n * callback path) that tears them apart leaves HW TXIM set while the shadow reads\n * false — a permanent, unserviceable level TX-IRQ storm (the M3 shell-burst\n * wedge). THEN prime-kick (the level TX IRQ does not fire for an already-empty\n * FIFO — confirmed live: arm-only sends 0 bytes); the prime runs under its own\n * irq_lock so the now-armed TX IRQ cannot PREEMPT it and re-enter the callback\n * concurrently (the live byte-IO double-send finding; the upstream\n * pl011_irq_tx_enable serializes the same dispatch with a spinlock) */\nstatic void {drv}_irq_tx_enable(const struct device *dev)\n{{\n\tstruct {drv}_data *data = dev->data;\n\n\tunsigned int __arm_key = irq_lock();\n\tdata->tx_irq_on = true;\n"
     ));
     out.push_str(&scatter_call(cx, serial, ops, ZephyrSerialSite::IrqTxEnable)?);
+    out.push_str("\tirq_unlock(__arm_key);\n");
     out.push_str("\tif (data->cb) {\n\t\tunsigned int __key = irq_lock();\n\t\tdata->cb(dev, data->cb_data);\n\t\tirq_unlock(__key);\n\t}\n}\n\n");
     out.push_str(&format!(
-        "static void {drv}_irq_tx_disable(const struct device *dev)\n{{\n\tstruct {drv}_data *data = dev->data;\n\n"
+        "/* irq_tx_disable: disarm TxReady + clear the shadow, together under irq_lock\n * (the same atomicity irq_tx_enable needs — shadow and HW IMSC are one state) */\nstatic void {drv}_irq_tx_disable(const struct device *dev)\n{{\n\tstruct {drv}_data *data = dev->data;\n\n\tunsigned int __disarm_key = irq_lock();\n"
     ));
     out.push_str(&scatter_call(cx, serial, ops, ZephyrSerialSite::IrqTxDisable)?);
-    out.push_str("\tdata->tx_irq_on = false;\n}\n\n");
+    out.push_str("\tdata->tx_irq_on = false;\n\tirq_unlock(__disarm_key);\n}\n\n");
     out.push_str(&format!(
         "/* irq_tx_ready: TX armed AND FR.TXFF clear (FIFO has space). The arm gate\n * is load-bearing: FR.TXFF is clear whenever the FIFO has room (i.e. nearly\n * always when idle), so an ungated predicate would make the canonical callback\n * loop `while (irq_update() && irq_is_pending())` never terminate (the upstream\n * pl011_irq_tx_ready likewise gates on IMSC.TXIM; the surface has no IMSC query,\n * so the backend tracks the arm) */\nstatic int {drv}_irq_tx_ready(const struct device *dev)\n{{\n\tstruct {drv}_data *data = dev->data;\n\n\treturn data->tx_irq_on && {ready}(&data->inner, {txspace});\n}}\n\n",
         ready = ops.data_ready_query.sym,
@@ -562,29 +563,29 @@ fn emit_uart_api(
         drain = ops.tx_drain_query.sym,
     ));
     out.push_str(&format!(
-        "static void {drv}_irq_rx_enable(const struct device *dev)\n{{\n\tstruct {drv}_data *data = dev->data;\n\n\tdata->rx_irq_on = true;\n"
+        "/* irq_rx_enable: arm RxData + set the shadow, together under irq_lock (the\n * same shadow/IMSC atomicity the TX path needs) */\nstatic void {drv}_irq_rx_enable(const struct device *dev)\n{{\n\tstruct {drv}_data *data = dev->data;\n\n\tunsigned int __rxen_key = irq_lock();\n\tdata->rx_irq_on = true;\n"
     ));
     out.push_str(&scatter_call(cx, serial, ops, ZephyrSerialSite::IrqRxEnable)?);
-    out.push_str("}\n\n");
+    out.push_str("\tirq_unlock(__rxen_key);\n}\n\n");
     out.push_str(&format!(
-        "static void {drv}_irq_rx_disable(const struct device *dev)\n{{\n\tstruct {drv}_data *data = dev->data;\n\n"
+        "/* irq_rx_disable: disarm RxData + clear the shadow, together under irq_lock */\nstatic void {drv}_irq_rx_disable(const struct device *dev)\n{{\n\tstruct {drv}_data *data = dev->data;\n\n\tunsigned int __rxdis_key = irq_lock();\n"
     ));
     out.push_str(&scatter_call(cx, serial, ops, ZephyrSerialSite::IrqRxDisable)?);
-    out.push_str("\tdata->rx_irq_on = false;\n}\n\n");
+    out.push_str("\tdata->rx_irq_on = false;\n\tirq_unlock(__rxdis_key);\n}\n\n");
     out.push_str(&format!(
         "/* irq_rx_ready: RX armed AND FR.RXFE clear (data present). Gated on the arm\n * for symmetry with irq_tx_ready (the data-present check self-limits, but the\n * gate mirrors the upstream IMSC.RXIM check) */\nstatic int {drv}_irq_rx_ready(const struct device *dev)\n{{\n\tstruct {drv}_data *data = dev->data;\n\n\treturn data->rx_irq_on && {ready}(&data->inner, {rxdata});\n}}\n\n",
         ready = ops.data_ready_query.sym,
     ));
     out.push_str(&format!(
-        "static void {drv}_irq_err_enable(const struct device *dev)\n{{\n\tstruct {drv}_data *data = dev->data;\n\n"
+        "/* irq_err_enable: arm LineError under irq_lock — every writer of the shared\n * IMSC shadow serializes (a public-API err arm must not race a TX/RX disarm on\n * imsc_shadow and re-commit a stale mask) */\nstatic void {drv}_irq_err_enable(const struct device *dev)\n{{\n\tstruct {drv}_data *data = dev->data;\n\n\tunsigned int __erren_key = irq_lock();\n"
     ));
     out.push_str(&scatter_call(cx, serial, ops, ZephyrSerialSite::IrqErrEnable)?);
-    out.push_str("}\n\n");
+    out.push_str("\tirq_unlock(__erren_key);\n}\n\n");
     out.push_str(&format!(
-        "static void {drv}_irq_err_disable(const struct device *dev)\n{{\n\tstruct {drv}_data *data = dev->data;\n\n"
+        "/* irq_err_disable: disarm LineError under irq_lock (imsc_shadow atomicity) */\nstatic void {drv}_irq_err_disable(const struct device *dev)\n{{\n\tstruct {drv}_data *data = dev->data;\n\n\tunsigned int __errdis_key = irq_lock();\n"
     ));
     out.push_str(&scatter_call(cx, serial, ops, ZephyrSerialSite::IrqErrDisable)?);
-    out.push_str("}\n\n");
+    out.push_str("\tirq_unlock(__errdis_key);\n}\n\n");
     out.push_str(&format!(
         "/* irq_is_pending <- the upstream predicate (rx_ready || tx_ready) */\nstatic int {drv}_irq_is_pending(const struct device *dev)\n{{\n\treturn {drv}_irq_rx_ready(dev) || {drv}_irq_tx_ready(dev);\n}}\n\n"
     ));
