@@ -107,6 +107,21 @@ pub(super) fn emit_linux_serial(
 
     let driver_ty = driver_struct_ty(model, driver_item)
         .ok_or_else(|| EmitError::Driver("serial driver struct type not in the interner".into()))?;
+    // pinctrl construct (M4/T20): the dedicated serial scaffold does NOT wire the
+    // pinctrl field morph / acquire preamble / consumer header, but the shared
+    // `body::emit_pinctrl` would still lower an authored `apply::<S>()` — so a
+    // serial driver with a RESOLVED pinctrl resource would emit body calls over a
+    // non-morphed field with no acquire (broken C). Fail LOUD rather than silently
+    // drop the scaffold (Codex M4-diff #1); serial+pinctrl wiring is out of M4
+    // scope (the pinctrl witness exercises the generic AMBA scaffold). An
+    // optional-ABSENT resource needs no scaffold (its `apply` folds), so the gate
+    // is resolved-only.
+    if super::pinctrl::has_resolved_pinctrl(model, driver_ty) {
+        return Err(EmitError::UnsupportedInUnit {
+            what: "a resolved pinctrl resource in a device-class-serial driver".into(),
+            unit: "linux_c serial scaffold (pinctrl serial lowering is out of M4 scope)",
+        });
+    }
     let resource_names: Vec<String> = driver
         .handle
         .resource_fields
@@ -273,12 +288,21 @@ pub(super) fn emit_linux_serial(
     }
     let clock_field_decls: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
+    // pinctrl construct (M4/T20): the dedicated serial scaffold does not wire the
+    // pinctrl required-form field morph + acquire preamble (the optional form needs
+    // no field — its `apply` recovers `dev` via container_of, which the serial priv
+    // layout supports). The pinctrl emission witness exercises the generic AMBA
+    // scaffold, not this device-class-serial path; a serial driver with a REQUIRED
+    // pinctrl is out of M4 scope (no fixture). Empty, mirroring clock here.
+    let pinctrl_field_decls: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
     let type_defs = super::emit_type_defs(
         &mut cx,
         driver_ty,
         &resource_names,
         &sync_field_decls,
         &clock_field_decls,
+        &pinctrl_field_decls,
     )?;
 
     // -- assemble the TU.

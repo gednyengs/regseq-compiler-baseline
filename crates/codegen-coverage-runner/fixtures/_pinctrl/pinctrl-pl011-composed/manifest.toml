@@ -1,0 +1,13 @@
+name   = "pinctrl-pl011-composed"
+kind   = "rust"
+# The pin-controller-and-GPIO-configuration COMPOSED-interaction fixture (PLAN T24):
+# one driver carrying region + REQUIRED pinctrl + MANAGED clock + interrupt,
+# witnessing the C07 phase ordering — preamble map_region -> acquire_pinctrl ->
+# acquire_clock -> interrupt-register, teardown in exact reverse (interrupt-
+# deregister -> clock-release -> pinctrl-release -> LC postamble for the region
+# resource). The orderly scenario drives the lifecycle; expected.stdout is the
+# generic-c oracle trace (the placement made observable). Covers aggregation rides
+# pinctrl_covers (the _pinctrl corpus is interner-isolated, like _clock/_irq).
+covers = ["PIN-1", "PIN-2", "PIN-3", "PIN-6"]
+lifecycle_scenario = "orderly"
+expect = "pass"

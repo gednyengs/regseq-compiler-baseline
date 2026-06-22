@@ -1,0 +1,9 @@
+name   = "pinctrl-missing-id-reject"
+kind   = "rust"
+# C06: a PinCtrl field without the mandatory #[rseq::pinctrl(id="…")] join key.
+covers = ["PIN-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "PIN-ERR-MISSING-ID"

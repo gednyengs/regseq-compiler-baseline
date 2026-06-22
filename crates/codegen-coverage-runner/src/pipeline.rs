@@ -82,6 +82,13 @@ pub fn bind_l2_platform(
     // Validate the L2 surface + re-validate the (possibly bound) model for EVERY
     // fixture, exactly as production does for every bus-declared driver.
     regseq_l2::validate_l2_surface(model).map_err(|err| format!("[{}] {err}", err.code()))?;
+    // Pinctrl semantic checks (C06 / C03, M2): the author-managed-field body walk
+    // + the apply-site state checks. Run post-L2 because the `apply::<S>()`
+    // membership check needs the joined `[pinctrl.<id>]` inventory — mirrors
+    // production's `callbacks.rs` seam after `validate_l2_surface`. Pure
+    // model-level (regseq-model); a pinctrl-less fixture is a no-op.
+    regseq_model::validate_pinctrl_semantics(model)
+        .map_err(|err| format!("[{}] {err}", err.code()))?;
     let bridge_input = regseq_model::BridgeInput::matching(model);
     model
         .validate(&bridge_input)
@@ -249,6 +256,13 @@ pub fn backend_options_for(
                     .irq_fire
                     .iter()
                     .map(|csv| ("irq.fire", csv.as_str())),
+            )
+            .chain(
+                fixture
+                    .manifest
+                    .pinctrl_fail_acquire
+                    .iter()
+                    .map(|id| ("pinctrl.fail-acquire", id.as_str())),
             ),
     )
 }

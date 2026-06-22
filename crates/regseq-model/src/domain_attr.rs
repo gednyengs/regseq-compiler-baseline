@@ -137,6 +137,34 @@ pub enum AttrData {
         /// `Option<Clock>` is recognized-and-rejected, C06 N2).
         required: bool,
     } = 6,
+    /// Pin-controller-and-GPIO-configuration resource field marker
+    /// (`#[rseq::pinctrl(id = "…")]`, pinctrl state-selection construct),
+    /// stored in `DomainAttrTables.field_attrs`. Carries the mandatory resource
+    /// id (the `[pinctrl.<id>]` join key, GRILL D07) and whether the
+    /// declaration is the required `PinCtrl` form (`required = true`) or the
+    /// optional `Option<PinCtrl>` form (`required = false`, GRILL D02/D03). The
+    /// joined per-driver facts (the `pin_states` inventory) live in the
+    /// `PinctrlTables` sibling table. Appended at discriminant 7 (next-free
+    /// after `ClockResource = 6`), append-only (GRILL I06/D09).
+    PinctrlResource {
+        /// The interned resource id (`#[rseq::pinctrl(id = "…")]`).
+        pinctrl_id: StringId,
+        /// Whether this is the required `PinCtrl` form (`true`) versus the
+        /// optional `Option<PinCtrl>` form (`false`).
+        required: bool,
+    } = 7,
+    /// Pin-state marker-type marker (`#[rseq::pin_state(id = "…")]`, pinctrl
+    /// state-selection construct), stored in `DomainAttrTables.item_attrs` on
+    /// the author-declared unit-struct marker item (NOT in `field_attrs`).
+    /// Carries the interned state-name `id`; recognition resolves an
+    /// `apply::<S>()` op's generic arg `S` to its marker `DefId` and reads this
+    /// `id` to stamp the resolved state name on the op (GRILL D04/C03).
+    /// Appended at discriminant 8 (next-free after `PinctrlResource = 7`),
+    /// append-only.
+    PinStateMarker {
+        /// The interned pin-state name (`#[rseq::pin_state(id = "…")]`).
+        id: StringId,
+    } = 8,
 }
 
 /// Closed, append-only framework-type taxonomy.
@@ -209,6 +237,15 @@ pub enum IntrinsicKind {
     /// `set_rate` is built. Appended at discriminant 7, preserving the
     /// discriminants above (GRILL D04/C03).
     Clock(ClockOp) = 7,
+    /// Pin-controller-and-GPIO-configuration operation family (pinctrl
+    /// state-selection construct). The author op on a typed driver-local
+    /// `PinCtrl` resource (`apply::<S>()`), tagged via the facade
+    /// `#[rseq::intrinsic("pinctrl_apply")]` marker. The compiler-managed
+    /// `acquire_pinctrl`/`release_pinctrl` are NOT intrinsics — they are
+    /// synthesized from the pinctrl *field* (the `model.pinctrl` resource), so
+    /// they have no `IntrinsicKind`. Appended at discriminant 8, preserving the
+    /// discriminants above (GRILL D04/D09/C03).
+    Pinctrl(PinctrlOp) = 8,
 }
 
 /// Config-space operation carried by [`IntrinsicKind::Config`]
@@ -369,6 +406,22 @@ pub enum ClockOp {
     GetRate = 2,
 }
 
+/// Pin-controller-and-GPIO-configuration author operation carried by
+/// [`IntrinsicKind::Pinctrl`] (pinctrl state-selection construct). This
+/// corresponds to the `#[rseq::intrinsic("pinctrl_apply")]`-tagged `apply::<S>()`
+/// method on the `PinCtrl` resource (and the `OptionalPinCtrl` extension on
+/// `Option<PinCtrl>`). Closed, append-only — `acquire`/`release` are
+/// compiler-managed (synthesized from the field, not author intrinsics).
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PinctrlOp {
+    /// `pinctrl_apply`: select a named pin state (`apply::<S>()`). The resolved
+    /// state name (read off the `S` marker's `PinStateMarker.id`) is stamped on
+    /// the op by recognition; backends do not re-resolve. Author-called,
+    /// fallible (`-> Result`).
+    ApplyState = 0,
+}
+
 impl IntrinsicKind {
     /// Closed-vocabulary lookup from dash-form attribute NAME to an
     /// intrinsic kind.
@@ -422,6 +475,11 @@ impl IntrinsicKind {
             "clock_enable" => Some(IntrinsicKind::Clock(ClockOp::Enable)),
             "clock_disable" => Some(IntrinsicKind::Clock(ClockOp::Disable)),
             "clock_get_rate" => Some(IntrinsicKind::Clock(ClockOp::GetRate)),
+            // Pin-controller-and-GPIO-configuration intrinsic (underscore form,
+            // matching the facade `#[rseq::intrinsic("pinctrl_apply")]` tag).
+            // `acquire_pinctrl`/`release_pinctrl` are compiler-managed (not
+            // author-called intrinsics).
+            "pinctrl_apply" => Some(IntrinsicKind::Pinctrl(PinctrlOp::ApplyState)),
             _ => None,
         }
     }
@@ -1261,10 +1319,115 @@ mod tests {
     }
 
     #[test]
+    fn pinctrl_from_name_round_trip_and_discriminants() {
+        // Pin-controller-and-GPIO-configuration: the `pinctrl_apply` author op
+        // maps from its underscore-form NAME, round-trips through JSON, and the
+        // `Pinctrl` family appends at IntrinsicKind discriminant 8 with every
+        // prior family unmoved (Log=0 / Mmio=1 / PollUntil=2 / Config=3 /
+        // BusyWait=4 / Sleep=5 / Atomic=6 / Clock=7).
+        assert_eq!(
+            IntrinsicKind::from_name(symbol("pinctrl_apply")),
+            Some(IntrinsicKind::Pinctrl(PinctrlOp::ApplyState))
+        );
+        assert_json_round_trip(IntrinsicKind::Pinctrl(PinctrlOp::ApplyState));
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Log(LogLevel::Debug)), 0);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Mmio(MmioOp::Read)), 1);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::PollUntil), 2);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)), 3);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::BusyWait), 4);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Sleep), 5);
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::Atomic(AtomicOp::Load)),
+            6
+        );
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::Clock(ClockOp::Enable)),
+            7
+        );
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::Pinctrl(PinctrlOp::ApplyState)),
+            8
+        );
+        // `AttrData::Intrinsic` stays at 0 regardless of which family it carries.
+        assert_eq!(
+            attr_data_tag(&AttrData::Intrinsic(IntrinsicKind::Pinctrl(
+                PinctrlOp::ApplyState
+            ))),
+            0
+        );
+        // `acquire`/`release` are compiler-managed (not intrinsics); dash-form
+        // is rejected (pinctrl uses underscore form, matching the facade tag).
+        assert_eq!(IntrinsicKind::from_name(symbol("pinctrl_acquire")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("pinctrl_release")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("pinctrl-apply")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("pinctrl")), None);
+    }
+
+    #[test]
+    fn pinctrl_op_inner_discriminants_are_stable() {
+        // `PinctrlOp` is fieldless, so `as u8` yields its pinned discriminant.
+        assert_eq!(PinctrlOp::ApplyState as u8, 0);
+    }
+
+    #[test]
+    fn attr_data_pinctrl_resource_discriminant_and_round_trip() {
+        // The `PinctrlResource` field-attr variant appends at AttrData
+        // discriminant 7 (next-free after `ClockResource = 6`) without shifting
+        // any prior variant, and round-trips through JSON for both `required`
+        // values.
+        assert_eq!(
+            attr_data_tag(&AttrData::PinctrlResource {
+                pinctrl_id: StringId::from_u32(1),
+                required: true,
+            }),
+            7
+        );
+        // Prior variants unmoved.
+        assert_eq!(attr_data_tag(&attr(LogLevel::Debug)), 0);
+        assert_eq!(
+            attr_data_tag(&AttrData::ClockResource {
+                id: StringId::from_u32(1),
+                required: true,
+            }),
+            6
+        );
+        for required in [true, false] {
+            assert_json_round_trip(AttrData::PinctrlResource {
+                pinctrl_id: StringId::from_u32(7),
+                required,
+            });
+        }
+    }
+
+    #[test]
+    fn attr_data_pin_state_marker_discriminant_and_round_trip() {
+        // The `PinStateMarker` item-attr variant appends at AttrData
+        // discriminant 8 (next-free after `PinctrlResource = 7`) without
+        // shifting any prior variant, and round-trips through JSON.
+        assert_eq!(
+            attr_data_tag(&AttrData::PinStateMarker {
+                id: StringId::from_u32(3),
+            }),
+            8
+        );
+        assert_eq!(
+            attr_data_tag(&AttrData::PinctrlResource {
+                pinctrl_id: StringId::from_u32(1),
+                required: false,
+            }),
+            7
+        );
+        assert_json_round_trip(AttrData::PinStateMarker {
+            id: StringId::from_u32(3),
+        });
+    }
+
+    #[test]
     fn attr_data_and_intrinsic_kind_discriminants_have_no_collision() {
-        // Explicit no-collision check (PLAN T01): the clock additions must not
-        // alias any existing occupant. One instance per variant; their tag
-        // bytes must all be distinct.
+        // Explicit no-collision check (PLAN T01/T12/T25): the clock AND pinctrl
+        // additions (AttrData::{PinctrlResource, PinStateMarker} +
+        // IntrinsicKind::Pinctrl) must not alias any existing occupant. One
+        // instance per variant; their tag bytes must all be distinct.
         let attr_variants = [
             AttrData::Intrinsic(IntrinsicKind::PollUntil),
             AttrData::FrameworkType(FrameworkType::RegseqError),
@@ -1287,6 +1450,13 @@ mod tests {
                 id: StringId::from_u32(1),
                 required: true,
             },
+            AttrData::PinctrlResource {
+                pinctrl_id: StringId::from_u32(1),
+                required: true,
+            },
+            AttrData::PinStateMarker {
+                id: StringId::from_u32(1),
+            },
         ];
         let attr_tags: std::collections::BTreeSet<u8> =
             attr_variants.iter().map(attr_data_tag).collect();
@@ -1305,6 +1475,7 @@ mod tests {
             IntrinsicKind::Sleep,
             IntrinsicKind::Atomic(AtomicOp::Load),
             IntrinsicKind::Clock(ClockOp::Enable),
+            IntrinsicKind::Pinctrl(PinctrlOp::ApplyState),
         ];
         let intrinsic_tags: std::collections::BTreeSet<u8> =
             intrinsic_variants.iter().map(intrinsic_kind_tag).collect();

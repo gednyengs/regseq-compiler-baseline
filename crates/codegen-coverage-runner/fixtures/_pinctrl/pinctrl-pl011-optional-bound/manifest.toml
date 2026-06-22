@@ -1,0 +1,14 @@
+name   = "pinctrl-pl011-optional-bound"
+kind   = "rust"
+# The pin-controller-and-GPIO-configuration M3 optional-PRESENT oracle (PLAN T16):
+# a PL011-shaped AMBA driver with ONE #[rseq::pinctrl(id="uart_pins")]
+# Option<PinCtrl> (the OPTIONAL form, D02) bound to a PRESENT [pinctrl.uart_pins]
+# (pin_states = ["default", "sleep"]). Present ⇒ Some (D06): acquire_pinctrl
+# applies "default" in the preamble; BOTH author call paths reach the bound
+# resource — the plain `if let Some(p)=&self.pinctrl` local-tracing path (D13/T15)
+# applies "sleep", and the OptionalPinCtrl extension-trait path applies "default".
+# expected.stdout is the PIN trace oracle (C05): both paths emit
+# `regseq_pinctrl_apply` (no fold, since present).
+covers = ["PIN-1", "PIN-2", "PIN-3"]
+lifecycle_scenario = "orderly"
+expect = "pass"

@@ -1,0 +1,15 @@
+name   = "pinctrl-pl011-required-bound-min"
+kind   = "rust"
+# The pin-controller-and-GPIO-configuration M1 behavioral-oracle (PLAN T08): the
+# thinnest valid pinctrl spec on a PL011-shaped AMBA driver — construct-#1
+# register (DR) + ONE #[rseq::pinctrl(id="uart_pins")] PinCtrl (the REQUIRED form,
+# the unambiguous easy receiver, D13/D03) bound to a present [pinctrl.uart_pins]
+# (pin_states = ["default", "sleep"]). The orderly scenario synthesizes
+# acquire_pinctrl (after map_region, BEFORE acquire_clock — pins-before-clock) +
+# release_pinctrl (LIFO at teardown); the author body apply::<SleepState>()s, then
+# anchors a register write. expected.stdout is the PIN trace oracle (C05); this
+# fixture FREEZES the `PIN …` trace spelling (OI-3) and the generic-`S`->state-name
+# resolution (acquire applies "default"; the author apply resolves "sleep").
+covers = ["PIN-1", "PIN-2", "PIN-3"]
+lifecycle_scenario = "orderly"
+expect = "pass"

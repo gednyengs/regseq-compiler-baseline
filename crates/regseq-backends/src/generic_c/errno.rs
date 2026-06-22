@@ -43,6 +43,14 @@ pub(crate) fn errno_symbol(variant_name: &str) -> Option<&'static str> {
         "PermissionDenied" => "EPERM",
         "DeviceNotFound" => "ENODEV",
         "GenericFailure" => "EIO",
+        // Pin-controller-and-GPIO-configuration construct (pinctrl, GRILL D12/C08):
+        // the optional `Option<PinCtrl>` absent path compile-time-folds to
+        // `Err(RegseqError::PinctrlAbsent)` (D06/C04); the entry-shim errno adapter
+        // maps it to `ENODEV` (no such device — the pinctrl resource is absent).
+        // generic-c owns this mapping in M3 (where the fold first emits the
+        // variant); linux_c/zephyr_c gain the same row in M4 (T19). Each backend
+        // fails-loud on an unmapped variant, so the mapping must land WITH the fold.
+        "PinctrlAbsent" => "ENODEV",
         _ => return None,
     })
 }
@@ -95,6 +103,17 @@ mod tests {
                 "{symbol} must be a bare uppercase errno symbol, not a numeric",
             );
         }
+    }
+
+    #[test]
+    fn pinctrl_absent_maps_to_enodev() {
+        // GRILL D12/C08: the pinctrl optional-absent fold emits
+        // `Err(RegseqError::PinctrlAbsent)`; the errno adapter must map it to
+        // ENODEV (else `emit_exit_adapter` fails loud on the unmapped variant when
+        // a 3-variant pinctrl RegseqError reaches `regseq_main`'s return). Shares
+        // the ENODEV symbol with `DeviceNotFound` (name-keyed, order-independent).
+        assert_eq!(errno_symbol("PinctrlAbsent"), Some("ENODEV"));
+        assert_eq!(errno_symbol("DeviceNotFound"), Some("ENODEV"));
     }
 
     #[test]

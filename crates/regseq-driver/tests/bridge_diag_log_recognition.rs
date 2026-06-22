@@ -285,6 +285,9 @@ fn item_log_levels(model: &RegseqModel, leaf: &str) -> Vec<LogLevel> {
             AttrData::SyncResource { .. } => None,
             // Clock-construct marker is not a log level; skip it.
             AttrData::ClockResource { .. } => None,
+            // Pinctrl-construct markers are not log levels; skip them.
+            AttrData::PinctrlResource { .. } => None,
+            AttrData::PinStateMarker { .. } => None,
         })
         .collect()
 }

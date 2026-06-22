@@ -26,6 +26,7 @@ pub mod bus_resource;
 pub mod clock;
 mod error;
 pub mod interrupt;
+pub mod pinctrl;
 
 pub use error::{L2Error, PlatformIdentityError};
 
@@ -61,6 +62,7 @@ const REGISTRY: &[&dyn L2Binder] = &[
     &bus_resource::BusResourceBinder,
     &interrupt::InterruptBinder,
     &clock::ClockBinder,
+    &pinctrl::PinctrlBinder,
 ];
 
 /// Bind every tenant's platform metadata into `model`. This is the production

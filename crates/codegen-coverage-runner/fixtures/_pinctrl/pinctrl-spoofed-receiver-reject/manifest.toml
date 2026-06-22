@@ -1,0 +1,9 @@
+name   = "pinctrl-spoofed-receiver-reject"
+kind   = "rust"
+# C06/D14: a pinctrl_apply intrinsic tag on a non-PinCtrl receiver.
+covers = ["PIN-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "PIN-ERR-SPOOFED-RECEIVER"

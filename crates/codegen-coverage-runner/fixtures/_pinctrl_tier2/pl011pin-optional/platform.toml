@@ -1,0 +1,26 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "qemu-virt"
+arch = "aarch64"
+
+# L2 MMIO region binding: the RESERVED second PL011 @ 0x0904_0000, size 0x1000 — the
+# reserved test UART both legs target at runtime (the linux ttyAMA1 reserved via DT
+# periphid; the zephyr DUT node `uart@9040000`). linux_c maps via
+# `devm_ioremap_resource(&adev->dev, &adev->res)` (the base comes from the DT at
+# runtime — the literal only resolves the L1 `#[rseq::mmio(id = "regs")]` binding for
+# emission, so the linux golden stays base-literal-free and byte-unchanged by this
+# value). zephyr_c, by contrast, bakes a D11
+# `BUILD_ASSERT(DT_REG_ADDR(DT_DRV_INST(0)) == <base>)`, so this literal MUST equal
+# the zephyr overlay's DUT `reg` — set to 0x9040000 to avoid mapping the console
+# PL011 (0x9000000).
+[mmio.regs]
+base = 0x09040000
+size = 0x1000
+
+# L2 pinctrl binding (C01): the section is PRESENT, so the optional
+# `Option<PinCtrl>` resolves to `Some` (D06) and the optional-trait `apply` lowers
+# to `(void)pinctrl_pm_select_default_state(dev)`. MUST contain "default" (D07).
+[pinctrl.uart_pins]
+pin_states = ["default", "sleep"]

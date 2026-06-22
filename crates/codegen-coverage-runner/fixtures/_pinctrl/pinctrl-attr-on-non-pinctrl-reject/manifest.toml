@@ -1,0 +1,9 @@
+name   = "pinctrl-attr-on-non-pinctrl-reject"
+kind   = "rust"
+# C06: #[rseq::pinctrl] on a non-PinCtrl field.
+covers = ["PIN-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "PIN-ERR-ATTR-ON-NON-PINCTRL"

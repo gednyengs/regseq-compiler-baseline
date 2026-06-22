@@ -85,6 +85,24 @@ pub struct ClockBindingSpec {
     pub provider: Option<String>,
 }
 
+/// One `[pinctrl.<id>]` binding parsed from a platform file
+/// (pin-controller-and-GPIO-configuration construct, contract C01). Structural
+/// parse only: `pin_states` is captured as a typed `Vec<String>` (the SHAPE — a
+/// present, array-of-strings value — is the parser's; the CONTENT checks
+/// (non-empty, unique, non-empty names, `"default"` membership) are the
+/// `regseq-l2` pinctrl tenant's, GRILL C01/C06).
+///
+/// This is a NEW parse shape — an array of strings, with no clock/mmio/interrupt
+/// scalar precedent — so `parse_pinctrl_section` is authored fresh rather than
+/// copied. A typed `Vec<String>` cannot carry a non-string entry to L2, so a
+/// non-string array element MUST parse-reject (`BadPinctrl`), not defer to PIN-L2.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PinctrlBindingSpec {
+    /// `pin_states` — the names the driver may select (`default` / `sleep`).
+    /// SHAPE-validated here (present, array, all-string); CONTENT downstream.
+    pub pin_states: Vec<String>,
+}
+
 /// The L2 bindings parsed from a platform file: the `[mmio.<id>]` and
 /// `[interrupt.<id>]` sections keyed by resource id.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -101,6 +119,13 @@ pub struct PlatformBindings {
     /// An absent section is absence in the map; required-ness is the L2 tenant's
     /// (C01).
     pub clock: BTreeMap<String, ClockBindingSpec>,
+    /// `[pinctrl.<id>]` sections, keyed by the resource id
+    /// (`#[rseq::pinctrl(id = "<id>")]`, pin-controller-and-GPIO-configuration
+    /// construct). An absent section is absence in the map — for the optional
+    /// `Option<PinCtrl>` form that is the allowed absent case (binds to `None`);
+    /// for the required `PinCtrl` form a missing section is the L2 tenant's
+    /// `PIN-L2-NO-INVENTORY` (C01/D03).
+    pub pinctrl: BTreeMap<String, PinctrlBindingSpec>,
 }
 
 /// The raw, structurally-parsed `[platform]` identity (R5/D8). `regseq-config`
@@ -167,6 +192,18 @@ pub enum PlatformParseError {
     /// `[clock.…]`, not `[mmio.…]`.
     #[error("[clock.{id}] {key}: {detail}")]
     BadClock {
+        id: String,
+        key: String,
+        detail: String,
+    },
+    /// A `[pinctrl.<id>]` section or one of its keys has the wrong SHAPE
+    /// (pin-controller-and-GPIO-configuration construct): a missing `pin_states`
+    /// key, a non-array `pin_states`, or a non-string array entry. Distinct from
+    /// [`PlatformParseError::BadValue`] so the diagnostic is labelled
+    /// `[pinctrl.…]`, not `[mmio.…]`. CONTENT errors (empty/duplicate/empty-name/
+    /// no-default) are the `regseq-l2` tenant's `PIN-L2-*`, not here (C01/C06).
+    #[error("[pinctrl.{id}] {key}: {detail}")]
+    BadPinctrl {
         id: String,
         key: String,
         detail: String,
@@ -246,6 +283,27 @@ pub fn parse_platform_file_str(input: &str) -> Result<PlatformFile, PlatformPars
         }
     }
 
+    let mut pinctrl = BTreeMap::new();
+    if let Some(pinctrl_val) = table.get("pinctrl") {
+        let toml::Value::Table(pinctrl_tbl) = pinctrl_val else {
+            return Err(PlatformParseError::BadPinctrl {
+                id: "*".to_string(),
+                key: "pinctrl".to_string(),
+                detail: "expected a `[pinctrl.<id>]` table".to_string(),
+            });
+        };
+        for (id, val) in pinctrl_tbl {
+            let toml::Value::Table(section) = val else {
+                return Err(PlatformParseError::BadPinctrl {
+                    id: id.clone(),
+                    key: "<section>".to_string(),
+                    detail: "expected a table".to_string(),
+                });
+            };
+            pinctrl.insert(id.clone(), parse_pinctrl_section(id, section)?);
+        }
+    }
+
     let identity = parse_platform_identity(&table)?;
 
     Ok(PlatformFile {
@@ -253,6 +311,7 @@ pub fn parse_platform_file_str(input: &str) -> Result<PlatformFile, PlatformPars
             mmio,
             interrupt,
             clock,
+            pinctrl,
         },
         identity,
     })
@@ -447,6 +506,45 @@ fn parse_clock_section(
         default_frequency: u32_key("default_frequency")?,
         provider: str_key("provider")?,
     })
+}
+
+/// Parse one `[pinctrl.<id>]` section's C01 key (`pin_states`). Unknown keys are
+/// ignored (forward-compat, matching `[clock.<id>]` / `[mmio.<id>]`). SHAPE only
+/// (pin-controller-and-GPIO-configuration construct, C01): `pin_states` MUST be
+/// present and be an array whose every entry is a string. A missing key, a
+/// non-array value, or a non-string entry is a `BadPinctrl` parse reject (a
+/// typed `Vec<String>` cannot carry a non-string to L2). CONTENT — empty array,
+/// duplicate names, empty/whitespace names, missing `"default"` — is the
+/// `regseq-l2` pinctrl tenant's `PIN-L2-*` (C06), NOT here.
+fn parse_pinctrl_section(
+    id: &str,
+    section: &toml::Table,
+) -> Result<PinctrlBindingSpec, PlatformParseError> {
+    let bad = |key: &str, detail: String| PlatformParseError::BadPinctrl {
+        id: id.to_string(),
+        key: key.to_string(),
+        detail,
+    };
+    let Some(pin_states_val) = section.get("pin_states") else {
+        return Err(bad(
+            "pin_states",
+            "required key is missing (expected an array of state-name strings)".to_string(),
+        ));
+    };
+    let toml::Value::Array(entries) = pin_states_val else {
+        return Err(bad("pin_states", "expected an array of strings".to_string()));
+    };
+    let mut pin_states = Vec::with_capacity(entries.len());
+    for (idx, entry) in entries.iter().enumerate() {
+        let toml::Value::String(s) = entry else {
+            return Err(bad(
+                "pin_states",
+                format!("entry {idx} is not a string"),
+            ));
+        };
+        pin_states.push(s.clone());
+    }
+    Ok(PinctrlBindingSpec { pin_states })
 }
 
 /// Coerce a TOML value to a non-negative `u64`, or a typed error.
@@ -735,6 +833,99 @@ default_frequency = 48000000
         let err =
             parse_platform_bindings_str("[clock.a]\nmode = \"static\"\n[clock.a]\nmode = \"static\"\n")
                 .unwrap_err();
+        assert!(matches!(&err, PlatformParseError::InvalidToml(_)), "got {err:?}");
+    }
+
+    // --- [pinctrl.<id>] (pin-controller-and-GPIO-configuration construct, C01):
+    // SHAPE parse only (a present, array-of-strings `pin_states`). CONTENT
+    // (non-empty, unique, non-empty names, "default" membership) is checked
+    // downstream by the regseq-l2 pinctrl tenant (PIN-L2-*), not here. ---
+
+    #[test]
+    fn parses_pinctrl_section_well_formed() {
+        let b = parse_platform_bindings_str(
+            "[pinctrl.uart_pins]\npin_states = [\"default\", \"sleep\"]\n",
+        )
+        .unwrap();
+        let spec = b.pinctrl.get("uart_pins").expect("uart_pins section");
+        assert_eq!(spec.pin_states, vec!["default".to_string(), "sleep".to_string()]);
+    }
+
+    #[test]
+    fn absent_pinctrl_section_parses_to_absence() {
+        // The optional-absent case: no `[pinctrl.<id>]` section ⇒ absence in the
+        // map (the L2 tenant binds it to `None` for an optional resource).
+        let b = parse_platform_bindings_str("[mmio.regs]\nbase = 0\nsize = 16\n").unwrap();
+        assert!(b.pinctrl.is_empty());
+    }
+
+    #[test]
+    fn pinctrl_unknown_keys_are_ignored() {
+        // Forward-compat, matching the `[clock.<id>]`/`[mmio.<id>]` discipline.
+        let b = parse_platform_bindings_str(
+            "[pinctrl.uart_pins]\npin_states = [\"default\"]\nfuture = 1\n",
+        )
+        .unwrap();
+        assert_eq!(b.pinctrl.get("uart_pins").unwrap().pin_states, vec!["default".to_string()]);
+    }
+
+    #[test]
+    fn pinctrl_rejects_missing_pin_states_key() {
+        // A present section MUST carry `pin_states` (SHAPE reject, not PIN-L2).
+        let err = parse_platform_bindings_str("[pinctrl.uart_pins]\nother = 1\n").unwrap_err();
+        assert!(
+            matches!(&err, PlatformParseError::BadPinctrl { id, key, .. }
+                if id == "uart_pins" && key == "pin_states"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn pinctrl_rejects_non_array_pin_states() {
+        let err =
+            parse_platform_bindings_str("[pinctrl.uart_pins]\npin_states = \"default\"\n")
+                .unwrap_err();
+        assert!(
+            matches!(&err, PlatformParseError::BadPinctrl { key, .. } if key == "pin_states"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn pinctrl_rejects_non_string_entry() {
+        // A non-string array entry is a SHAPE reject — a typed Vec<String>
+        // cannot carry it to L2 (C01).
+        let err =
+            parse_platform_bindings_str("[pinctrl.uart_pins]\npin_states = [\"default\", 7]\n")
+                .unwrap_err();
+        assert!(
+            matches!(&err, PlatformParseError::BadPinctrl { key, .. } if key == "pin_states"),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn pinctrl_empty_array_parses_here_rejected_downstream() {
+        // An empty `pin_states` array is SHAPE-valid (it IS an array of strings);
+        // the non-empty CONTENT requirement is the L2 tenant's (PIN-L2-EMPTY-STATES).
+        let b = parse_platform_bindings_str("[pinctrl.uart_pins]\npin_states = []\n").unwrap();
+        assert!(b.pinctrl.get("uart_pins").unwrap().pin_states.is_empty());
+    }
+
+    #[test]
+    fn pinctrl_error_is_labelled_pinctrl_not_mmio() {
+        let err = parse_platform_bindings_str("[pinctrl.a]\npin_states = 1\n").unwrap_err();
+        assert!(err.to_string().starts_with("[pinctrl.a]"), "got {err}");
+    }
+
+    #[test]
+    fn duplicate_pinctrl_section_is_a_toml_parse_error() {
+        // A duplicate `[pinctrl.<id>]` table is a free TOML parse error, not a
+        // pinctrl-specific reject.
+        let err = parse_platform_bindings_str(
+            "[pinctrl.a]\npin_states = [\"default\"]\n[pinctrl.a]\npin_states = [\"default\"]\n",
+        )
+        .unwrap_err();
         assert!(matches!(&err, PlatformParseError::InvalidToml(_)), "got {err:?}");
     }
 

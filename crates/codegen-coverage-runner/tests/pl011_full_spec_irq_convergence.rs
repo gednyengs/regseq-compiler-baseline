@@ -58,6 +58,23 @@ fn full_spec_interrupt_section_is_canonical_through_the_real_join() {
             handlers: Vec::new(),
         },
     );
+    // The fixture's platform.toml also carries a `[pinctrl.uart_pins]` section;
+    // the pinctrl tenant reverse-join (PIN-L2-006, M2/T11, parallel to clock) now
+    // rejects a section with no matching L1 resource, so the model must declare the
+    // pinctrl resource the full-spec driver actually has (here it joins cleanly).
+    let pin_name = model.strings.intern("pins");
+    let pinctrl_id = model.strings.intern("uart_pins");
+    model.pinctrl.drivers.insert(
+        ItemId::from_u32(0),
+        regseq_model::DriverPinctrls {
+            resources: vec![regseq_model::PinctrlResource {
+                name: pin_name,
+                pinctrl_id,
+                required: false,
+                binding: Default::default(),
+            }],
+        },
+    );
     regseq_l2::bind_all(&mut model, &file.bindings)
         .expect("the migrated canonical spellings must bind (T13: active_high)");
     regseq_l2::validate_l2_surface(&model).expect("the joined surface validates");

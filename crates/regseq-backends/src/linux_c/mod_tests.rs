@@ -11,8 +11,25 @@ use regseq_model::{
     TerminatorKind, Ty, TyId, UintKind, VariantIdx, VariantLayout, VariantRange, WrappingRange,
 };
 
-use super::{emit_linux_c, EmitError};
+use super::{emit_linux_c, errno_symbol, EmitError};
 use crate::capability;
+
+// -- T19: pinctrl errno mapping (GRILL D12/C08) ------------------------------
+
+/// The pinctrl optional-absent fold emits `Err(RegseqError::PinctrlAbsent)`;
+/// the linux_c errno adapter must map it to `ENODEV` (else the scaffold exit
+/// adapter fails loud on the unmapped variant when a 3-variant pinctrl
+/// `RegseqError` reaches a probe-return). Mirrors generic_c/errno.rs (M3) and
+/// zephyr_c (T19). Shares the `ENODEV` symbol with `DeviceNotFound`
+/// (name-keyed, order-independent); an unmapped name still yields `None` so the
+/// caller fails loud rather than defaulting.
+#[test]
+fn pinctrl_absent_maps_to_enodev() {
+    assert_eq!(errno_symbol("PinctrlAbsent"), Some("ENODEV"));
+    assert_eq!(errno_symbol("DeviceNotFound"), Some("ENODEV"));
+    assert_eq!(errno_symbol("HardwareError"), Some("EIO"));
+    assert_eq!(errno_symbol("Frobnicate"), None);
+}
 
 // -- model-construction helpers (local; mirrors the sibling generic_c test
 //    helpers in shape, shares no code per F-1) ------------------------------

@@ -946,6 +946,27 @@ fn validate_attr_data_payload(
             }
             Ok(())
         }
+        // The pinctrl-resource marker carries the interned resource id;
+        // range-check it against the string table (and `required` is a plain
+        // bool — no nested model IDs).
+        AttrData::PinctrlResource { pinctrl_id, .. } => {
+            if pinctrl_id.index() >= model.strings.len() {
+                return Err(InvariantViolation::DomainAttrMalformed {
+                    reason: "PinctrlResource pinctrl_id StringId is out of range",
+                });
+            }
+            Ok(())
+        }
+        // The pin-state marker carries the interned state-name id; range-check
+        // it against the string table.
+        AttrData::PinStateMarker { id } => {
+            if id.index() >= model.strings.len() {
+                return Err(InvariantViolation::DomainAttrMalformed {
+                    reason: "PinStateMarker id StringId is out of range",
+                });
+            }
+            Ok(())
+        }
     }
 }
 

@@ -29,6 +29,7 @@ mod handles;
 mod interrupt;
 pub(crate) mod intrinsic;
 mod opaque_handle;
+mod pinctrl;
 mod serial;
 mod sort;
 mod synchronization;
@@ -657,6 +658,12 @@ pub enum BridgeError {
     #[error("peripheral-clock-management validation: {0}")]
     ClockValidation(ClockDiagnostic),
 
+    /// A pin-controller-and-GPIO-configuration frontend (recognition) check
+    /// failed (pinctrl state-selection construct, contract C06 — the `PIN-ERR-*`
+    /// recognition set). The binding-side `PIN-L2-*` set lives in `regseq-l2`.
+    #[error("pin-controller-and-gpio-configuration validation: {0}")]
+    PinctrlValidation(PinctrlDiagnostic),
+
     /// A timed-cpu-delay-and-sleep frontend check failed (TCD construct,
     /// contracts C03/C05).
     #[error("timed-cpu-delay-and-sleep validation: {0}")]
@@ -1212,6 +1219,155 @@ pub enum ClockDiagnostic {
     #[error(
         "CLK-ERR-SPOOFED-RECEIVER: method `{method}` is tagged a `clock_*` intrinsic but its \
          receiver is `{receiver}`, not the `Clock` resource (the clock ops exist only on `Clock`)"
+    )]
+    SpoofedReceiver {
+        /// The offending method name.
+        method: String,
+        /// The receiver type the method is declared on.
+        receiver: String,
+    },
+}
+
+/// Per-construct pin-controller-and-GPIO-configuration frontend (recognition)
+/// diagnostics (pinctrl state-selection construct, contract C06; GRILL
+/// D04/D07/D11). Carried by [`BridgeError::PinctrlValidation`]. The `PIN-ERR-*`
+/// family is the recognition half (this enum); the binding half is the
+/// `regseq-l2` `PIN-L2-*` family. The M1/T04 subset (mandatory-id,
+/// malformed/attr-on-non-pinctrl, unsupported-form, duplicate-id, malformed
+/// state-attr) is extended here by the M2/T09–T10 tcx-dependent recognition set
+/// (non-ZST marker, duplicate state marker, spoofed `apply` receiver). The
+/// body-walk SEMANTIC checks that need a materialised model + the L2 join
+/// (author-managed field, unresolved generic `S`, invalid state membership) are
+/// pure-model and live in `regseq_model::PinctrlSemanticError` (run post-L2 from
+/// `callbacks.rs` + the runner). Concrete numbering is blessed here within the
+/// locked `PIN-ERR-*` family (GRILL D11).
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum PinctrlDiagnostic {
+    /// `PIN-ERR-MISSING-ID`: a `PinCtrl`/`Option<PinCtrl>` field without a usable
+    /// `#[rseq::pinctrl(id = "…")]` join key — absent attribute, absent `id`, or
+    /// an empty/whitespace id (R01/D07 — mandatory, no field-name fallback; C06).
+    #[error(
+        "PIN-ERR-MISSING-ID: driver `{driver}` pinctrl field `{field}` carries no usable \
+         `#[rseq::pinctrl(id = \"…\")]` join key (the id is mandatory and non-empty; there is \
+         no field-name fallback)"
+    )]
+    MissingId {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+    },
+    /// `PIN-ERR-MALFORMED-ATTR`: the `#[rseq::pinctrl(...)]` attribute is
+    /// structurally bad — a duplicate `id` key, a non-string `id`, or an unknown
+    /// key (C06). The pinctrl L1 attribute admits ONLY `id = "…"` (the
+    /// `pin_states` inventory belongs in the `[pinctrl.<id>]` PLATFORM section).
+    #[error(
+        "PIN-ERR-MALFORMED-ATTR: driver `{driver}` pinctrl field `{field}`: {detail} \
+         (the `#[rseq::pinctrl(...)]` attribute admits only `id = \"…\"`)"
+    )]
+    MalformedAttr {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+        /// What is malformed (e.g. `duplicate \`id\` key`, `unknown key \`foo\``).
+        detail: String,
+    },
+    /// `PIN-ERR-ATTR-ON-NON-PINCTRL`: a `#[rseq::pinctrl(...)]` attribute on a
+    /// field whose type is not the `PinCtrl`/`Option<PinCtrl>` resource (C06).
+    #[error(
+        "PIN-ERR-ATTR-ON-NON-PINCTRL: driver `{driver}` field `{field}` carries \
+         `#[rseq::pinctrl(...)]` but is not a `PinCtrl` resource"
+    )]
+    AttrOnNonPinctrl {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+    },
+    /// `PIN-ERR-UNSUPPORTED-FORM`: a recognized pinctrl field in a form the
+    /// construct does not build — `[PinCtrl; N]` (array form) / `&PinCtrl`
+    /// (reference) / `Vec<PinCtrl>`. Build-wide v1 builds the required `PinCtrl`
+    /// and optional `Option<PinCtrl>` forms only (C06; arrays designed-in).
+    #[error(
+        "PIN-ERR-UNSUPPORTED-FORM: driver `{driver}` pinctrl field `{field}` uses the \
+         unsupported `{form}` form; the construct builds only the required `PinCtrl` and \
+         optional `Option<PinCtrl>` forms (arrays/refs are designed-in, not built)"
+    )]
+    UnsupportedForm {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+        /// The recognized-but-rejected form (e.g. `[PinCtrl; N]`).
+        form: String,
+    },
+    /// `PIN-ERR-DUPLICATE-ID`: two pinctrl fields on one driver declare the same
+    /// L1 `id` (C06; the pinctrl id namespace is construct-local and the L1 id
+    /// must be unique within a driver, GRILL D07).
+    #[error(
+        "PIN-ERR-DUPLICATE-ID: driver `{driver}` declares more than one pinctrl resource with \
+         id `{id}` (a pinctrl id must be unique within a driver)"
+    )]
+    DuplicateId {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The duplicated pinctrl id.
+        id: String,
+    },
+    /// `PIN-ERR-MALFORMED-STATE-ATTR`: a `#[rseq::pin_state(...)]` marker
+    /// attribute is structurally bad — missing/empty `id`, a non-string `id`, a
+    /// duplicate or unknown key (C06). The pin-state marker attribute admits ONLY
+    /// `id = "…"`.
+    #[error(
+        "PIN-ERR-MALFORMED-STATE-ATTR: pin-state marker `{marker}`: {detail} \
+         (the `#[rseq::pin_state(...)]` attribute admits only `id = \"…\"`)"
+    )]
+    MalformedStateAttr {
+        /// The offending marker type's name.
+        marker: String,
+        /// What is malformed (e.g. `id is empty or whitespace`).
+        detail: String,
+    },
+    /// `PIN-ERR-NON-ZST-MARKER`: a `#[rseq::pin_state(...)]` marker type that is
+    /// not unit-like — its struct carries one or more fields (C06). Pin-state
+    /// markers are author-declared *unit* structs (D04); a payload-carrying
+    /// marker is rejected (the field-count check is stricter than ZST-ness, so a
+    /// `PhantomData`-bearing marker is also rejected — a marker carries no data).
+    #[error(
+        "PIN-ERR-NON-ZST-MARKER: pin-state marker `{marker}` is not a unit struct (it carries \
+         {fields} field(s)); a `#[rseq::pin_state]` marker must be a fieldless unit struct"
+    )]
+    NonZstMarker {
+        /// The offending marker type's name.
+        marker: String,
+        /// The number of fields the marker struct declares.
+        fields: usize,
+    },
+    /// `PIN-ERR-DUPLICATE-STATE-MARKER`: two `#[rseq::pin_state(id = "…")]`
+    /// markers bind the same state name (C06). A pin-state name maps to exactly
+    /// one marker type; two markers claiming one name is ambiguous.
+    #[error(
+        "PIN-ERR-DUPLICATE-STATE-MARKER: pin-state name `{id}` is claimed by more than one \
+         `#[rseq::pin_state]` marker (`{first}` and `{second}`); each state name maps to one marker"
+    )]
+    DuplicateStateMarker {
+        /// The duplicated state name (the `id`).
+        id: String,
+        /// The first marker type declaring the name.
+        first: String,
+        /// The second marker type declaring the name.
+        second: String,
+    },
+    /// `PIN-ERR-SPOOFED-RECEIVER`: a `#[rseq::intrinsic("pinctrl_apply")]` tag on
+    /// a method whose receiver is neither the `PinCtrl` resource shell nor
+    /// `Option<PinCtrl>` (C06 / D14) — a spoofed pinctrl op (the `apply`
+    /// intrinsic is compiler-managed on the `PinCtrl` / `Option<PinCtrl>` facades
+    /// only). Mirrors clock's `CLK-ERR-SPOOFED-RECEIVER`.
+    #[error(
+        "PIN-ERR-SPOOFED-RECEIVER: method `{method}` is tagged a `pinctrl_apply` intrinsic but its \
+         receiver is `{receiver}`, not `PinCtrl`/`Option<PinCtrl>` (the apply op exists only on the \
+         pinctrl facade)"
     )]
     SpoofedReceiver {
         /// The offending method name.

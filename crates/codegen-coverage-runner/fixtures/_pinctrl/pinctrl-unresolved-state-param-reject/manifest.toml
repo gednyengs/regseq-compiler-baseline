@@ -1,0 +1,9 @@
+name   = "pinctrl-unresolved-state-param-reject"
+kind   = "rust"
+# C06/C03: apply::<S>() with a concrete non-marker S.
+covers = ["PIN-8"]
+expect = "reject"
+
+[expected]
+stage = "bind"
+diagnostic = "PIN-ERR-UNRESOLVED-STATE-PARAM"

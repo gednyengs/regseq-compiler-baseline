@@ -250,6 +250,15 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
             tcx.dcx().fatal(format!("regseq-driver: L2 {err}"));
         }
 
+        // Pin-controller-and-GPIO-configuration semantic checks (C06 / C03, M2):
+        // the author-managed-field body walk + the apply-site state checks. Run
+        // post-L2 because the `apply::<S>()` membership check needs the joined
+        // `[pinctrl.<id>]` inventory. Pure model-level (no tcx), so it lives in
+        // `regseq-model`; a pinctrl-less driver is a no-op.
+        if let Err(err) = regseq_model::validate_pinctrl_semantics(&model) {
+            tcx.dcx().fatal(format!("regseq-driver: {err}"));
+        }
+
         // Device-interrupt R11 shared-line discipline (construct #6, C06
         // warning row): non-fatal, routed to the compiler warning channel.
         // Warn-on-unknown — fires unless a NotHandled return is PROVEN

@@ -1,0 +1,9 @@
+name   = "pinctrl-duplicate-state-reject"
+kind   = "rust"
+# Bind-stage L2 CONTENT reject (PIN-L2-005).
+covers = ["PIN-9"]
+expect = "reject"
+
+[expected]
+stage = "bind"
+diagnostic = "PIN-L2-005"

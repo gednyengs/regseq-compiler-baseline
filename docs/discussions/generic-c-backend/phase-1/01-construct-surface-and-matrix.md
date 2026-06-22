@@ -584,6 +584,48 @@ fixtures live under `fixtures/_clock/` (interner-isolated, outside Mode-A
 | CLK-8 | recognition C06 reject family | acquire-stage `CLK-ERR-*` rejection: missing-id (N1), unsupported `Option<Clock>` form (N2/N14), malformed/unknown attr key (N12), attr on non-`Clock` field (N13), duplicate L1 id (N15), forbidden L1 key (N21), spoofed `clock_*` receiver (N22) | deferred | GRILL C06/D13/D17 | **CLK-C06-RECOGNITION**: one reject fixture per check, `fires it and only it` via stage+diagnostic |
 | CLK-9 | binding C06 reject family | bind-stage `CLK-L2-*` rejection: missing `[clock.<id>]` (N3), orphan section (N4), missing/zero `default_frequency` (N5/N18), bad/missing mode (N6), managed-without-provider (N7), static-with-provider (N8) | deferred | GRILL C06/C02/D14/D17 | **CLK-C06-BINDING**: one reject fixture per check, `fires it and only it` via stage+diagnostic |
 
+### Pin-controller-and-GPIO-configuration rows (pinctrl state-selection unit)
+
+The compiler-managed pin-controller **state selection**: a typed `PinCtrl` field
+(`#[rseq::pinctrl(id)]`, the REQUIRED form) or `Option<PinCtrl>` (the OPTIONAL form)
+that the author `apply::<S>()`s to select a named pin state — the `S` marker carries
+the state name via `#[rseq::pin_state(id)]` (D04). The compiler synthesizes an
+`acquire`/`release` framing (the `default` state applied at acquire) slotted after
+the bus `map_region` keystone and BEFORE the clock acquire (**pins-before-clock**,
+exact-reverse at teardown, C07/D08); the author never calls acquire/release (D05).
+The integrator's `[pinctrl.<id>]` supplies the `pin_states` inventory (which MUST
+contain `"default"`, D07); the generic_c `PIN …` trace is the lowering made
+observable (C05). The real backends lower it to Linux
+`devm_pinctrl_get`/`pinctrl_lookup_state`/`pinctrl_select_state` (+ a `struct
+pinctrl *` field morph on the required form) and Zephyr `PINCTRL_DT_INST_DEFINE(0)` +
+`pinctrl_apply_state(PINCTRL_DT_INST_DEV_CONFIG_GET(0), PINCTRL_STATE_<S>)` —
+witnessed for static placement by `pinctrl_linux_witness_e2e` /
+`pinctrl_zephyr_witness_e2e`, which **ride these same backend-agnostic rows** (the
+CLK/IRQ precedent: the matrix describes the lowering, generic-c is the behavioral
+oracle, the real-backend witnesses confirm parity — there is no separate
+"real-backend" row). Status is `deferred` by the LC/IRQ/CLK precedent: the witness
+fixtures live under `fixtures/_pinctrl/` (interner-isolated, outside Mode-A
+`discover`), so a `covered` status would mint `covered_without_green` drift in
+`ledger::build`; the REAL gate is the dedicated covers-aggregation test
+(`tests/pinctrl_covers.rs`) plus the sole-binary e2es (`tests/pinctrl_pl011_min_e2e.rs`,
+the `pinctrl_*_e2e` set, `tests/pinctrl_composed_e2e.rs`,
+`tests/pinctrl_composed_witness_e2e.rs`, `tests/pinctrl_reject_e2e.rs`).
+**PIN-7 is intentionally unminted (reserved):** pinctrl's behavioral surface is
+narrower than clock's (no managed/static duality), so the real-backend Linux/Zephyr
+lowering rides PIN-1..PIN-4 + PIN-6 (the backend-agnostic rows) rather than a
+separate parity row, and the rejects stay at their as-built PIN-8/PIN-9 ids.
+
+| id | construct | C lowering | status | spec ref | notes |
+| -- | --------- | ---------- | ------ | -------- | ----- |
+| PIN-1 | acquire/release framing | `PIN acquire <id> default` after the bus `map` keystone + before `LC call on_init` (the `default` state applied at acquire); `PIN release <id>` LIFO at teardown (after `on_deinit` and the clock release — pins are acquired before the clock, so they release after it — before the region postamble) — compiler-synthesized, never authored | deferred | pinctrl GRILL D05/D08, C07 | **PIN-FRAMING**: `pinctrl-pl011-{optional-bound,optional-bound-trait,required-bound,required-bound-min,composed}`; real-backend placement via `pinctrl_{linux,zephyr}_witness_e2e` |
+| PIN-2 | apply-state lowering | `PIN apply <id> <state>` for the author `apply::<S>()` call (generic-c hook); the resolved state name read off the `S` marker | deferred | GRILL R04, C04 | **PIN-APPLY**: the present/pass fixtures + `-composed`; real-backend Linux `pinctrl_lookup_state`/`pinctrl_select_state`, Zephyr `pinctrl_apply_state` |
+| PIN-3 | state resolution + both call paths | generic `S` → the concrete `#[rseq::pin_state]` marker `id` (`default` + `sleep` both resolve); the required `&PinCtrl` handle path AND the optional `OptionalPinCtrl` trait/direct-call path both lower to `PIN apply` | deferred | GRILL R02/R07/C03, D13/D14 | **PIN-RESOLVE**: required + optional-trait present fixtures; the plain `if let` path is generic-c-only (T15), real-backend design-in |
+| PIN-4 | optional-absent compile-time fold | an absent `Option<PinCtrl>` (no `[pinctrl.<id>]`) statically folds `apply::<S>()` to a direct `Err(PinctrlAbsent)` → `-ENODEV` — NO `regseq_pinctrl_apply` call, NO `PIN apply` trace, NO acquire/release, no runtime `Option` tag | deferred | GRILL D02/D06/C04, C08 | **PIN-ABSENT-FOLD**: `pinctrl-pl011-optional-absent{,-iflet}`; the fold + `-ENODEV` errno also on Linux/Zephyr (witnessed) |
+| PIN-5 | required-acquire-failure | the required form's `acquire_pinctrl` can fail: `PIN acquire <id> default` then `LC acquire-fail pinctrl <id>` (the host injectable-failure knob); required hard-fails, optional ignores | deferred | GRILL D03/C04, S12 | **PIN-REQ-FAIL**: `pinctrl-required-acquire-failure`; real-backend Linux `IS_ERR`/`PTR_ERR`/rc propagation + Zephyr rc-check `return __ret` (structural, T22) |
+| PIN-6 | composed C07 cross-construct ordering | preamble `BUS map → PIN acquire → CLK acquire → IRQ register` (before `LC call on_init`); teardown exact-reverse `IRQ unregister → CLK release → PIN release → LC postamble`, with the pinctrl alive across `on_init`/`on_deinit` | deferred | GRILL D08, C07 | **PIN-COMPOSED-ORDER**: pinctrl interleaved with clock + region + interrupt; `pinctrl-pl011-composed`; real-backend placement (`devm_pinctrl_get` < `devm_clk_get` < `request_irq`) via `pinctrl_composed_witness_e2e` |
+| PIN-8 | recognition C06 reject family | acquire-stage `PIN-ERR-*` rejection: missing-id, malformed/unknown attr, attr-on-non-pinctrl, unsupported form (`[PinCtrl;N]`/`Vec<PinCtrl>`/bare `&PinCtrl`), duplicate L1 id, malformed/duplicate/non-ZST/invalid state marker, unresolved generic `S`, author-managed field, spoofed receiver | deferred | GRILL C06/D13/D14 | **PIN-C06-RECOGNITION**: one reject fixture per check, `fires it and only it` via stage+diagnostic |
+| PIN-9 | binding C06 reject family | bind-stage `PIN-L2-*` rejection: missing inventory (required), orphan section, empty states, empty state name, no `default`, duplicate state; SHAPE errors (missing key / non-array / non-string) stay parser-`BadPinctrl` (`PIN-L2-MANY-MATCH` is structurally unreachable — enforced by construction, no fixture) | deferred | GRILL C01/C06/D07 | **PIN-C06-BINDING**: one reject fixture per check, `fires it and only it` via stage+diagnostic |
+
 ---
 
 ## Output of this doc — the gap list

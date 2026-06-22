@@ -1,0 +1,9 @@
+name   = "pinctrl-shape-non-array-reject"
+kind   = "rust"
+# Bind-stage parser SHAPE reject (BadPinctrl, [pinctrl.uart_pins]).
+covers = ["PIN-9"]
+expect = "reject"
+
+[expected]
+stage = "bind"
+diagnostic = "[pinctrl.uart_pins]"

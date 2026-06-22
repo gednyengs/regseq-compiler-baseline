@@ -62,6 +62,15 @@ pub struct Manifest {
     /// has no effect. Authored order is the script order.
     #[serde(default)]
     pub irq_fire: Option<String>,
+    /// Optional pinctrl acquire-FAILURE injection (pinctrl construct, T18): a
+    /// single `#[rseq::pinctrl(id = "…")]` resource id whose compiler-managed
+    /// `acquire_pinctrl` the harness forces to fail, passed to the backend as the
+    /// `backend.pinctrl.fail-acquire` param. Exercises the REQUIRED form's
+    /// hard-fail (init aborts before `on_init`). Absent (the default) = acquire
+    /// never fails. The id MUST match a resolved pinctrl resource (emit fails
+    /// loud otherwise).
+    #[serde(default)]
+    pub pinctrl_fail_acquire: Option<String>,
 }
 
 /// The `[expected]` manifest table: expected-outcome configuration resolved

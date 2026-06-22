@@ -1,0 +1,9 @@
+name   = "pinctrl-non-zst-marker-reject"
+kind   = "rust"
+# C06: a payload-bearing (non-unit) pin-state marker.
+covers = ["PIN-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "PIN-ERR-NON-ZST-MARKER"

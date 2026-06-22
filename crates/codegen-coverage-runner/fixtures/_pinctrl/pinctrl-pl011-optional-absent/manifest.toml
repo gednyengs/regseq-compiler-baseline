@@ -1,0 +1,13 @@
+name   = "pinctrl-pl011-optional-absent"
+kind   = "rust"
+# The pin-controller-and-GPIO-configuration M3 optional-ABSENT positive oracle
+# (PLAN T16, S12): a PL011-shaped AMBA driver with ONE
+# #[rseq::pinctrl(id="uart_pins")] Option<PinCtrl> and NO [pinctrl.uart_pins]
+# section ⇒ the resource binds to None (resolved=false, D06). The author's
+# OptionalPinCtrl::apply compile-time-folds to Err(PinctrlAbsent) (no hook, no PIN
+# trace); the gate does not fire (no PINCTRL_HELPERS). expected.stdout shows the
+# W32 with NO PIN lines; the runner test additionally asserts the model
+# (required=false/resolved=false/empty) + the no-hook / PinctrlAbsent-fold source.
+covers = ["PIN-4"]
+lifecycle_scenario = "orderly"
+expect = "pass"

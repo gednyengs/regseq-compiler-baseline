@@ -1955,6 +1955,14 @@ impl<'a> PrettyPrinter<'a> {
                     };
                     out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
                 }
+                // Pin-controller-and-GPIO-configuration author intrinsic
+                // (pinctrl state-selection construct).
+                AttrData::Intrinsic(IntrinsicKind::Pinctrl(op)) => {
+                    let label = match op {
+                        crate::PinctrlOp::ApplyState => "pinctrl_apply",
+                    };
+                    out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
+                }
                 // The framework-type marker has no DSL attribute render
                 // form in this phase; its render rule (if any) lands with
                 // the bridge/backend stages that consume it. Emit nothing.
@@ -1984,6 +1992,17 @@ impl<'a> PrettyPrinter<'a> {
                 // (`field_attrs`); it never appears in the item-attr stream.
                 // Emit nothing if it does.
                 AttrData::ClockResource { .. } => {}
+                // The pinctrl-resource marker is likewise a field attribute
+                // (`field_attrs`); it never appears in the item-attr stream.
+                // Emit nothing if it does.
+                AttrData::PinctrlResource { .. } => {}
+                // The pin-state marker (pinctrl state-selection construct) is an
+                // ITEM attribute on the author-declared unit-struct marker
+                // (`item_attrs`); render the authored attribute form.
+                AttrData::PinStateMarker { id } => {
+                    let name = self.model.strings.resolve(*id);
+                    out.push_str(&format!("#[rseq::pin_state(id = \"{name}\")]\n"));
+                }
             }
         }
         out

@@ -202,6 +202,7 @@ pub fn bridge_error_variant(err: &BridgeError) -> &'static str {
         BridgeError::DeviceLifecycleValidation(_) => "DeviceLifecycleValidation",
         BridgeError::InterruptValidation(_) => "InterruptValidation",
         BridgeError::ClockValidation(_) => "ClockValidation",
+        BridgeError::PinctrlValidation(_) => "PinctrlValidation",
         BridgeError::TimedCpuDelayValidation(_) => "TimedCpuDelayValidation",
         BridgeError::AtomicValidation(_) => "AtomicValidation",
         BridgeError::SerialValidation(_) => "SerialValidation",

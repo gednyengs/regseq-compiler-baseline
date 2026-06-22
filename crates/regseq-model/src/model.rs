@@ -146,6 +146,15 @@ pub struct RegseqModel {
     /// models serialized before the construct existed deserializable (I06).
     #[serde(default)]
     pub clock: crate::clock::ClockTables,
+
+    /// Pin-controller-and-GPIO-configuration (pinctrl state-selection) sibling
+    /// table, keyed by the `#[rseq::driver]` struct's Item. Pin muxing is a
+    /// capability layered on the device (an input it consumes), so it gets its
+    /// own top-level table rather than living on `DriverHandle` (GRILL D09).
+    /// `#[serde(default)]` keeps models serialized before the construct existed
+    /// deserializable (I06).
+    #[serde(default)]
+    pub pinctrl: crate::pinctrl::PinctrlTables,
 }
 
 #[cfg(test)]
@@ -1107,6 +1116,7 @@ impl RegseqModel {
             serial: crate::serial::SerialTables::default(),
             synchronization: crate::synchronization::SynchronizationTables::default(),
             clock: crate::clock::ClockTables::default(),
+            pinctrl: crate::pinctrl::PinctrlTables::default(),
         }
     }
 
@@ -1432,6 +1442,15 @@ impl RegseqModel {
         for (old_id, driver) in old_clocks {
             let new_id = remap[old_id.index()];
             self.clock.drivers.insert(new_id, driver);
+        }
+
+        // `pinctrl.drivers` is keyed by the same driver-struct `ItemId` (its
+        // values carry no `ItemId` references — StringId/bool only), so re-key
+        // it by the same remap, exactly like `clock`/`interrupt`.
+        let old_pinctrls = std::mem::take(&mut self.pinctrl.drivers);
+        for (old_id, driver) in old_pinctrls {
+            let new_id = remap[old_id.index()];
+            self.pinctrl.drivers.insert(new_id, driver);
         }
 
         #[cfg(debug_assertions)]

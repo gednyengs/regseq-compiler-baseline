@@ -1,0 +1,9 @@
+name   = "pinctrl-empty-states-reject"
+kind   = "rust"
+# Bind-stage L2 CONTENT reject (PIN-L2-003).
+covers = ["PIN-9"]
+expect = "reject"
+
+[expected]
+stage = "bind"
+diagnostic = "PIN-L2-003"

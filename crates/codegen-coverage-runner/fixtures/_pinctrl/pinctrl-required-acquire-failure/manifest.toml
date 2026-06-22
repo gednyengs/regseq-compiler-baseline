@@ -1,0 +1,13 @@
+name   = "pinctrl-required-acquire-failure"
+kind   = "rust"
+# The pin-controller-and-GPIO-configuration M3 required-acquire-failure oracle
+# (PLAN T18): the REQUIRED PinCtrl form with the harness forcing acquire_pinctrl
+# to fail (pinctrl_fail_acquire = "uart_pins"). The required form hard-fails: the
+# trace shows PIN acquire uart_pins default + LC acquire-fail pinctrl uart_pins,
+# then init aborts — on_init is NEVER reached (no LC call on_init, no PIN apply,
+# no W32). Proves the required form consumes the rc + hard-fails (C04/D03); I02
+# holds (pinctrl never touched MMIO). The optional form ignores the rc (structural).
+covers = ["PIN-5"]
+lifecycle_scenario = "orderly"
+pinctrl_fail_acquire = "uart_pins"
+expect = "pass"

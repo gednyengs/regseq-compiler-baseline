@@ -1,0 +1,9 @@
+name   = "pinctrl-no-inventory-reject"
+kind   = "rust"
+# Bind-stage: a required PinCtrl with no [pinctrl.<id>] section (PIN-L2-001).
+covers = ["PIN-9"]
+expect = "reject"
+
+[expected]
+stage = "bind"
+diagnostic = "PIN-L2-001"
