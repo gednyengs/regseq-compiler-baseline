@@ -1,0 +1,9 @@
+name   = "pinctrl-malformed-state-attr-reject"
+kind   = "rust"
+# C06: a #[rseq::pin_state] marker missing its id.
+covers = ["PIN-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "PIN-ERR-MALFORMED-STATE-ATTR"

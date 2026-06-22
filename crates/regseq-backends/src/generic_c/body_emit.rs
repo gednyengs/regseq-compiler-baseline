@@ -48,7 +48,8 @@ use regseq_model::{
     GenericArg, InstanceId, InstanceKind,
     InstanceRef, InterruptForm, IntKind, IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel,
     MatchEntry, MmioOp, NonDivergingIntrinsic,
-    Operand, Place, PlaceElem, PointerCoercion, RegseqModel, Rvalue, StatementKind, SwitchTargets,
+    Operand, PinctrlOp, Place, PlaceElem, PointerCoercion, RegseqModel, Rvalue, StatementKind,
+    SwitchTargets,
     SyncKind, SyntheticItemKind, TagEncoding, TerminatorKind, TriggerPolarity, TriggerType, Ty,
     TyId, UintKind, UnOp, VariantIdx, VariantLayout,
 };
@@ -1134,43 +1135,7 @@ impl BodyEmit<'_> {
         shape: &EnumShape,
         v: usize,
     ) -> Result<Option<String>, EmitError> {
-        let tag_value = variant_layout(shape, v)
-            .ok_or(EmitError::Unsupported(
-                "SetDiscriminant variant index out of range",
-            ))?
-            .tag_value;
-        match enum_emit::enum_tag(self.model, shape) {
-            enum_emit::EnumTag::View {
-                member_path,
-                scalar_ty,
-            } => match tag_value {
-                Some(tv) => {
-                    let tvr = render_tag_value(self.model, self.names, scalar_ty, tv)?;
-                    Ok(Some(format!("{enum_lv}.{member_path} = {tvr};")))
-                }
-                // A tag-view variant always carries a `tag_value`; defensive.
-                None => Ok(None),
-            },
-            enum_emit::EnumTag::Niche { offset, scalar_ty } => match tag_value {
-                Some(tv) => {
-                    // Write the raw niche bit pattern through the scalar's raw
-                    // storage unsigned integer (see `assign_niche_discriminant`):
-                    // `(_Bool){2}` would normalize to 1, so a `_Bool` niche needs
-                    // `(uint8_t){2}`.
-                    let storage_kind = niche_storage_kind(self.model, scalar_ty)?;
-                    let raw_cty = uint_ctype(storage_kind);
-                    let tvr = render_uint(storage_kind, tv);
-                    Ok(Some(format!(
-                        "memcpy((unsigned char *)&({enum_lv}) + {offset}, &({raw_cty}){{{tvr}}}, \
-                         sizeof({raw_cty}));"
-                    )))
-                }
-                // Niche untagged variant: the payload is the tag -> no-op.
-                None => Ok(None),
-            },
-            // Single { scalar: None } / Empty: no tag bytes -> no-op.
-            enum_emit::EnumTag::None => Ok(None),
-        }
+        set_enum_discriminant(self.model, self.names, enum_lv, shape, v)
     }
 
     /// `Aggregate::Enum(ty, v)` at the assign site (section 13): the tag write
@@ -2344,6 +2309,18 @@ impl BodyEmit<'_> {
                 let op = *op;
                 return self.emit_clock(op, callee, args, destination, target);
             }
+            // Pin-controller-and-GPIO-configuration interception (pinctrl
+            // construct): a Direct callee carrying `IntrinsicKind::Pinctrl(op)`
+            // (the `PinCtrl`/`OptionalPinCtrl` `apply::<S>()` wrapper) lowers
+            // against the receiver's bound pinctrl `id`, with the selected state
+            // resolved from the call's generic arg `S` (→ the marker's
+            // `PinStateMarker.id`). The compiler-managed `acquire_pinctrl`/
+            // `release_pinctrl` are NOT here — they are synthesized in
+            // `emit_lifecycle_synthesis` (pins-before-clock, D08/C07).
+            if let Some(IntrinsicKind::Pinctrl(op)) = self.model.instance_intrinsic(*inst) {
+                let op = *op;
+                return self.emit_pinctrl(op, callee, args, destination, target);
+            }
             // (Device-lifecycle is no longer call-intercepted: the harness verbs
             // were removed, RD-1; the synthesized `main` drives the lifecycle —
             // see `emit_lifecycle_synthesis`.)
@@ -2910,6 +2887,199 @@ impl BodyEmit<'_> {
             }
         };
         Ok(format!("{stmt} goto bb_{};", target.as_u32()))
+    }
+
+    /// Pin-controller-and-GPIO-configuration receiver recovery (pinctrl
+    /// construct): chase the `apply::<S>()` receiver `args[0]` to the single
+    /// `PinCtrl`/`Option<PinCtrl>` field it borrows and read the resolved L1 `id`
+    /// + the L2 binding. Delegates to the SHARED
+    /// [`regseq_model::recover_pinctrl_receiver`] — the single source of truth the
+    /// post-L2 `validate_apply_sites` membership pass also uses (so the backend's
+    /// lowering and the frontend's inventory check can never drift on which
+    /// resource a receiver names, GRILL C03). It resolves BOTH optional call paths
+    /// (D02): the direct `(&)self.pinctrl.apply::<S>()` and the plain
+    /// `if let Some(p) = &self.pinctrl { p.apply::<S>() }` local-tracing path
+    /// (D13/T15, the match binding composed back to the driver field).
+    fn recover_pinctrl(
+        &self,
+        recv: &Operand,
+    ) -> Result<(String, regseq_model::PinctrlBinding), EmitError> {
+        let (_item, pinctrl_id, binding) =
+            regseq_model::recover_pinctrl_receiver(self.model, self.body, recv).ok_or(
+                EmitError::Unsupported(
+                    "pinctrl receiver does not resolve to a single PinCtrl resource field",
+                ),
+            )?;
+        let id = self.model.strings.resolve(pinctrl_id).to_string();
+        Ok((id, binding))
+    }
+
+    /// Resolve the `apply::<S>()` selected pin-state NAME from the call's generic
+    /// arg `S` (pinctrl construct, D04/C03). The monomorphized callee instance's
+    /// `generic_args` carry the concrete marker ADT `S`; its `ItemId` keys the
+    /// `AttrData::PinStateMarker { id }` recorded by recognition, whose interned
+    /// `id` is the resolved state name. There is exactly one marker type among the
+    /// args (only the marker carries a `PinStateMarker` attr), so the first match
+    /// is the state. A generic (unresolved) `S` carries no marker ADT — that is a
+    /// frontend reject (`PIN-ERR-UNRESOLVED-STATE-PARAM`, T10), never reached at a
+    /// monomorphized backend call.
+    fn resolve_apply_state(&self, callee: &CallCallee) -> Result<String, EmitError> {
+        let CallCallee::Direct(inst) = callee else {
+            return Err(EmitError::Unsupported(
+                "pinctrl `apply::<S>()` via an indirect callee (no resolvable generic arg)",
+            ));
+        };
+        let instance = &self.model.instances[*inst];
+        // The state resolution is the SHARED source of truth (regseq_model), so
+        // the backend and the post-L2 `validate_apply_sites` membership pass read
+        // `S` identically (GRILL C03). A concrete `S` with no marker is a frontend
+        // reject (`PIN-ERR-UNRESOLVED-STATE-PARAM`, T10) caught before lowering;
+        // reaching here with `None` is a backend-level guard.
+        match regseq_model::resolve_pin_state(self.model, &instance.generic_args) {
+            Some(id) => Ok(self.model.strings.resolve(id).to_string()),
+            None => Err(EmitError::Unsupported(
+                "pinctrl `apply::<S>()` generic arg `S` resolves to no `#[rseq::pin_state]` marker",
+            )),
+        }
+    }
+
+    /// Pin-controller-and-GPIO-configuration author-op lowering (pinctrl
+    /// construct, C04/D05): lower an `IntrinsicKind::Pinctrl(op)` wrapper-method
+    /// Call against the receiver's bound pinctrl `id`. `apply::<S>()` emits
+    /// `regseq_pinctrl_apply(id, "<state>")` (the state resolved from `S`) and
+    /// constructs its `Result<(), RegseqError>` destination `Ok(())`.
+    ///
+    /// The op emits only on a RESOLVED binding (`is_resolved()`, C02). On an
+    /// UNRESOLVED (optional-absent) binding the call compile-time branch-folds to a
+    /// direct `Err(RegseqError::PinctrlAbsent)` with NO hook call and NO `PIN apply`
+    /// trace (D06/C04, [`Self::emit_pinctrl_absent_fold`]). The host hook returns
+    /// `int` (`0` = ok); like clock's `enable`, the resolved happy path constructs
+    /// `Ok(())` and the host never fails for a bound resource — mapping a nonzero
+    /// apply rc to an `Err` is the apply-error path (post-M1).
+    fn emit_pinctrl(
+        &self,
+        op: PinctrlOp,
+        callee: &CallCallee,
+        args: &[Operand],
+        destination: &Place,
+        target: Option<regseq_model::BlockId>,
+    ) -> Result<String, EmitError> {
+        let target = target.ok_or(EmitError::Unsupported("pinctrl call with no target"))?;
+        let recv = args
+            .first()
+            .ok_or(EmitError::Unsupported("pinctrl call with no receiver"))?;
+        let (id, binding) = self.recover_pinctrl(recv)?;
+        // Optional-absent (unresolved) ⇒ the D06 compile-time branch-fold: a direct
+        // `Err(PinctrlAbsent)`, no hook, no trace. Uniform across BOTH absent paths
+        // — the live `OptionalPinCtrl` trait forwarding AND the statically-dead
+        // plain `if let Some(p)` Some branch (which folds harmlessly, emitting no
+        // `regseq_pinctrl_apply` so the absent-only TU stays hook-free, C05/T16).
+        if !binding.is_resolved() {
+            return self.emit_pinctrl_absent_fold(destination, target);
+        }
+        let id_lit = format!("{id:?}"); // a quoted, escaped C string literal
+        let stmt = match op {
+            PinctrlOp::ApplyState => {
+                let state = self.resolve_apply_state(callee)?;
+                let state_lit = format!("{state:?}");
+                // The destination is `Result<(), RegseqError>`; construct `Ok(())`
+                // (variant 0, unit payload — no field write), mirroring clock's
+                // `enable`. The host hook is called for its trace + state
+                // transition; its `int` status is discarded (the host never fails
+                // for a bound resource — the apply-error rc→Err mapping is post-M1).
+                let dst = self.place_lvalue(destination)?;
+                let dst_ty = self.place_ty(destination);
+                let shape = enum_emit::enum_shape(self.model, dst_ty).ok_or(
+                    EmitError::Unsupported(
+                        "pinctrl apply destination is not an enum (expected Result<(), RegseqError>)",
+                    ),
+                )?;
+                let ok_tag = self.emit_set_discriminant(&dst, shape, 0)?.unwrap_or_default();
+                format!("(void)regseq_pinctrl_apply({id_lit}, {state_lit}); {ok_tag}")
+            }
+        };
+        Ok(format!("{stmt} goto bb_{};", target.as_u32()))
+    }
+
+    /// Pin-controller-and-GPIO-configuration optional-ABSENT branch-fold
+    /// (pinctrl construct, D06/C04): an `apply::<S>()` on an UNRESOLVED
+    /// (optional-absent) binding compile-time-folds to a direct
+    /// `Err(RegseqError::PinctrlAbsent)` — **NO `regseq_pinctrl_apply` call, NO
+    /// `PIN apply` trace** (presence is compile-time-known). Serves BOTH absent
+    /// call paths uniformly: the `OptionalPinCtrl` trait forwarding (where this IS
+    /// the call's result) and the plain `if let Some(p)` path (whose `Some` branch
+    /// is statically dead under the `None` construction — the fold is then harmless
+    /// dead code whose only contract obligation is to emit no hook).
+    ///
+    /// Constructs the `Err` variant BY NAME into the `Result<(), RegseqError>`
+    /// destination (never a hardcoded index): for the niche-encoded `Result` the
+    /// `Err` variant is untagged, so writing the inner `RegseqError` tag — in range
+    /// and distinct from the `Ok` niche value — encodes `Err(PinctrlAbsent)` (the
+    /// defensive `Result`-tag set covers a Direct-encoded `Result`). Mirrors
+    /// [`emit_exit_adapter`]'s `Err`-payload navigation; the entry-shim errno
+    /// adapter maps `PinctrlAbsent` -> `ENODEV` (D12).
+    fn emit_pinctrl_absent_fold(
+        &self,
+        destination: &Place,
+        target: regseq_model::BlockId,
+    ) -> Result<String, EmitError> {
+        let dst = self.place_lvalue(destination)?;
+        let dst_ty = self.place_ty(destination);
+        let result_shape =
+            enum_emit::enum_shape(self.model, dst_ty).ok_or(EmitError::Unsupported(
+                "pinctrl absent fold destination is not an enum (expected Result<(), RegseqError>)",
+            ))?;
+        // The Err payload (variant 1, rustc `Result` order) -> the inner
+        // `RegseqError` member + its type.
+        let (err_member, err_ty) = enum_emit::enum_variant_field(self.model, dst_ty, 1, 0).ok_or(
+            EmitError::Unsupported("pinctrl absent fold: Result Err payload field not found"),
+        )?;
+        let err_shape = enum_emit::enum_shape(self.model, err_ty).ok_or(EmitError::Unsupported(
+            "pinctrl absent fold: RegseqError is not an enum",
+        ))?;
+        let (tag_member, tag_scalar_ty) = match enum_emit::enum_tag(self.model, err_shape) {
+            enum_emit::EnumTag::View {
+                member_path,
+                scalar_ty,
+            } => (member_path, scalar_ty),
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "pinctrl absent fold: RegseqError is not a Direct (tag-view) enum",
+                ))
+            }
+        };
+        // Find the `PinctrlAbsent` variant BY NAME (Codex: never a hardcoded index).
+        let variants = match err_shape {
+            EnumShape::Multiple { variants, .. } => variants.as_slice(),
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "pinctrl absent fold: RegseqError is not a multi-variant enum",
+                ))
+            }
+        };
+        let pa = variants
+            .iter()
+            .find(|v| self.model.strings.resolve(v.name) == "PinctrlAbsent")
+            .ok_or(EmitError::Unsupported(
+                "pinctrl absent fold: RegseqError has no `PinctrlAbsent` variant (the optional-form \
+                 error surface must declare it, D12)",
+            ))?;
+        let tv = pa.tag_value.ok_or(EmitError::Unsupported(
+            "pinctrl absent fold: the PinctrlAbsent variant has no tag_value",
+        ))?;
+        let tag_lit = render_tag_value(self.model, self.names, tag_scalar_ty, tv)?;
+        // For a niche-encoded Result the Err variant is untagged (this is a no-op);
+        // the payload write below carries the discriminant. A Direct Result gets its
+        // tag set here.
+        let err_tag = self
+            .emit_set_discriminant(&dst, result_shape, 1)?
+            .unwrap_or_default();
+        Ok(format!(
+            "/* pinctrl optional-absent fold (D06/C04): Err(RegseqError::PinctrlAbsent) -> ENODEV; \
+             no regseq_pinctrl_apply, no PIN trace */ {err_tag} {dst}.{err_member}.{tag_member} = \
+             {tag_lit}; goto bb_{};",
+            target.as_u32()
+        ))
     }
 
     /// Register-access MMIO lowering (register-access construct, Form B): lower
@@ -5321,6 +5491,57 @@ fn payload_all_zst(model: &RegseqModel, shape: &EnumShape, v: usize) -> bool {
     }
 }
 
+/// The tag-write statement for variant `v` of `shape` at the (already resolved)
+/// enum lvalue `enum_lv`, or `None` when the variant writes no tag bytes. The
+/// free-function form of [`BodyEmit::emit_set_discriminant`] (which delegates
+/// here), so the synthesized lifecycle `main` — free-function code with no
+/// `BodyEmit` — can write a tag too (the pinctrl optional-present Some
+/// materialization, D06/T14).
+pub(super) fn set_enum_discriminant(
+    model: &RegseqModel,
+    names: &NameTable,
+    enum_lv: &str,
+    shape: &EnumShape,
+    v: usize,
+) -> Result<Option<String>, EmitError> {
+    let tag_value = variant_layout(shape, v)
+        .ok_or(EmitError::Unsupported(
+            "SetDiscriminant variant index out of range",
+        ))?
+        .tag_value;
+    match enum_emit::enum_tag(model, shape) {
+        enum_emit::EnumTag::View {
+            member_path,
+            scalar_ty,
+        } => match tag_value {
+            Some(tv) => {
+                let tvr = render_tag_value(model, names, scalar_ty, tv)?;
+                Ok(Some(format!("{enum_lv}.{member_path} = {tvr};")))
+            }
+            // A tag-view variant always carries a `tag_value`; defensive.
+            None => Ok(None),
+        },
+        enum_emit::EnumTag::Niche { offset, scalar_ty } => match tag_value {
+            Some(tv) => {
+                // Write the raw niche bit pattern through the scalar's raw storage
+                // unsigned integer (see `assign_niche_discriminant`): `(_Bool){2}`
+                // would normalize to 1, so a `_Bool` niche needs `(uint8_t){2}`.
+                let storage_kind = niche_storage_kind(model, scalar_ty)?;
+                let raw_cty = uint_ctype(storage_kind);
+                let tvr = render_uint(storage_kind, tv);
+                Ok(Some(format!(
+                    "memcpy((unsigned char *)&({enum_lv}) + {offset}, &({raw_cty}){{{tvr}}}, \
+                     sizeof({raw_cty}));"
+                )))
+            }
+            // Niche untagged variant: the payload is the tag -> no-op.
+            None => Ok(None),
+        },
+        // Single { scalar: None } / Empty: no tag bytes -> no-op.
+        enum_emit::EnumTag::None => Ok(None),
+    }
+}
+
 /// The [`VariantLayout`] for variant index `v` of `shape`, or `None` when out
 /// of range (`Empty` has none; `Single` has only variant 0).
 fn variant_layout(shape: &EnumShape, v: usize) -> Option<&VariantLayout> {
@@ -5787,6 +6008,39 @@ pub(crate) fn clock_resource_count(model: &RegseqModel) -> usize {
         .sum()
 }
 
+/// Whether the model has at least one **resolved** pinctrl resource (pinctrl
+/// state-selection construct). This is the demand gate for the `PINCTRL_HELPERS`
+/// prelude — RESOLVED-only (NOT mere field presence): an optional-absent resource
+/// (`!binding.is_resolved()`) emits NO hook call (its `apply` compile-time-folds
+/// to `Err(PinctrlAbsent)`, D06/C04), so an absent-only or pinctrl-less TU's `.c`
+/// is byte-unchanged (I06/C05). The `acquire_pinctrl`/`release_pinctrl` preamble
+/// and any `apply` lowering emit only for an `is_resolved()` binding.
+pub(crate) fn model_has_resolved_pinctrl_resource(model: &RegseqModel) -> bool {
+    model
+        .pinctrl
+        .drivers
+        .values()
+        .flat_map(|d| d.resources.iter())
+        .any(|r| r.binding.is_resolved())
+}
+
+/// The number of **resolved** pinctrl resources across all drivers — the size of
+/// the generic-c host pinctrl slot table (the global singleton is TU-wide). Only
+/// resolved resources emit `acquire`/`apply`/`release` hooks (an optional-absent
+/// resource folds away), so the table is sized to the resolved count. The caller
+/// emits `#define REGSEQ_PINCTRL_SLOTS {count}` before the
+/// [`super::prelude::PINCTRL_HELPERS`] block (mirroring `REGSEQ_CLOCK_SLOTS`), so
+/// the slot table can never overflow and a resource is never silently dropped.
+pub(crate) fn pinctrl_resolved_resource_count(model: &RegseqModel) -> usize {
+    model
+        .pinctrl
+        .drivers
+        .values()
+        .flat_map(|d| d.resources.iter())
+        .filter(|r| r.binding.is_resolved())
+        .count()
+}
+
 /// Whether the model uses ANY atomic operation — an `Atomic<T>` field OR a
 /// recognized atomic intrinsic (the field-less `atomic::fence` free fn included).
 /// This is the demand gate for the `ATOMIC_HELPERS` prelude: a fence-only TU has
@@ -6224,6 +6478,23 @@ pub(crate) fn emit_lifecycle_synthesis(
     syms: &InstanceSymbols,
     options: &BackendOptions,
 ) -> Result<String, EmitError> {
+    // T18 soundness guard (Codex): an injected `pinctrl.fail-acquire` id that
+    // matches NO resolved pinctrl resource is a fixture typo silently becoming
+    // "no failure" — fail loud instead. (`is_resolved()` only; an absent optional
+    // resource has no acquire to fail.) Checked BEFORE the no-driver early return,
+    // so the knob is never silently ignored on a no-lifecycle / no-pinctrl TU.
+    if let Some(fail_id) = options.pinctrl_fail_acquire() {
+        let matches = model.pinctrl.drivers.values().any(|d| {
+            d.resources
+                .iter()
+                .any(|r| r.binding.is_resolved() && model.strings.resolve(r.pinctrl_id) == fail_id)
+        });
+        if !matches {
+            return Err(EmitError::BackendOption(format!(
+                "pinctrl.fail-acquire id '{fail_id}' matches no resolved pinctrl resource (T18)"
+            )));
+        }
+    }
     if model.device_lifecycle.drivers.is_empty() {
         return Ok(String::new());
     }
@@ -6259,6 +6530,25 @@ pub(crate) fn emit_lifecycle_synthesis(
         // one), so the two paths stay decoupled.
         if matches!(driver.descriptor.device_class, regseq_model::ClassTag::Serial) {
             if let Some(serial) = model.serial.drivers.get(driver_item) {
+                // The self-contained serial-class synthesis path bypasses the
+                // lifecycle preamble/postamble below, where `acquire_pinctrl`/
+                // `release_pinctrl` (and `acquire_clock`/`release`) live. Pinctrl
+                // is not yet composed with it, so fail LOUD rather than silently
+                // drop a resolved pinctrl resource on a serial-class driver
+                // (D08/C07 ordering would otherwise be violated invisibly). The
+                // composed witness (T24) uses the normal lifecycle path.
+                if model
+                    .pinctrl
+                    .drivers
+                    .get(driver_item)
+                    .is_some_and(|d| d.resources.iter().any(|r| r.binding.is_resolved()))
+                {
+                    return Err(EmitError::Unsupported(
+                        "a resolved pinctrl resource on a serial-class driver is not yet \
+                         composed with the serial synthesis path (its acquire_pinctrl/\
+                         release_pinctrl lifecycle would be silently dropped)",
+                    ));
+                }
                 let (defs, runner_call) =
                     emit_serial_synthesis(model, names, syms, idx, *driver_item, driver, serial)?;
                 out.push_str(&defs);
@@ -6453,6 +6743,20 @@ pub(crate) fn emit_lifecycle_synthesis(
                 }
             }
 
+            // Pin-controller-and-GPIO-configuration acquire_pinctrl (pinctrl
+            // construct, C07/D08): synthesized immediately after the bus/map_region
+            // keystone and BEFORE `acquire_clock` (pins-before-clock — mux the pins
+            // before clocking the device). In pinctrl declaration order;
+            // compiler-managed (no author call); each records its resource bound +
+            // applies the default state in the host slot. Empty for a pinctrl-less
+            // (or optional-absent-only) driver (no golden churn).
+            out.push_str(&pinctrl_acquire_block(
+                model,
+                driver_item,
+                options.pinctrl_fail_acquire(),
+                "    ",
+            ));
+
             // Peripheral-clock-management acquire_clock (clock construct,
             // C07/D16/D05): synthesized immediately after the bus/map_region
             // keystone, in clock declaration order, BEFORE the sync init +
@@ -6498,6 +6802,19 @@ pub(crate) fn emit_lifecycle_synthesis(
                 // embedded driver (CR-7). An interrupt driver always needs it:
                 // the wrapper's registered ctx is `&inst`.
                 out.push_str(&format!("    struct {target_name} inst = {{0}};\n"));
+                // Pin-controller-and-GPIO-configuration optional-PRESENT
+                // discriminant materialization (pinctrl, D06/T14): a resolved
+                // OPTIONAL `Option<PinCtrl>` field is statically `Some`, but `= {0}`
+                // gives `None` for an `Option<ZST>` — so set its tag to `Some`
+                // BEFORE any callback, so the plain `if let Some(p) = &self.pinctrl`
+                // reader takes the present branch at runtime. Empty for a driver
+                // with no resolved optional pinctrl resource (no golden churn).
+                out.push_str(&pinctrl_some_materialization_block(
+                    model,
+                    names,
+                    driver_item,
+                    "    ",
+                )?);
             }
 
             // Interrupt preamble (construct #6, D14): register each line
@@ -6557,7 +6874,11 @@ pub(crate) fn emit_lifecycle_synthesis(
             // C07/D16): reverse declaration order (LIFO). Empty for a clock-less
             // driver. The 4-space indent matches the function-body teardown
             // (orderly/surprise); init-fail rebuilds it at its deeper indent.
-            let clock_teardown = clock_release_block(model, driver_item, "    ");
+            // Pinctrl release follows clock release (the exact reverse of the
+            // pins-before-clock preamble — clock release → pinctrl release → unmap,
+            // C07/D08); empty for a pinctrl-less driver.
+            let mut clock_teardown = clock_release_block(model, driver_item, "    ");
+            clock_teardown.push_str(&pinctrl_release_block(model, driver_item, "    "));
 
             // Scenario-specific on_init handling + teardown/shutdown suffix.
             match scenario {
@@ -6635,8 +6956,10 @@ pub(crate) fn emit_lifecycle_synthesis(
                 LifecycleScenario::InitFail => {
                     // The init-fail unwind runs inside the `if (__disc != Ok)`
                     // block (8-space indent), so the clock release is rebuilt at
-                    // that depth.
-                    let clock_unwind = clock_release_block(model, driver_item, "        ");
+                    // that depth. Pinctrl release follows clock release (LIFO,
+                    // pins-before-clock reverse — C07/D08).
+                    let mut clock_unwind = clock_release_block(model, driver_item, "        ");
+                    clock_unwind.push_str(&pinctrl_release_block(model, driver_item, "        "));
                     emit_init_fail_body(
                         &on_init_capture,
                         &on_init_failure_sym,
@@ -6988,6 +7311,178 @@ fn clock_release_block(model: &RegseqModel, driver_item: &ItemId, indent: &str) 
         for res in clocks.resources.iter().rev() {
             let id = model.strings.resolve(res.id);
             out.push_str(&format!("{indent}regseq_clock_release({id:?});\n"));
+        }
+    }
+    out
+}
+
+/// Compiler-managed `acquire_pinctrl` preamble lines (pin-controller-and-GPIO-
+/// configuration construct, C07/D08): one `regseq_pinctrl_acquire("<id>", "default")`
+/// per RESOLVED pinctrl resource in DECLARATION order, slotted after the
+/// bus/`map_region` keystone and BEFORE `acquire_clock` (pins-before-clock). Each
+/// records its resource bound + establishes the `"default"` state. An
+/// optional-absent resource (`!is_resolved()`) emits nothing — its `apply`
+/// compile-time-folds to `Err(PinctrlAbsent)` (D06). Empty for a pinctrl-less
+/// driver (no golden churn).
+///
+/// **Form-aware rc handling (C04/D03/T18).** The REQUIRED `PinCtrl` form CONSUMES
+/// the acquire rc and HARD-FAILS on failure: `if (acquire(..) != 0) { trace
+/// "LC acquire-fail pinctrl <id>"; return; }` — an early preamble abort that skips
+/// the rest of the preamble + `on_init` + teardown (no rollback oracle: the real
+/// backends own cleanup — Linux devm auto-release; the observable contract is
+/// "required ⇒ `on_init` does not run"). The OPTIONAL form ignores the rc
+/// (`(void)`, best-effort). `fail_acquire` (T18) arms the host injection global
+/// for a matching resolved id, so a fixture can exercise the required hard-fail;
+/// without it, acquire never fails and the required check is a never-taken branch.
+fn pinctrl_acquire_block(
+    model: &RegseqModel,
+    driver_item: &ItemId,
+    fail_acquire: Option<&str>,
+    indent: &str,
+) -> String {
+    let mut out = String::new();
+    let Some(pinctrls) = model.pinctrl.drivers.get(driver_item) else {
+        return out;
+    };
+    let resolved: Vec<&regseq_model::PinctrlResource> = pinctrls
+        .resources
+        .iter()
+        .filter(|r| r.binding.is_resolved())
+        .collect();
+    if resolved.is_empty() {
+        return out;
+    }
+    // T18: arm the host acquire-failure injection for this driver's matching
+    // resolved resource (only when PINCTRL_HELPERS is emitted, i.e. a resolved
+    // resource exists — guaranteed here). The synthesizer validated the id matches.
+    if let Some(fail_id) = fail_acquire {
+        if resolved
+            .iter()
+            .any(|r| model.strings.resolve(r.pinctrl_id) == fail_id)
+        {
+            out.push_str(&format!(
+                "{indent}regseq_pinctrl_fail_acquire_id = {fail_id:?};\n"
+            ));
+        }
+    }
+    for res in resolved {
+        let id = model.strings.resolve(res.pinctrl_id);
+        if res.required {
+            // Required form: consume the rc, hard-fail (abort init before on_init).
+            // The id rides as a `%s` ARGUMENT (an escaped C string literal), never
+            // interpolated into the printf format string — a pinctrl id is an
+            // arbitrary string literal (`uart_%s` / quotes would otherwise be UB or
+            // break the C, Codex T18 finding).
+            out.push_str(&format!(
+                "{indent}if (regseq_pinctrl_acquire({id:?}, \"default\") != 0) {{ \
+                 printf(\"LC acquire-fail pinctrl %s\\n\", {id:?}); return; }}\n"
+            ));
+        } else {
+            // Optional form: best-effort, ignore the rc (D02/C04).
+            out.push_str(&format!(
+                "{indent}(void)regseq_pinctrl_acquire({id:?}, \"default\");\n"
+            ));
+        }
+    }
+    out
+}
+
+/// Pin-controller-and-GPIO-configuration optional-PRESENT discriminant
+/// materialization (pinctrl construct, D06/T14, Approach A). A resolved OPTIONAL
+/// `Option<PinCtrl>` field is statically `Some` (the `[pinctrl.<id>]` section is
+/// present), but the synthesized instance is zero-initialized (`= {0}`, i.e.
+/// `None` for an `Option<ZST>` tag-only enum), so its discriminant must be set to
+/// `Some` BEFORE any callback runs — otherwise the plain `if let Some(p) =
+/// &self.pinctrl` reader takes the absent branch at runtime and never calls the
+/// bound `apply`. (The `OptionalPinCtrl` trait path is intercepted at the call
+/// site and never reads the tag, so it needs no materialization; this is purely
+/// for the runtime-`switchInt` readers.) The `Some` variant + tag write are both
+/// shape-derived BY NAME (never a hardcoded index/offset). Empty for a driver with
+/// no resolved optional pinctrl resource — a required `PinCtrl` is a ZST with no
+/// tag, an absent resource stays `None` — so no golden churn for those.
+fn pinctrl_some_materialization_block(
+    model: &RegseqModel,
+    names: &NameTable,
+    driver_item: &ItemId,
+    indent: &str,
+) -> Result<String, EmitError> {
+    let Some(pinctrls) = model.pinctrl.drivers.get(driver_item) else {
+        return Ok(String::new());
+    };
+    if !pinctrls
+        .resources
+        .iter()
+        .any(|r| !r.required && r.binding.is_resolved())
+    {
+        return Ok(String::new());
+    }
+    let driver_ty = driver_struct_ty(model, *driver_item).ok_or(EmitError::Unsupported(
+        "pinctrl Some-materialization: driver struct type not found",
+    ))?;
+    let fields = agg_field_layouts(model, driver_ty).ok_or(EmitError::Unsupported(
+        "pinctrl Some-materialization: driver struct has no field layout",
+    ))?;
+    let mut out = String::new();
+    for res in &pinctrls.resources {
+        // Only a resolved OPTIONAL resource carries a materialized `Some` tag.
+        if res.required || !res.binding.is_resolved() {
+            continue;
+        }
+        let idx = fields
+            .iter()
+            .position(|f| f.name == res.name)
+            .ok_or(EmitError::Unsupported(
+                "pinctrl Some-materialization: resource field not found in the driver layout",
+            ))?;
+        let (fname, fty) = layout_emit::field_c_name_ty(model, driver_ty, idx).ok_or(
+            EmitError::Unsupported(
+                "pinctrl Some-materialization: field name/type navigation failed",
+            ),
+        )?;
+        let shape = enum_emit::enum_shape(model, fty).ok_or(EmitError::Unsupported(
+            "pinctrl Some-materialization: the optional field is not an Option enum",
+        ))?;
+        // The `Some` variant BY NAME (Option is None=0/Some=1, but never assume).
+        let some_idx = match shape {
+            EnumShape::Multiple { variants, .. } => variants
+                .iter()
+                .position(|v| model.strings.resolve(v.name) == "Some")
+                .ok_or(EmitError::Unsupported(
+                    "pinctrl Some-materialization: Option has no `Some` variant",
+                ))?,
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "pinctrl Some-materialization: the optional field is not a multi-variant enum",
+                ))
+            }
+        };
+        let lvalue = format!("inst.inner.{fname}");
+        if let Some(stmt) = set_enum_discriminant(model, names, &lvalue, shape, some_idx)? {
+            let id = model.strings.resolve(res.pinctrl_id);
+            out.push_str(&format!(
+                "{indent}{stmt} /* Option<PinCtrl> {id} = Some (D06 present materialization) */\n"
+            ));
+        }
+    }
+    Ok(out)
+}
+
+/// Compiler-managed `release_pinctrl` postamble lines (pin-controller-and-GPIO-
+/// configuration construct, C07/D08): one `regseq_pinctrl_release("<id>")` per
+/// RESOLVED pinctrl resource in REVERSE declaration order (LIFO), slotted AFTER
+/// the clock release and BEFORE the resource postambles (the `map_region` unmap
+/// markers) — the exact reverse of the pins-before-clock preamble. Generic-c-
+/// oracle-only (real backends auto-release, D08). An optional-absent resource
+/// emits nothing. Empty for a pinctrl-less driver.
+fn pinctrl_release_block(model: &RegseqModel, driver_item: &ItemId, indent: &str) -> String {
+    let mut out = String::new();
+    if let Some(pinctrls) = model.pinctrl.drivers.get(driver_item) {
+        for res in pinctrls.resources.iter().rev() {
+            if !res.binding.is_resolved() {
+                continue;
+            }
+            let id = model.strings.resolve(res.pinctrl_id);
+            out.push_str(&format!("{indent}regseq_pinctrl_release({id:?});\n"));
         }
     }
     out

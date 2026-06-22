@@ -188,6 +188,12 @@ fn diag_logging_post_peel_shape_and_attrs() {
                 AttrData::ClockResource { .. } => {
                     panic!("spurious AttrData on log callee: ClockResource")
                 }
+                AttrData::PinctrlResource { .. } => {
+                    panic!("spurious AttrData on log callee: PinctrlResource")
+                }
+                AttrData::PinStateMarker { .. } => {
+                    panic!("spurious AttrData on log callee: PinStateMarker")
+                }
             }
         }
     }

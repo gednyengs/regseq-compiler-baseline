@@ -126,6 +126,20 @@ pub(super) fn emit_zephyr_serial(
             unit: "a post-first-light serial unit",
         });
     }
+    // pinctrl construct (M4/T21): the dedicated serial scaffold does NOT emit the
+    // `PINCTRL_DT_INST_DEFINE` / init-hub acquire / binding `pinctrl-device.yaml`,
+    // but the shared `body::emit_pinctrl` would still lower an authored
+    // `apply::<S>()` to `pinctrl_apply_state(...)` — so a serial driver with a
+    // RESOLVED pinctrl resource would emit body calls with no DT define / binding
+    // (broken). Fail LOUD rather than silently drop the scaffold (Codex M4-diff
+    // #1); serial+pinctrl wiring is out of M4 scope. An optional-ABSENT resource
+    // needs no scaffold (its `apply` folds), so the gate is resolved-only.
+    if super::pinctrl::has_resolved_pinctrl(model, driver_ty) {
+        return Err(EmitError::UnsupportedInUnit {
+            what: "a resolved pinctrl resource in a device-class-serial driver".into(),
+            unit: "zephyr_c serial scaffold (pinctrl serial lowering is out of M4 scope)",
+        });
+    }
 
     // -- resources / register const bank / the TU-static base ----------------
     let resources: Vec<(String, bool, String)> = driver
@@ -289,7 +303,10 @@ pub(super) fn emit_zephyr_serial(
         &init_fn,
         &deinit_fn,
     )?;
-    let binding_yaml = emit_binding_yaml(model, drv, compatible, false, ignored_audits);
+    // pinctrl construct (M4/T21): the dedicated serial scaffold does not wire the
+    // pinctrl DT define / acquire (out of M4 scope — no fixture; the pinctrl
+    // witness exercises the generic AMBA scaffold). `has_pinctrl = false`.
+    let binding_yaml = emit_binding_yaml(model, drv, compatible, false, false, ignored_audits);
 
     // -- conformance: the delivered uart_driver_api slots + the per-source
     //    arming sites (R04). A serial driver DELIVERS the class (deferred_class

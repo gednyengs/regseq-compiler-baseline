@@ -887,6 +887,17 @@ fn emit_call(
             // framework over the morphed `struct clk *` field; static enable/
             // disable are no-ops and get_rate const-folds (D07).
             IntrinsicKind::Clock(op) => emit_clock(cx, op, body, args, destination, out),
+            // Pin-controller-and-GPIO-configuration lowering (pinctrl
+            // state-selection construct, M4/T20, C04/D10): `apply::<S>()` over a
+            // RESOLVED binding lowers to the Linux pinctrl-consumer API — the
+            // OPTIONAL form to the handle-less `pinctrl_pm_select_<state>_state`
+            // PM helper, the REQUIRED form to explicit-handle `pinctrl_lookup_state`
+            // + `pinctrl_select_state` over the morphed `struct pinctrl *` field.
+            // An optional-ABSENT binding compile-time-folds to a direct
+            // `Err(PinctrlAbsent)`, no API call (D06/C04).
+            IntrinsicKind::Pinctrl(op) => {
+                emit_pinctrl(cx, op, *instance, body, args, destination, out)
+            }
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {
@@ -1539,6 +1550,282 @@ fn emit_clock(
                 // managed: the raw live rate query (no fallback, D10/R10).
                 out.push_str(&format!("\t{dst} = ({cty})clk_get_rate({field_lv});\n"));
             }
+        }
+    }
+    Ok(())
+}
+
+/// Pin-controller-and-GPIO-configuration author-op lowering (pinctrl construct,
+/// M4/T20, C04/D10): lower an `IntrinsicKind::Pinctrl(op)` `apply::<S>()` Call
+/// over the receiver's RESOLVED binding.
+///   * OPTIONAL — the handle-less `pinctrl_pm_select_<state>_state(dev)` PM helper
+///     (the kernel `dev` recovered per-site via `container_of`, the config-space
+///     mirror); the rc is ignored (best-effort, C04) and the destination is
+///     `Ok(())`.
+///   * REQUIRED — explicit-handle `pinctrl_lookup_state` + `pinctrl_select_state`
+///     over the morphed `struct pinctrl *` field; a lookup ERR_PTR or a nonzero
+///     select rc constructs `Err` (v1 maps any apply failure to `RegseqError`'s
+///     first variant → -EIO, the clock-enable precedent; Codex M4 #3).
+///   * optional-ABSENT (unresolved) — the D06 compile-time branch-fold to a direct
+///     `Err(RegseqError::PinctrlAbsent)`, NO API call ([`emit_pinctrl_absent_fold`]).
+/// Only the standard `default`/`sleep` states lower in M4 (D10); a non-standard
+/// state is a loud error (the explicit-handle arbitrary-state path is design-in).
+/// The caller (`emit_terminator`) appends the `goto bb_<target>`.
+fn emit_pinctrl(
+    cx: &mut LowerCx<'_>,
+    op: regseq_model::PinctrlOp,
+    instance: InstanceId,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    destination: &Place,
+    out: &mut String,
+) -> Result<(), EmitError> {
+    let recv = args
+        .first()
+        .ok_or_else(|| EmitError::Unsupported("pinctrl op call without a receiver".into()))?;
+    let (item, id, binding) = regseq_model::recover_pinctrl_receiver(cx.model, body, recv)
+        .ok_or_else(|| {
+            EmitError::Unsupported(
+                "pinctrl receiver does not resolve to a single PinCtrl resource field".into(),
+            )
+        })?;
+    // Optional-ABSENT ⇒ the D06 compile-time branch-fold: a direct
+    // `Err(PinctrlAbsent)`, no API call, no handle (the absent-only TU stays
+    // consumer-header-free). Uniform across BOTH absent paths — the live
+    // `OptionalPinCtrl` trait forwarding AND the statically-dead `if let Some`
+    // branch (harmless dead code whose only obligation is to emit no API call).
+    if !binding.is_resolved() {
+        return emit_pinctrl_absent_fold(cx, body, destination, out);
+    }
+    let required = cx
+        .model
+        .pinctrl
+        .drivers
+        .get(&item)
+        .and_then(|d| d.resources.iter().find(|r| r.pinctrl_id == id))
+        .map(|r| r.required)
+        .ok_or_else(|| {
+            EmitError::Unsupported(
+                "pinctrl resolved receiver has no matching resource record".into(),
+            )
+        })?;
+    // Resolve the selected state from `S` (the single source of truth shared with
+    // the generic-c backend + the membership pass, C03). M4 lowers only the
+    // standard `default`/`sleep` states (D10) — a non-standard state is a loud
+    // error here (the arbitrary-state explicit-handle path is design-in, Codex M4 #7).
+    let regseq_model::PinctrlOp::ApplyState = op;
+    let state =
+        regseq_model::resolve_pin_state(cx.model, &cx.model.instances[instance].generic_args)
+            .map(|s| cx.model.strings.resolve(s).to_string())
+            .ok_or_else(|| {
+                EmitError::Unsupported(
+                    "pinctrl `apply::<S>()` generic arg `S` resolves to no `#[rseq::pin_state]` \
+                     marker"
+                        .into(),
+                )
+            })?;
+    if state != "default" && state != "sleep" {
+        return Err(EmitError::Unsupported(format!(
+            "pinctrl `apply::<{state}>()` — only the standard `default`/`sleep` states are lowered \
+             on the Linux backend in M4 (D10); a non-standard state needs the explicit-handle \
+             arbitrary-state path (design-in)"
+        )));
+    }
+    let dst_ty = place_ty(cx.model, body, destination)?;
+    let dst = place_lvalue(cx, body, destination)?;
+    cx.extra_includes.insert("<linux/pinctrl/consumer.h>");
+    if required {
+        // REQUIRED: explicit-handle lookup + IS_ERR + select over the morphed
+        // `struct pinctrl *` field. Both lookup and select failure construct `Err`
+        // (v1 → RegseqError's first variant / -EIO; `memset` zeroes the niche
+        // carrier to Err(first), the clock-enable precedent).
+        cx.extra_includes.insert("<linux/err.h>");
+        cx.extra_includes.insert("<linux/string.h>");
+        let field_lv = {
+            let src = cx.resolve_receiver_src(body, recv, 0)?;
+            place_lvalue(cx, body, &src)?
+        };
+        out.push_str("\t{\n");
+        out.push_str(&format!(
+            "\t\tstruct pinctrl_state *__ps = pinctrl_lookup_state({field_lv}, {state:?});\n"
+        ));
+        out.push_str("\t\tif (IS_ERR(__ps)) {\n");
+        out.push_str(&format!("\t\t\tmemset(&{dst}, 0, sizeof({dst}));\n"));
+        emit_enum_tag_write(cx, dst_ty, &dst, VariantIdx::from_u32(1), out)?;
+        out.push_str(&format!(
+            "\t\t}} else if (pinctrl_select_state({field_lv}, __ps) != 0) {{\n"
+        ));
+        out.push_str(&format!("\t\t\tmemset(&{dst}, 0, sizeof({dst}));\n"));
+        emit_enum_tag_write(cx, dst_ty, &dst, VariantIdx::from_u32(1), out)?;
+        out.push_str("\t\t} else {\n");
+        emit_enum_tag_write(cx, dst_ty, &dst, VariantIdx::from_u32(0), out)?;
+        out.push_str("\t\t}\n");
+        out.push_str("\t}\n");
+    } else {
+        // OPTIONAL: the handle-less PM helper, `dev` recovered per-site via
+        // `container_of` (the config-space mirror); the rc is ignored
+        // (best-effort, C04). Then `Ok(())`.
+        cx.extra_includes.insert("<linux/container_of.h>");
+        let (recovery, dev_expr) = pinctrl_dev_recovery(cx, body)?;
+        out.push_str("\t{\n");
+        out.push_str(&format!("\t\t{recovery}\n"));
+        out.push_str(&format!(
+            "\t\t(void)pinctrl_pm_select_{state}_state({dev_expr});\n"
+        ));
+        emit_enum_tag_write(cx, dst_ty, &dst, VariantIdx::from_u32(0), out)?;
+        out.push_str("\t}\n");
+    }
+    Ok(())
+}
+
+/// The per-site kernel-device recovery for the OPTIONAL pinctrl PM helpers (the
+/// config-space [`config_recovery`] mirror): the author body's first argument is
+/// the driver receiver (`&self`), so `container_of` recovers the priv container
+/// and its bus back-pointer. Returns `(recovery declaration, device-address
+/// expression)` — `&adev->dev` (AMBA) / `&pdev->dev` (PCI). The recovery
+/// materializes inside the op's own braces block (strictly per-site, never
+/// hoisted), exactly as config-space does.
+fn pinctrl_dev_recovery(
+    cx: &LowerCx<'_>,
+    body: &regseq_model::Body,
+) -> Result<(String, String), EmitError> {
+    let recv = body
+        .arg_locals()
+        .next()
+        .filter(|l| {
+            matches!(
+                &cx.model.types[body.local_decls[*l].ty],
+                Ty::Ref(pointee, _) if *pointee == cx.driver.driver_ty
+            )
+        })
+        .ok_or_else(|| {
+            EmitError::Unsupported(
+                "optional pinctrl `apply` in a body whose receiver is not the driver type (the \
+                 handle-less PM path recovers `dev` via container_of from a driver-receiver body \
+                 only; the cross-helper case is design-in)"
+                    .into(),
+            )
+        })?;
+    let recv_name = local_name(cx.model, body, recv);
+    let drv = &cx.driver.drv;
+    let recovery = format!(
+        "struct {drv}_priv *__rseq_priv = container_of({recv_name}, struct {drv}_priv, inner);"
+    );
+    let dev_expr = match cx.driver.bus_type {
+        Some(regseq_model::BusType::Pci) => "&__rseq_priv->pdev->dev".to_string(),
+        _ => "&__rseq_priv->adev->dev".to_string(),
+    };
+    Ok((recovery, dev_expr))
+}
+
+/// Pin-controller-and-GPIO-configuration optional-ABSENT branch-fold (pinctrl
+/// construct, M4/T20, D06/C04): an `apply::<S>()` on an UNRESOLVED (optional-
+/// absent) binding compile-time-folds to a direct `Err(RegseqError::PinctrlAbsent)`
+/// — NO `pinctrl_*` API call, no handle. Writes the inner `RegseqError` tag for
+/// `PinctrlAbsent` (found BY NAME, never a hardcoded index) at the COMPOSITE
+/// offset (the Result `Err` payload-field offset + the RegseqError tag offset),
+/// computed from the resolved layout — robust to the niche encoding (Codex M4 #1,
+/// the `carrier_facts` `err_tag_offset` shape). For a niche-encoded Result the
+/// outer `Err` tag write is a no-op (the payload carries the discriminant); a
+/// Direct Result gets its outer tag too. The scaffold errno adapter maps
+/// `PinctrlAbsent` -> `ENODEV` (T19/D12).
+fn emit_pinctrl_absent_fold(
+    cx: &mut LowerCx<'_>,
+    body: &regseq_model::Body,
+    destination: &Place,
+    out: &mut String,
+) -> Result<(), EmitError> {
+    let dst_ty = place_ty(cx.model, body, destination)?;
+    let dst = place_lvalue(cx, body, destination)?;
+    // Layout facts (scoped immutable borrow): the Result `Err` payload field
+    // offset + type, the RegseqError tag cell, and the `PinctrlAbsent` tag value.
+    let (composite_offset, tag_size, tag_value, err_idx) = {
+        let result_layout = types::layout_of(cx.model, dst_ty).ok_or_else(|| {
+            EmitError::Unsupported("pinctrl absent fold: Result destination has no layout".into())
+        })?;
+        let LayoutKind::Enum {
+            shape: EnumShape::Multiple { variants, .. },
+        } = &result_layout.kind
+        else {
+            return Err(EmitError::Unsupported(
+                "pinctrl absent fold: destination is not a multi-variant enum (expected Result)"
+                    .into(),
+            ));
+        };
+        let err_idx = variants
+            .iter()
+            .position(|v| cx.model.strings.resolve(v.name) == "Err")
+            .ok_or_else(|| {
+                EmitError::Unsupported("pinctrl absent fold: Result has no Err variant".into())
+            })?;
+        let err_field = variants[err_idx].fields.first().ok_or_else(|| {
+            EmitError::Unsupported(
+                "pinctrl absent fold: Result Err variant has no payload field".into(),
+            )
+        })?;
+        let err_payload_offset = err_field.offset;
+        let regseqerror_ty = err_field.ty;
+        let (re_tag_off, re_tag_size) = types::enum_tag_cell(cx.model, regseqerror_ty)?;
+        let re_layout = types::layout_of(cx.model, regseqerror_ty).ok_or_else(|| {
+            EmitError::Unsupported("pinctrl absent fold: RegseqError has no layout".into())
+        })?;
+        let LayoutKind::Enum {
+            shape: EnumShape::Multiple { variants: re_vars, .. },
+        } = &re_layout.kind
+        else {
+            return Err(EmitError::Unsupported(
+                "pinctrl absent fold: RegseqError is not a multi-variant enum".into(),
+            ));
+        };
+        let pa = re_vars
+            .iter()
+            .find(|v| cx.model.strings.resolve(v.name) == "PinctrlAbsent")
+            .ok_or_else(|| {
+                EmitError::Unsupported(
+                    "pinctrl absent fold: RegseqError has no `PinctrlAbsent` variant (the optional \
+                     error surface must declare it, D12)"
+                        .into(),
+                )
+            })?;
+        let tag = pa.tag_value.ok_or_else(|| {
+            EmitError::Unsupported(
+                "pinctrl absent fold: the PinctrlAbsent variant has no direct tag_value".into(),
+            )
+        })?;
+        (err_payload_offset + re_tag_off, re_tag_size, tag, err_idx)
+    };
+    if tag_value > u64::MAX as u128 {
+        return Err(EmitError::Unsupported(
+            "pinctrl absent fold: 128-bit tag value (first-light subset)".into(),
+        ));
+    }
+    out.push_str(
+        "\t/* pinctrl optional-absent fold (D06/C04): Err(RegseqError::PinctrlAbsent) -> ENODEV; \
+         no pinctrl API call */\n",
+    );
+    // The outer Result Err tag (no-op for a niche-encoded Err; set for a Direct
+    // Result) — then the inner RegseqError `PinctrlAbsent` tag at the composite
+    // offset.
+    emit_enum_tag_write(cx, dst_ty, &dst, VariantIdx::from_u32(err_idx as u32), out)?;
+    let tag = tag_value as u64;
+    match tag_size {
+        1 => out.push_str(&format!("\t{dst}._raw[{composite_offset}] = {tag:#x};\n")),
+        2 | 4 | 8 => {
+            let cty = match tag_size {
+                2 => "u16",
+                4 => "u32",
+                _ => "u64",
+            };
+            out.push_str(&format!(
+                "\t{{ {cty} __tag = {tag:#x}; memcpy(&{dst}._raw[{composite_offset}], &__tag, \
+                 sizeof(__tag)); }}\n"
+            ));
+            cx.extra_includes.insert("<linux/string.h>");
+        }
+        other => {
+            return Err(EmitError::Unsupported(format!(
+                "pinctrl absent fold: enum tag width {other} (first-light subset)"
+            )))
         }
     }
     Ok(())

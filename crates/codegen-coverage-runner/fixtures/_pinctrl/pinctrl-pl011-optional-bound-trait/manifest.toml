@@ -1,0 +1,18 @@
+name   = "pinctrl-pl011-optional-bound-trait"
+kind   = "rust"
+# The pin-controller-and-GPIO-configuration optional-PRESENT fixture, TRAIT-PATH
+# ONLY (PLAN M4/T23): a PL011-shaped AMBA driver with ONE
+# #[rseq::pinctrl(id="uart_pins")] Option<PinCtrl> (the OPTIONAL form, D02) bound
+# to a PRESENT [pinctrl.uart_pins] (pin_states = ["default", "sleep"]). BOTH
+# author applies go through the `OptionalPinCtrl` extension trait (`apply` directly
+# on `Option<PinCtrl>`) — NO plain `if let Some` path. This is the sibling of
+# `pinctrl-pl011-optional-bound` whose call paths the real backends lower without
+# the `if let` switchInt/Downcast (the plain-if-let real-backend lowering is the
+# T15 generic-c shape; on Linux/Zephyr it is design-in). It is the OPTIONAL-PRESENT
+# emission witness for linux_c (`pinctrl_pm_select_{default,sleep}_state`) and
+# zephyr_c (`pinctrl_apply_state(cfg, PINCTRL_STATE_{DEFAULT,SLEEP})`), and a
+# first-class generic-c oracle (both trait applies emit `regseq_pinctrl_apply`,
+# no fold since present).
+covers = ["PIN-1", "PIN-2", "PIN-3"]
+lifecycle_scenario = "orderly"
+expect = "pass"

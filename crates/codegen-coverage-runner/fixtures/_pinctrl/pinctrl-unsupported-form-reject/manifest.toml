@@ -1,0 +1,9 @@
+name   = "pinctrl-unsupported-form-reject"
+kind   = "rust"
+# C06: the [PinCtrl; N] array form is recognized whole and rejected.
+covers = ["PIN-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "PIN-ERR-UNSUPPORTED-FORM"

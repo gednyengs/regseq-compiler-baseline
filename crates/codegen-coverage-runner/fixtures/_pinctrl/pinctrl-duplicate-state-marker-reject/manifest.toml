@@ -1,0 +1,9 @@
+name   = "pinctrl-duplicate-state-marker-reject"
+kind   = "rust"
+# C06: two markers claim the same state name.
+covers = ["PIN-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "PIN-ERR-DUPLICATE-STATE-MARKER"

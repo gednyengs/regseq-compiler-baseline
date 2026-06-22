@@ -387,6 +387,9 @@ fn run_bridge_phase5_peels_all_four_severities() {
                         AttrData::SyncResource { .. } => {}
                         // Clock-construct marker; this fixture produces none.
                         AttrData::ClockResource { .. } => {}
+                        // Pinctrl-construct markers; this fixture produces none.
+                        AttrData::PinctrlResource { .. } => {}
+                        AttrData::PinStateMarker { .. } => {}
                     }
                 }
             }

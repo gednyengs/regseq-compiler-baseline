@@ -1,0 +1,11 @@
+name   = "pinctrl-pl011-required-bound"
+kind   = "rust"
+# The pin-controller-and-GPIO-configuration M3 required-PRESENT full-sequence
+# witness (PLAN T16): the REQUIRED PinCtrl form (D03) bound to a present
+# [pinctrl.uart_pins]. acquire_pinctrl applies "default"; the author transitions
+# sleep -> default via two direct &PinCtrl apply::<S>() calls, then writes.
+# expected.stdout is the PIN trace oracle (C05): PIN acquire default, PIN apply
+# sleep, PIN apply default, the W32, then PIN release.
+covers = ["PIN-1", "PIN-2", "PIN-3"]
+lifecycle_scenario = "orderly"
+expect = "pass"

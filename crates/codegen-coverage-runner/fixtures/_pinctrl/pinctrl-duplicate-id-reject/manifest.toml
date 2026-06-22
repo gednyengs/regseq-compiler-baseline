@@ -1,0 +1,9 @@
+name   = "pinctrl-duplicate-id-reject"
+kind   = "rust"
+# C06: two pinctrl fields with the same id on one driver.
+covers = ["PIN-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "PIN-ERR-DUPLICATE-ID"

@@ -1,0 +1,20 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "qemu-virt"
+arch = "aarch64"
+
+# L2 MMIO region binding (QEMU virt PL011: base 0x0900_0000, size 0x1000). The
+# emitted AMBA driver maps via `devm_ioremap_resource(&adev->dev, &adev->res)` — the
+# actual base comes from the DT at runtime (the reserved ttyAMA1 @ 0x9040000); this
+# literal only resolves the L1 `#[rseq::mmio(id = "regs")]` binding for emission.
+[mmio.regs]
+base = 0x09000000
+size = 0x1000
+
+# L2 pinctrl binding (C01): the section is PRESENT, so the optional
+# `Option<PinCtrl>` resolves to `Some` (D06) and the optional-trait `apply` lowers
+# to `(void)pinctrl_pm_select_default_state(dev)`. MUST contain "default" (D07).
+[pinctrl.uart_pins]
+pin_states = ["default", "sleep"]

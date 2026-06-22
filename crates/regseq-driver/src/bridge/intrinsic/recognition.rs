@@ -9,7 +9,7 @@
 
 use regseq_model::{
     AtomicOp, AttrData, ClockOp, ConfigOp, DefPathData, FetchOp, IntrinsicKind, ItemId, LogLevel,
-    MmioOp, RegseqModel,
+    MmioOp, PinctrlOp, RegseqModel,
 };
 use rustc_span::{def_id::DefId, Symbol as RustcSymbol};
 
@@ -119,6 +119,11 @@ fn intrinsic_kind_for_name(name: &str) -> Option<IntrinsicKind> {
         "clock_enable" => Some(IntrinsicKind::Clock(ClockOp::Enable)),
         "clock_disable" => Some(IntrinsicKind::Clock(ClockOp::Disable)),
         "clock_get_rate" => Some(IntrinsicKind::Clock(ClockOp::GetRate)),
+        // Pin-controller-and-GPIO-configuration intrinsic (pinctrl
+        // state-selection construct): the `PinCtrl::apply::<S>()` /
+        // `OptionalPinCtrl::apply::<S>()` wrapper method. Keep in sync with
+        // `regseq_model::IntrinsicKind::from_name`.
+        "pinctrl_apply" => Some(IntrinsicKind::Pinctrl(PinctrlOp::ApplyState)),
         _ => None,
     }
 }
@@ -181,6 +186,13 @@ fn fn_name_matches_kind(name: &str, kind: &IntrinsicKind) -> bool {
             ClockOp::Enable => name == "enable",
             ClockOp::Disable => name == "disable",
             ClockOp::GetRate => name == "get_rate",
+        },
+        // The `PinCtrl`/`OptionalPinCtrl` wrapper method (pinctrl
+        // state-selection construct). The `#[rseq::intrinsic("pinctrl_apply")]`
+        // attribute is the authority; the leaf method name is a redundant gate
+        // (the leaf is the short form: `apply`).
+        IntrinsicKind::Pinctrl(op) => match op {
+            PinctrlOp::ApplyState => name == "apply",
         },
     }
 }

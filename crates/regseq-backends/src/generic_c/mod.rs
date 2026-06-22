@@ -384,6 +384,23 @@ fn emit_generic_c_inner(
         ));
         out.push_str(prelude::CLOCK_HELPERS);
     }
+    // Pin-controller-and-GPIO-configuration host pinctrl model (pinctrl construct,
+    // C05/D05): the `regseq_pinctrl_*` hooks + per-`id` bound state. Gated on a
+    // RESOLVED resource (NOT mere field presence) — an optional-absent resource
+    // compile-time-folds to `Err(PinctrlAbsent)` with no hook call (D06/C04), so a
+    // pinctrl-less or absent-only TU's `.c` is byte-unchanged (no golden churn).
+    if body_emit::model_has_resolved_pinctrl_resource(model) {
+        // Size the slot table to the TU's exact resolved-pinctrl count (no fixed
+        // cap): the `#define` precedes the prelude block, which declares
+        // `regseq_pinctrl_slot_table[REGSEQ_PINCTRL_SLOTS]`. Sized like
+        // `REGSEQ_CLOCK_SLOTS`, so the table can never overflow and a resource is
+        // never silently dropped. At least 1 so it is not a zero-length array.
+        out.push_str(&format!(
+            "#define REGSEQ_PINCTRL_SLOTS {}u\n",
+            body_emit::pinctrl_resolved_resource_count(model).max(1)
+        ));
+        out.push_str(prelude::PINCTRL_HELPERS);
+    }
     out.push_str(&bank2);
     out.push_str(&bank3);
     out.push_str(&bank4);

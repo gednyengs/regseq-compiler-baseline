@@ -21,6 +21,7 @@
 mod body;
 mod clock;
 mod naming;
+mod pinctrl;
 mod serial;
 mod sync;
 mod types;
@@ -131,6 +132,13 @@ fn errno_symbol(variant_name: &str) -> Option<&'static str> {
         "PermissionDenied" => "EPERM",
         "DeviceNotFound" => "ENODEV",
         "GenericFailure" => "EIO",
+        // Pin-controller-and-GPIO-configuration construct (pinctrl, GRILL D12/C08,
+        // T19): the optional `Option<PinCtrl>` absent path compile-time-folds to
+        // `Err(RegseqError::PinctrlAbsent)` (D06/C04); the scaffold errno adapter
+        // maps it to `ENODEV` (no such device — the pinctrl resource is absent).
+        // Each backend fails-loud on an unmapped variant, so every backend that can
+        // emit the fold MUST carry this row (generic-c in M3, linux/zephyr in M4).
+        "PinctrlAbsent" => "ENODEV",
         _ => return None,
     })
 }
@@ -328,6 +336,21 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         cx.extra_includes.insert("<linux/err.h>");
     }
 
+    // -- pin-controller-and-GPIO-configuration (pinctrl construct, M4/T20,
+    //    C04/C07/D10): a RESOLVED REQUIRED `PinCtrl` FIELD morphs to a `struct
+    //    pinctrl *` member (the field_override, below) + the acquire preamble
+    //    (`devm_pinctrl_get` + select default) rides the probe scaffold; an
+    //    OPTIONAL `Option<PinCtrl>` keeps no field (handle-less PM helpers). Only
+    //    a RESOLVED resource pulls the consumer header (absent-only TU
+    //    byte-unchanged, I07/Codex M4 #5). `<linux/pinctrl/consumer.h>` declares
+    //    the morphed handle + the pinctrl ops; `<linux/err.h>` carries
+    //    IS_ERR/PTR_ERR. ---------------------------------------------------------
+    let pinctrl_field_decls = pinctrl::field_decls(model, driver_ty);
+    if pinctrl::has_resolved_pinctrl(model, driver_ty) {
+        cx.extra_includes.insert("<linux/pinctrl/consumer.h>");
+        cx.extra_includes.insert("<linux/err.h>");
+    }
+
     let callbacks = [
         ("on_init", &driver.ops.on_init),
         ("on_deinit", &driver.ops.on_deinit),
@@ -420,6 +443,7 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         &resource_names,
         &sync_field_decls,
         &clock_field_decls,
+        &pinctrl_field_decls,
     )?;
 
     // -- match table + driver struct + module macros ------------------------
@@ -938,8 +962,14 @@ fn emit_scaffold(
             );
         }
     }
+    // Pin-controller-and-GPIO-configuration acquire preamble (pinctrl construct,
+    // C07/D10, M4/T20): AFTER the region map, BEFORE the clock acquire —
+    // pins-before-clock (C07). Required ⇒ `devm_pinctrl_get` + select default
+    // (hard init error on failure, I02); optional ⇒ auto-bind no-op. Empty for a
+    // pinctrl-less / absent-only driver (I07).
+    out.push_str(&pinctrl::acquire_lines(model, driver_ty, "&adev->dev")?);
     // Peripheral-clock-management acquire preamble (clock construct, C07/D08):
-    // AFTER the region map, BEFORE the interrupt request — `devm_clk_get` per
+    // AFTER the pinctrl acquire, BEFORE the interrupt request — `devm_clk_get` per
     // managed clock with PTR_ERR propagation (a hard init error, I02). Empty for
     // a clock-less / static-only driver (I07).
     out.push_str(&clock::acquire_lines(model, driver_ty, "&adev->dev")?);
@@ -1168,8 +1198,14 @@ fn emit_scaffold_pci(
             );
         }
     }
+    // Pin-controller-and-GPIO-configuration acquire preamble (pinctrl construct,
+    // C07/D10, M4/T20): AFTER the region map, BEFORE the clock acquire —
+    // pins-before-clock (C07). Required ⇒ `devm_pinctrl_get` + select default;
+    // optional ⇒ auto-bind no-op. Empty for a pinctrl-less / absent-only driver
+    // (I07). (PL011 is AMBA; this keeps a pinctrl-bearing PCI driver sound.)
+    out.push_str(&pinctrl::acquire_lines(model, driver_ty, "&pdev->dev")?);
     // Peripheral-clock-management acquire preamble (clock construct, C07/D08):
-    // AFTER the region map — `devm_clk_get` per managed clock with PTR_ERR
+    // AFTER the pinctrl acquire — `devm_clk_get` per managed clock with PTR_ERR
     // propagation (a hard init error, I02). Empty for a clock-less / static-only
     // driver (I07). (PL011 is AMBA; this keeps a clock-bearing PCI driver sound.)
     out.push_str(&clock::acquire_lines(model, driver_ty, "&pdev->dev")?);
@@ -1481,6 +1517,7 @@ fn emit_type_defs(
     resource_names: &[String],
     sync_field_decls: &BTreeMap<String, String>,
     clock_field_decls: &BTreeMap<String, String>,
+    pinctrl_field_decls: &BTreeMap<String, String>,
 ) -> Result<String, EmitError> {
     // Snapshot the names registered during body/scaffold emission, then emit
     // definitions; definition emission may register nested names, so loop to
@@ -1525,6 +1562,7 @@ fn emit_type_defs(
                 let af = atomic_fields;
                 let sync = sync_field_decls.clone();
                 let clk = clock_field_decls.clone();
+                let pin = pinctrl_field_decls.clone();
                 types::emit_aggregate_def(model, &mut cx.names, ty, &move |fname: &str| {
                     if rn.iter().any(|r| r == fname) {
                         Some(format!("void __iomem *{fname}"))
@@ -1534,11 +1572,17 @@ fn emit_type_defs(
                         // T07/C02: a recognized lock field lowers to its per-OS
                         // lock object (the payload `T` is not stored this slice).
                         Some(decl.clone())
-                    } else {
+                    } else if let Some(decl) = clk.get(fname) {
                         // clock construct (C04/D08): a MANAGED clock field morphs
                         // to a `struct clk *`; a STATIC clock is absent here (its
                         // ZST `Clock` field is dropped — nothing references it).
-                        clk.get(fname).cloned()
+                        Some(decl.clone())
+                    } else {
+                        // pinctrl construct (C04/D10, M4/T20): a RESOLVED REQUIRED
+                        // `PinCtrl` field morphs to a `struct pinctrl *`; an
+                        // OPTIONAL `Option<PinCtrl>` is absent here (handle-less PM
+                        // helpers — its ZST is dropped).
+                        pin.get(fname).cloned()
                     }
                 })
                 .map_err(with_ctx)?

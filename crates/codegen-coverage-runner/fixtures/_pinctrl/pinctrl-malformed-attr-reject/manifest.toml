@@ -1,0 +1,9 @@
+name   = "pinctrl-malformed-attr-reject"
+kind   = "rust"
+# C06: an empty #[rseq::pinctrl(id = "")] id.
+covers = ["PIN-8"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "PIN-ERR-MALFORMED-ATTR"

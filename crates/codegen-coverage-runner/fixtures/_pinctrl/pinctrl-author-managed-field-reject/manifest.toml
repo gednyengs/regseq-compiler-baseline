@@ -1,0 +1,9 @@
+name   = "pinctrl-author-managed-field-reject"
+kind   = "rust"
+# C06: author writes the compiler-managed pinctrl field.
+covers = ["PIN-8"]
+expect = "reject"
+
+[expected]
+stage = "bind"
+diagnostic = "PIN-ERR-AUTHOR-MANAGED-FIELD"

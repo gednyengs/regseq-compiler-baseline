@@ -1,0 +1,9 @@
+name   = "pinctrl-invalid-state-marker-reject"
+kind   = "rust"
+# C06/C03: apply::<IdleState>() ("idle" not in inventory) via the if-let path.
+covers = ["PIN-8"]
+expect = "reject"
+
+[expected]
+stage = "bind"
+diagnostic = "PIN-ERR-INVALID-STATE-MARKER"

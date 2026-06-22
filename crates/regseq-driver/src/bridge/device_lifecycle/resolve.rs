@@ -237,6 +237,16 @@ fn classify_fields(
             if crate::bridge::clock::is_clock_field(tcx, field_ty) {
                 continue;
             }
+            // Pin-controller-and-GPIO-configuration fields (pinctrl construct)
+            // are compiler-bound resources owned by `bridge::pinctrl` (recognized
+            // in its Phase-4 pass) — route them away from the user-data
+            // classifier, whose D3 would otherwise reject the methodless `PinCtrl`
+            // shell. They are not `ResourceField`s either: the `acquire_pinctrl`
+            // preamble's position is derived from `model.pinctrl`, ordered after
+            // `map_region` and before `acquire_clock` (pins-before-clock, D08/C07).
+            if crate::bridge::pinctrl::is_pinctrl_field(tcx, field_ty) {
+                continue;
+            }
             if is_mmio_resource(tcx, field_ty) {
                 // Recognize the bus-resource-management L1 facts on the shared
                 // `#[rseq::mmio(...)]` field attribute (construct #3, T03): the

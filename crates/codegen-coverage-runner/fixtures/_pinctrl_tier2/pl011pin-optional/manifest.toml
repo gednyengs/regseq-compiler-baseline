@@ -1,0 +1,12 @@
+name   = "pl011pin-optional"
+kind   = "rust"
+# Pin-controller-and-GPIO-configuration TIER-2 VEHICLE: a plain-AMBA PL011 driver
+# with an optional-PRESENT pinctrl, emitted to Linux C and run on the eval QEMU
+# substrate (boot + bind the reserved ttyAMA1 + orderly unbind). NOT a coverage
+# fixture (it rides its own `_pinctrl_tier2` corpus, outside the `_pinctrl`
+# covers-aggregation universe), so `covers` is empty. The behavioral gate is the
+# eval harness's 41-smoke-gate-generated.sh; the in-repo `linux_pinctrl_tier2_e2e`
+# test byte-locks the emitted golden.linux.c and witnesses the pinctrl + reserved-id
+# strings.
+covers = []
+expect = "pass"

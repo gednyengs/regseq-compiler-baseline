@@ -1,0 +1,7 @@
+name   = "pinctrl-pl011-optional-absent-iflet"
+kind   = "rust"
+# Optional-ABSENT via the if-let path (Codex diff-review rec #3): the dead Some
+# branch must stay hook-free + trace-free (the if-let twin of -optional-absent).
+covers = ["PIN-4"]
+lifecycle_scenario = "orderly"
+expect = "pass"

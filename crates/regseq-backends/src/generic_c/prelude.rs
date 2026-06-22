@@ -490,6 +490,108 @@ __attribute__((unused)) static uint32_t regseq_clock_get_rate(const char *clk_id
 }
 "#;
 
+/// Pin-controller-and-GPIO-configuration host pinctrl model (pinctrl
+/// state-selection construct, GRILL C05/D05).
+///
+/// Emitted ONLY for a TU that has a **resolved** pinctrl resource (the caller
+/// gates on `model_has_resolved_pinctrl_resource`), so a pinctrl-less or
+/// optional-absent-only TU's `.c` is byte-unchanged (I06/D06) — no golden churn.
+/// An optional-absent resource emits NO hook call (its `apply` compile-time-folds
+/// to a direct `Err(PinctrlAbsent)`, D06/C04), so it never reaches this block.
+///
+/// The host model is a GLOBAL singleton with no device handle (matching
+/// `regseq_clock_*(clk_id)` / `regseq_mmio_read(off,width)`): every hook is keyed
+/// by the `const char* id` (the L1 `#[rseq::pinctrl(id)]`), which is both the
+/// per-resource state key (a bound flag) and the trace identity. Each hook prints
+/// a `PIN <event>` line to stdout — that trace IS the behavioral oracle for the
+/// pinctrl contract (C05).
+///
+/// `acquire` is the generic-c realization of the compiler-managed
+/// `acquire_pinctrl` (C07/D08): it records the resource bound and establishes the
+/// default state via a shared internal `bind` helper, emitting exactly ONE
+/// `PIN acquire <id> <default_state>` line (NOT a second `PIN apply` — D05). It
+/// returns `int` (`0` = ok): the required `PinCtrl` form consumes the rc and
+/// hard-fails on nonzero; the optional form ignores it. `apply` is the author op:
+/// it traces `PIN apply <id> <state>` and returns `int` (`0` = ok, nonzero ⇒ a
+/// backend apply error surfaced as `Err`; the rc MUST be consumed — D05).
+/// `PinctrlAbsent` is NEVER this rc; it is the compile-time-folded absent path.
+/// `release` is the generic-c-oracle-only deinit (D08): it traces
+/// `PIN release <id>` (NO state) and clears the slot. The exact `PIN …` spelling
+/// is blessed at the first golden (OI-3); the shape (three `id`-keyed hooks,
+/// event-specific `PIN <event>` trace) is the contract.
+pub const PINCTRL_HELPERS: &str = r#"
+/* ---------------------------------------------------------------------------
+ * Pin-controller-and-GPIO-configuration host pinctrl model (pinctrl construct,
+ * C05/D05). Each hook prints a "PIN <event>" line to stdout -- this trace IS the
+ * behavioral oracle. Emitted only for a TU with a resolved pinctrl resource;
+ * an optional-absent resource compile-time-folds to Err(PinctrlAbsent) and never
+ * reaches here. GLOBAL singleton, no device handle; keyed by the const char* id.
+ * REGSEQ_PINCTRL_SLOTS is #defined just above this block, sized by the caller to
+ * the TU's exact resolved-pinctrl count (like REGSEQ_CLOCK_SLOTS) -- so the slot
+ * table can never overflow and a resource is never silently dropped. */
+typedef struct {
+    const char *id;
+    int bound;  /* 1 once acquired, 0 once released */
+} regseq_pinctrl_slot_t;
+static regseq_pinctrl_slot_t regseq_pinctrl_slot_table[REGSEQ_PINCTRL_SLOTS] __attribute__((unused));
+__attribute__((unused)) static regseq_pinctrl_slot_t *regseq_pinctrl_slot(const char *id) {
+    for (uint32_t i = 0; i < REGSEQ_PINCTRL_SLOTS; i++) {
+        if (regseq_pinctrl_slot_table[i].id
+            && strcmp(regseq_pinctrl_slot_table[i].id, id) == 0) {
+            return &regseq_pinctrl_slot_table[i];
+        }
+    }
+    return 0;
+}
+/* Shared internal helper: find-or-allocate a slot and mark it bound. Emits NO
+ * trace line -- so `acquire` prints exactly one "PIN acquire" (not a second
+ * "PIN apply") when it establishes the default state (D05). */
+__attribute__((unused)) static regseq_pinctrl_slot_t *regseq_pinctrl_bind(const char *id) {
+    regseq_pinctrl_slot_t *slot = regseq_pinctrl_slot(id);
+    if (!slot) {
+        for (uint32_t i = 0; i < REGSEQ_PINCTRL_SLOTS; i++) {
+            if (!regseq_pinctrl_slot_table[i].id) {
+                slot = &regseq_pinctrl_slot_table[i];
+                break;
+            }
+        }
+    }
+    if (slot) {
+        slot->id = id;
+        slot->bound = 1;
+    }
+    return slot;
+}
+/* Acquire-failure injection knob (T18): the synthesized harness sets this to a
+ * pinctrl id (via the `backend.pinctrl.fail-acquire` param) to force THAT id's
+ * acquire to fail, exercising the required form's hard-fail. NULL (the default)
+ * = acquire never fails. The failing acquire still TRACES its attempt ("PIN
+ * acquire <id> <default>") then returns nonzero WITHOUT binding. */
+static const char *regseq_pinctrl_fail_acquire_id __attribute__((unused)) = 0;
+__attribute__((unused)) static int regseq_pinctrl_acquire(const char *id, const char *default_state) {
+    printf("PIN acquire %s %s\n", id, default_state);
+    if (regseq_pinctrl_fail_acquire_id
+        && strcmp(regseq_pinctrl_fail_acquire_id, id) == 0) {
+        return -1; /* injected acquire failure (T18) — not bound */
+    }
+    regseq_pinctrl_slot_t *slot = regseq_pinctrl_bind(id);
+    return slot ? 0 : -1; /* 0 = ok; nonzero ⇒ acquire failure (required hard-fails) */
+}
+__attribute__((unused)) static int regseq_pinctrl_apply(const char *id, const char *state) {
+    printf("PIN apply %s %s\n", id, state);
+    regseq_pinctrl_slot_t *slot = regseq_pinctrl_slot(id);
+    return (slot && slot->bound) ? 0 : -1; /* nonzero ⇒ backend apply error (Err) */
+}
+__attribute__((unused)) static void regseq_pinctrl_release(const char *id) {
+    printf("PIN release %s\n", id);
+    regseq_pinctrl_slot_t *slot = regseq_pinctrl_slot(id);
+    if (slot) {
+        slot->bound = 0;
+        slot->id = 0; /* free the slot (a released resource is reclaimable) */
+    }
+}
+"#;
+
 /// Timed-cpu-delay-and-sleep host fake-clock hooks (TCD construct, C06/D08): the
 /// extern DECLARATIONS the `busy_wait`/`sleep` lowering (`emit_delay`) calls,
 /// emitted only for a TU that uses a delay intrinsic. Unlike the other host

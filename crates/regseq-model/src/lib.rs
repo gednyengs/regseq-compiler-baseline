@@ -35,6 +35,8 @@ mod model;
 pub mod operand;
 mod place;
 mod place_validator;
+mod pinctrl;
+mod pinctrl_semantics;
 mod pretty;
 pub mod rvalue;
 mod serial;
@@ -78,7 +80,7 @@ pub use device_lifecycle::{
 };
 pub use domain_attr::{
     AtomicElement, AtomicOp, AttrData, ClockOp, ConfigOp, DomainAttrTables, FetchOp, FieldPath,
-    FrameworkType, IntrinsicKind, LogLevel, MmioOp,
+    FrameworkType, IntrinsicKind, LogLevel, MmioOp, PinctrlOp,
 };
 pub use fn_sig::{canonical_fn_sig, FnSig};
 pub use fn_sig_interner::FnSigInterner;
@@ -112,6 +114,11 @@ pub use place::{Place, PlaceElem};
 pub use place_validator::{
     validate_body_places, PlaceLocation, PlaceSite, PlaceValidationError, PlaceValidationErrorKind,
 };
+pub use pinctrl::{
+    recover_pinctrl_receiver, resolve_pin_state, DriverPinctrls, PinctrlBinding, PinctrlResource,
+    PinctrlTables,
+};
+pub use pinctrl_semantics::{validate_pinctrl_semantics, PinctrlSemanticError};
 pub use pretty::{PrettyPrintOptions, PrettyPrinter};
 pub use rvalue::{AggregateKind, BinOp, CastKind, PointerCoercion, Rvalue, UnOp};
 pub use serial::{

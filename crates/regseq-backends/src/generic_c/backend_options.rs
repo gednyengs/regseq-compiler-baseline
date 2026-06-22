@@ -103,6 +103,14 @@ pub struct BackendOptions {
     /// #6), in authored CSV order. Default = none (zero churn: an interrupt
     /// TU without the param registers/enables/tears down but never fires).
     irq_fire: Vec<IrqFireStep>,
+    /// Pin-controller-and-GPIO-configuration acquire-FAILURE injection (pinctrl
+    /// construct, T18): the `#[rseq::pinctrl(id = "…")]` resource id whose
+    /// compiler-managed `acquire_pinctrl` the harness forces to FAIL, exercising
+    /// the REQUIRED form's hard-fail (init aborts before `on_init`; the optional
+    /// form ignores the rc, D03/C04). `None` = the default (acquire never fails).
+    /// A generic-c-oracle test knob (not model/L2 truth), so it rides the same
+    /// `backend.*` param path as `lifecycle.scenario`/`irq.fire`.
+    pinctrl_fail_acquire: Option<String>,
 }
 
 impl Default for BackendOptions {
@@ -110,6 +118,7 @@ impl Default for BackendOptions {
         BackendOptions {
             lifecycle_scenarios: LifecycleScenario::ALL.to_vec(),
             irq_fire: Vec::new(),
+            pinctrl_fail_acquire: None,
         }
     }
 }
@@ -123,6 +132,12 @@ impl BackendOptions {
     /// The device-interrupt fire steps, in authored order.
     pub fn irq_fire(&self) -> &[IrqFireStep] {
         &self.irq_fire
+    }
+
+    /// The pinctrl resource id whose `acquire_pinctrl` the harness forces to fail
+    /// (T18), or `None` for the default (acquire never fails).
+    pub fn pinctrl_fail_acquire(&self) -> Option<&str> {
+        self.pinctrl_fail_acquire.as_deref()
     }
 
     /// Build from backend-scoped `(name, value)` param pairs — the `backend.`
@@ -145,6 +160,13 @@ impl BackendOptions {
                 }
                 "irq.fire" => {
                     options.irq_fire = parse_irq_fire(value)?;
+                }
+                "pinctrl.fail-acquire" => {
+                    // A single pinctrl id (trimmed); empty/absent keeps the default
+                    // (no injected failure). The id must match a RESOLVED pinctrl
+                    // resource at emit (the synthesizer fails loud otherwise, T18).
+                    let id = value.trim();
+                    options.pinctrl_fail_acquire = (!id.is_empty()).then(|| id.to_string());
                 }
                 _ => {} // not ours — another backend's param.
             }
@@ -360,6 +382,18 @@ mod tests {
                 "expected BackendOption for {bad}"
             );
         }
+    }
+
+    #[test]
+    fn pinctrl_fail_acquire_defaults_none_and_parses_an_id() {
+        // T18: default is no injected failure; a non-empty value is the id, an
+        // empty/whitespace value keeps the default.
+        assert_eq!(BackendOptions::default().pinctrl_fail_acquire(), None);
+        let opts =
+            BackendOptions::from_backend_params([("pinctrl.fail-acquire", " uart_pins ")]).unwrap();
+        assert_eq!(opts.pinctrl_fail_acquire(), Some("uart_pins"));
+        let empty = BackendOptions::from_backend_params([("pinctrl.fail-acquire", "  ")]).unwrap();
+        assert_eq!(empty.pinctrl_fail_acquire(), None);
     }
 
     #[test]

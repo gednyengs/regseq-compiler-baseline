@@ -1,8 +1,8 @@
 //! Phase 4 final `ItemId` assignment and side-table population.
 
 use super::{
-    atomic, clock, device_lifecycle, framework_type, interrupt, intrinsic, synchronization,
-    timed_delay, BridgeCtxt, BridgeError,
+    atomic, clock, device_lifecycle, framework_type, interrupt, intrinsic, pinctrl,
+    synchronization, timed_delay, BridgeCtxt, BridgeError,
 };
 
 /// Assigns dense `ItemId`s and populates item side tables in lock-step.
@@ -45,6 +45,25 @@ pub(crate) fn assign_item_ids_and_populate_sidetables(
     // must be a method on the `Clock` shell. Runs after `materialise_intrinsics`
     // recorded the markers it walks (mirrors `atomic::validate_atomic_signatures`).
     clock::validate_clock_signatures(ctxt)?;
+    // Pin-controller-and-GPIO-configuration (pinctrl construct): recognize
+    // `PinCtrl`/`Option<PinCtrl>` resource fields on the same driver map. Runs
+    // after device-lifecycle (the walk root) and after the sibling resource
+    // passes — order among sibling resources is irrelevant; the preamble ordering
+    // (pins-before-clock) is derived downstream from `model.pinctrl` (GRILL D08).
+    pinctrl::materialise_pinctrls(ctxt)?;
+    // Pin-state marker enumeration (D04): record `AttrData::PinStateMarker` for
+    // every `#[rseq::pin_state(id = "…")]` author-declared marker struct.
+    // Item-driven (mirrors `materialise_framework_types`); runs after item ids
+    // are assigned so the marker structs are interned.
+    pinctrl::materialise_pin_state_markers(ctxt)?;
+    // Pinctrl intrinsic legality (C06 / D14): every recognized `pinctrl_apply`
+    // intrinsic must be a method on `PinCtrl`/`Option<PinCtrl>`. Runs after
+    // `materialise_intrinsics` recorded the markers it walks (mirrors
+    // `clock::validate_clock_signatures`). The body-walk checks (author-managed
+    // field, apply-site state membership) need materialised bodies + the L2 join,
+    // so they run later: `validate_author_managed_fields` at the end of
+    // `run_bridge`, `validate_apply_sites` post-L2 (GRILL C03).
+    pinctrl::validate_pinctrl_signatures(ctxt)?;
     Ok(())
 }
 

@@ -8,6 +8,7 @@
 use crate::bus_resource::BrmError;
 use crate::clock::ClockL2Error;
 use crate::interrupt::InterruptL2Error;
+use crate::pinctrl::PinctrlL2Error;
 
 /// An error surfaced by an [`crate::L2Binder`] tenant.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +19,8 @@ pub enum L2Error {
     Interrupt(InterruptL2Error),
     /// Peripheral-clock-management surface diagnostic.
     Clock(ClockL2Error),
+    /// Pin-controller-and-GPIO-configuration surface diagnostic.
+    Pinctrl(PinctrlL2Error),
 }
 
 impl L2Error {
@@ -27,6 +30,7 @@ impl L2Error {
             L2Error::BusResource(e) => e.code(),
             L2Error::Interrupt(e) => e.code(),
             L2Error::Clock(e) => e.code(),
+            L2Error::Pinctrl(e) => e.code(),
         }
     }
 }
@@ -38,6 +42,7 @@ impl std::fmt::Display for L2Error {
             L2Error::BusResource(e) => write!(f, "{e}"),
             L2Error::Interrupt(e) => write!(f, "{e}"),
             L2Error::Clock(e) => write!(f, "{e}"),
+            L2Error::Pinctrl(e) => write!(f, "{e}"),
         }
     }
 }
@@ -57,6 +62,12 @@ impl From<InterruptL2Error> for L2Error {
 impl From<ClockL2Error> for L2Error {
     fn from(e: ClockL2Error) -> Self {
         L2Error::Clock(e)
+    }
+}
+
+impl From<PinctrlL2Error> for L2Error {
+    fn from(e: PinctrlL2Error) -> Self {
+        L2Error::Pinctrl(e)
     }
 }
 
