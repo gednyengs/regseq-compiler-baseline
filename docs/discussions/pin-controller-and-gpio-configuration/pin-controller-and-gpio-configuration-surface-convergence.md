@@ -239,8 +239,30 @@ pinctrl-specific twist of **author-declared pin-state markers** and a **generic-
   (returns 0, `dev->pins` NULL) — this is a **non-regression smoke** (the pinctrl
   scaffold does not break a real PL011 probe/teardown), NOT a witness of real pin
   muxing. The **required** form cannot be Tier-2'd on QEMU virt (its
-  `pinctrl_lookup_state("default")` fails probe with no DT pin states). The Zephyr
-  Tier-2 leg is not run (the PL011-Zephyr-qemu target is static; same inert reality).
+  `pinctrl_lookup_state("default")` fails probe with no DT pin states).
+- **Tier-2 (eval QEMU) behavioral smoke — Zephyr: PASSED (2026-06-21), a LIVE
+  pinctrl-apply witness.** The SAME `_pinctrl_tier2/pl011pin-optional` spec emitted to
+  `golden.zephyr.c` (+ `golden.zephyr.binding.yaml`, byte-locked by
+  `tests/zephyr_pinctrl_tier2_e2e.rs`) was built into a real `qemu_cortex_a53` image and
+  booted on the patched instrumented QEMU: it bound the DUT node `uart@9040000`
+  (compatible `regseq,pl011pin`), and its `PINCTRL_DT_INST_DEFINE(0)` +
+  `pinctrl_apply_state(…, PINCTRL_STATE_DEFAULT)` **actually executed** at boot —
+  reaching the SoC-layer `pinctrl_configure_pins()` sink TWICE (the init-hub preamble
+  apply + the authored `on_init` body apply, both rc-ignored optional applies), with the
+  device coming up ready and tearing down cleanly (`device_deinit` rc==0, ready→false; no
+  oops). Campaign archive `pl011/zephyr/results/campaigns/2026-06-21-pinctrl-zephyr-tier2/`
+  (harness `pl011/zephyr/campaign/app-pinctrl/` + `scripts/15-build-pinctrl-image.sh` +
+  `scripts/40-smoke-gate-pinctrl.sh`). **Why this differs from the Linux leg + honest
+  scope:** Zephyr pin control is build-time DT-authoritative (`PINCTRL_DT_*` are
+  compile-time macros), so the image cannot build/boot inert with zero DT pin support the
+  way the Linux optional `pinctrl_pm_select_default_state()` no-op does. The eval leg
+  therefore supplies Zephyr's OWN no-hardware test pin controller (`vnd,pinctrl-test` +
+  a copied `pinctrl_soc.h` shim + an app-provided `pinctrl_configure_pins()` sink), so the
+  generated apply runs end-to-end against a **synthetic** controller — a stronger witness
+  than the inert Linux smoke, but NOT real silicon pin muxing (no real pin controller on
+  this target). "Optional-present" on Zephyr is NOT acquisition-optional at build time
+  (the DT pin config is mandatory for the macros to compile); it differs from required
+  only in rc handling. N=1 (PL011), state-selection only, `default` state.
 - **Eval design-analysis errata applied (2026-06-21):** `PinCtrlAbsent` →
   `PinctrlAbsent`; "framework canonical markers" → author-declared; "build-narrow" →
   build-wide (per D02/D03/D10). Applied across the eval design analysis folder.
