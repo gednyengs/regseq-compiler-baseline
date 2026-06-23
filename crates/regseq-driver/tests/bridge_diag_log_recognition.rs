@@ -292,6 +292,8 @@ fn item_log_levels(model: &RegseqModel, leaf: &str) -> Vec<LogLevel> {
             AttrData::DmaRegionResource { .. } => None,
             AttrData::DmaChannelResource { .. } => None,
             AttrData::DmaCompletionBinding { .. } => None,
+            // Deferred-work handler-binding marker is not a log level; skip it.
+            AttrData::WorkHandler { .. } => None,
         })
         .collect()
 }

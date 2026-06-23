@@ -1993,6 +1993,14 @@ impl<'a> PrettyPrinter<'a> {
                     };
                     out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
                 }
+                // Deferred-work-item-scheduling author intrinsic
+                // (deferred-work-item-scheduling construct).
+                AttrData::Intrinsic(IntrinsicKind::DeferredWork(op)) => {
+                    let label = match op {
+                        crate::DeferredWorkOp::Submit => "deferred_work_submit",
+                    };
+                    out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
+                }
                 // The framework-type marker has no DSL attribute render
                 // form in this phase; its render rule (if any) lands with
                 // the bridge/backend stages that consume it. Emit nothing.
@@ -2045,6 +2053,18 @@ impl<'a> PrettyPrinter<'a> {
                     let name = self.model.strings.resolve(*channel);
                     out.push_str(&format!("#[rseq::dma_completion(channel = \"{name}\")]\n"));
                 }
+                // Deferred-work handler-binding marker
+                // (deferred-work-item-scheduling construct): an ITEM attribute on
+                // the author-declared `fn(&mut self)` method (`item_attrs`);
+                // render the authored attribute form (only the bare `None` form
+                // is built; `Some` is design-in).
+                AttrData::WorkHandler { field } => match field {
+                    Some(field) => {
+                        let name = self.model.strings.resolve(*field);
+                        out.push_str(&format!("#[rseq::work_handler(field = \"{name}\")]\n"));
+                    }
+                    None => out.push_str("#[rseq::work_handler]\n"),
+                },
             }
         }
         out

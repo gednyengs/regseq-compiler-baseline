@@ -658,6 +658,69 @@ __attribute__((unused)) static void regseq_dma_register_completion(const char *i
 }
 "#;
 
+/// Deferred-work-item-scheduling host work model (deferred-work-item-scheduling
+/// construct, GRILL C05). Each compiler-emitted hook prints a `WRK <event>` line
+/// to stdout — this trace IS the behavioral oracle. Emitted only for a TU with a
+/// `Work` resource (gated on `model_has_deferred_work_resource`, resource
+/// presence — NOT submit presence — so a declared-but-never-submitted `Work`
+/// still emits its lifecycle, and a `Work`-less TU's `.c` is byte-unchanged).
+/// GLOBAL singleton, no device handle; keyed by the per-resource slot INDEX
+/// (`&__regseq_work_slots[idx]`) because `Work` is an opaque ZST with no
+/// in-struct storage (GRILL T07). `REGSEQ_WORK_SLOTS` is `#define`d just above
+/// this block, sized by the caller to the TU's exact `Work`-resource count (like
+/// `REGSEQ_CLOCK_SLOTS`), so the slot table can never overflow.
+///
+/// `regseq_work_init`/`submit`/`cancel` are compiler-emitted (init in the
+/// lifecycle preamble, submit at the author `self.work.submit()`, cancel in the
+/// teardown postamble). `regseq_work_drain` is **HARNESS-ONLY** — it models the
+/// later sleepable thread-context run of pending handlers; the synthesized
+/// scenario calls it (the "runs later" of deferred work), and it is NEVER
+/// emitted into driver code. `cancel` frees the registration (a cancelled `Work`
+/// cannot re-arm — drain skips a slot with no `fn`), so a post-cancel
+/// submit+drain dispatches nothing (C05 item 4).
+pub const WORK_HELPERS: &str = r#"
+typedef struct {
+    void (*fn)(void *);  /* the synthesized wrapper (recovers self, runs the handler) */
+    void *ctx;           /* the registered (void *)&inst (target-view container) */
+    int pending;         /* 1 = a submit is queued and not yet dispatched/cancelled */
+} regseq_work_t;
+static regseq_work_t __regseq_work_slots[REGSEQ_WORK_SLOTS] __attribute__((unused));
+__attribute__((unused)) static int regseq_work_index(regseq_work_t *slot) {
+    return (int)(slot - __regseq_work_slots);
+}
+__attribute__((unused)) static void regseq_work_init(regseq_work_t *slot, void (*fn)(void *), void *ctx) {
+    printf("WRK init %d\n", regseq_work_index(slot));
+    slot->fn = fn;
+    slot->ctx = ctx;
+    slot->pending = 0;
+}
+__attribute__((unused)) static void regseq_work_submit(regseq_work_t *slot) {
+    printf("WRK submit %d\n", regseq_work_index(slot));
+    slot->pending = 1; /* arm; runs later when the (host) work thread drains */
+}
+__attribute__((unused)) static void regseq_work_cancel(regseq_work_t *slot) {
+    printf("WRK cancel %d\n", regseq_work_index(slot));
+    /* cancel-before-free: drop any pending dispatch AND free the registration so
+     * a subsequent submit cannot re-arm a torn-down Work (C05 item 4). */
+    slot->pending = 0;
+    slot->fn = 0;
+    slot->ctx = 0;
+}
+/* HARNESS-ONLY: the synthesized scenario calls this to run pending handlers in
+ * (simulated) sleepable thread context — the "runs later" of deferred work. It
+ * is NEVER emitted into driver code (no author op lowers to it). */
+__attribute__((unused)) static void regseq_work_drain(void) {
+    printf("WRK drain\n");
+    for (uint32_t i = 0; i < REGSEQ_WORK_SLOTS; i++) {
+        if (__regseq_work_slots[i].pending && __regseq_work_slots[i].fn) {
+            __regseq_work_slots[i].pending = 0;
+            printf("WRK dispatch %u\n", (unsigned)i);
+            __regseq_work_slots[i].fn(__regseq_work_slots[i].ctx);
+        }
+    }
+}
+"#;
+
 /// Pin-controller-and-GPIO-configuration host pinctrl model (pinctrl
 /// state-selection construct, GRILL C05/D05).
 ///

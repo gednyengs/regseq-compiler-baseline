@@ -165,6 +165,21 @@ pub enum AttrData {
         /// The interned pin-state name (`#[rseq::pin_state(id = "…")]`).
         id: StringId,
     } = 8,
+    /// Deferred-work handler-binding method marker (`#[rseq::work_handler]`,
+    /// deferred-work-item-scheduling construct), stored in
+    /// `DomainAttrTables.item_attrs` on the author-declared
+    /// `fn(&mut self)` method item. The bare form (`field = None`) binds the
+    /// sole `Work` resource (the only built form, GRILL D06/D10); the explicit
+    /// `field = "…"` target (`Some`) is design-in for the multi-`Work` future
+    /// and NOT built. The joined per-driver facts (the bound handler
+    /// `InstanceRef` + submit sites) live in the `DeferredWorkTables` sibling
+    /// table. Appended at discriminant 9 (next-free after `PinStateMarker = 8`),
+    /// append-only (GRILL D04/I06).
+    WorkHandler {
+        /// The interned explicit `field = "…"` target, `None` for the bare form
+        /// (which resolves against exactly one `Work`). Only `None` is built.
+        field: Option<StringId>,
+    } = 9,
     /// Coherent DMA-region resource field marker (`#[rseq::dma_region(id,
     /// element_size, element_count, alignment?)]`, dma-management construct),
     /// stored in `DomainAttrTables.field_attrs` on the `DmaRegion<T>` driver
@@ -173,7 +188,7 @@ pub enum AttrData {
     /// optional explicit `alignment` (omitted ⇒ `align_of::<T>()`, recovered by a
     /// later layout pass, GRILL D08/C03). The joined per-driver facts (element
     /// type, access sites, L2 binding) live in the `DmaTables` sibling table.
-    /// Appended at discriminant 9 (next-free after `PinStateMarker = 8`),
+    /// Appended at discriminant 10 (next-free after `WorkHandler = 9`),
     /// append-only (GRILL C09/S14).
     DmaRegionResource {
         /// The interned resource id (`#[rseq::dma_region(id = "…")]`).
@@ -188,14 +203,14 @@ pub enum AttrData {
         /// The explicit `alignment = N` (bytes), or `None` when omitted (a later
         /// layout pass defaults it to `align_of::<T>()`, NOT 1, GRILL D08/C03).
         alignment: Option<u64>,
-    } = 9,
+    } = 10,
     /// Slave DMA-channel resource field marker (`#[rseq::dma_channel(id,
     /// direction)]`, dma-management construct), stored in
     /// `DomainAttrTables.field_attrs` on the `DmaChannel` driver field. Carries
     /// the mandatory resource id (the `[dma.<id>]` join key) and the declared
     /// transfer direction. The joined per-driver facts (transport sites, L2
-    /// binding) live in the `DmaTables` sibling table. Appended at discriminant 10
-    /// (next-free after `DmaRegionResource = 9`), append-only (GRILL C09/S14).
+    /// binding) live in the `DmaTables` sibling table. Appended at discriminant 11
+    /// (next-free after `DmaRegionResource = 10`), append-only (GRILL C09/S14).
     DmaChannelResource {
         /// The interned resource id (`#[rseq::dma_channel(id = "…")]`).
         id: StringId,
@@ -203,14 +218,14 @@ pub enum AttrData {
         /// which fixes the source-vs-destination role of a coherent span at a
         /// `stage_transfer` site (GRILL D05/C06).
         direction: DmaFlow,
-    } = 10,
+    } = 11,
     /// Completion-binding registration marker (`#[rseq::dma_completion(channel =
     /// "…")]`, dma-management construct), stored in `DomainAttrTables.item_attrs`
     /// on the author-declared completion-handler method item. Carries the bound
     /// channel id, the handler item, and a marker for the `DmaCompletion` payload
     /// type. The binding is registration-shape only this cycle — the host model
     /// records it but never fires the callback (GRILL D06/C05). Appended at
-    /// discriminant 11 (next-free after `DmaChannelResource = 10`), append-only
+    /// discriminant 12 (next-free after `DmaChannelResource = 11`), append-only
     /// (GRILL C09/S14).
     DmaCompletionBinding {
         /// The interned channel id this handler completes (`channel = "…"`, the
@@ -224,7 +239,7 @@ pub enum AttrData {
         /// (interned type name / framework-type id). Registration metadata only;
         /// the payload is never constructed/delivered this cycle (D06).
         payload: StringId,
-    } = 11,
+    } = 12,
 }
 
 /// The declared transfer direction of a `#[rseq::dma_channel(direction = "…")]`
@@ -361,6 +376,16 @@ pub enum IntrinsicKind {
     /// they have no `IntrinsicKind`. Appended at discriminant 8, preserving the
     /// discriminants above (GRILL D04/D09/C03).
     Pinctrl(PinctrlOp) = 8,
+    /// Deferred-work-item-scheduling operation family
+    /// (deferred-work-item-scheduling construct). The author op on a typed
+    /// driver-local `Work` resource (`submit()`), tagged via the facade
+    /// `#[rseq::intrinsic("deferred_work_submit")]` marker. The compiler-managed
+    /// `init_work`/`cancel_work` are NOT intrinsics — they are synthesized from
+    /// the `Work` *field* (the `model.deferred_work` resource), so they have no
+    /// `IntrinsicKind`. `DeferredWorkOp::SubmitUnique` is reserved (not added)
+    /// until `submit_unique` is built. Appended at discriminant 9, preserving
+    /// the discriminants above (GRILL D04/D16/C03).
+    DeferredWork(DeferredWorkOp) = 9,
     /// DMA-management operation family (dma-management construct). The author
     /// ops on a coherent `DmaRegion<T>` (A2 addressing + closure
     /// `element_access`), a `DmaStreamBuffer` (map/acquire/release), and a slave
@@ -368,9 +393,9 @@ pub enum IntrinsicKind {
     /// `alloc_coherent`/`free_coherent` (region) and `request_channel`/`release`
     /// (channel) lifecycle ops are NOT intrinsics — they are synthesized from the
     /// resource *field* (the `model.dma` tables), so they have no `IntrinsicKind`.
-    /// Appended at discriminant 9, preserving the discriminants above (GRILL
-    /// C08/C09).
-    Dma(DmaOp) = 9,
+    /// Appended at discriminant 10 (next-free after `DeferredWork = 9`),
+    /// preserving the discriminants above (GRILL C08/C09).
+    Dma(DmaOp) = 10,
 }
 
 /// DMA-management author operation carried by [`IntrinsicKind::Dma`]
@@ -611,6 +636,22 @@ pub enum PinctrlOp {
     ApplyState = 0,
 }
 
+/// Deferred-work-item-scheduling author operation carried by
+/// [`IntrinsicKind::DeferredWork`] (deferred-work-item-scheduling construct).
+/// This corresponds to the `#[rseq::intrinsic("deferred_work_submit")]`-tagged
+/// `submit()` method on the `Work` resource. Closed, append-only — `SubmitUnique`
+/// is reserved (not added) until `submit_unique` is built (GRILL D04/G4, Out of
+/// Scope). The compiler-managed `init_work`/`cancel_work` are NOT ops (they are
+/// synthesized from the `Work` field, not author-called intrinsics).
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DeferredWorkOp {
+    /// `deferred_work_submit`: schedule the bound handler to run later in
+    /// sleepable thread context (`self.work.submit()`). Author-called,
+    /// infallible-at-surface (`-> ()`, GRILL I07).
+    Submit = 0,
+}
+
 impl IntrinsicKind {
     /// Closed-vocabulary lookup from dash-form attribute NAME to an
     /// intrinsic kind.
@@ -698,6 +739,12 @@ impl IntrinsicKind {
             "dma_device_addr" => Some(IntrinsicKind::Dma(DmaOp::DeviceAddr)),
             "dma_device_addr_of" => Some(IntrinsicKind::Dma(DmaOp::DeviceAddrOf)),
             "dma_element_count" => Some(IntrinsicKind::Dma(DmaOp::ElementCount)),
+            // Deferred-work-item-scheduling intrinsic (underscore form, matching
+            // the facade `#[rseq::intrinsic("deferred_work_submit")]` tag).
+            // `submit_unique` is NOT in the vocabulary (reserved, Out of Scope)
+            // and `init_work`/`cancel_work` are compiler-managed, not
+            // author-called intrinsics.
+            "deferred_work_submit" => Some(IntrinsicKind::DeferredWork(DeferredWorkOp::Submit)),
             _ => None,
         }
     }
@@ -1644,9 +1691,10 @@ mod tests {
     fn dma_from_name_round_trip_and_discriminants() {
         // DMA-management: every `dma_*` author op maps from its namespaced
         // underscore-form NAME, round-trips through JSON, and the `Dma` family
-        // appends at IntrinsicKind discriminant 9 with every prior family unmoved
+        // appends at IntrinsicKind discriminant 10 (next-free after the
+        // deferred-work `DeferredWork = 9`) with every prior family unmoved
         // (Log=0 / Mmio=1 / PollUntil=2 / Config=3 / BusyWait=4 / Sleep=5 /
-        // Atomic=6 / Clock=7 / Pinctrl=8).
+        // Atomic=6 / Clock=7 / Pinctrl=8 / DeferredWork=9).
         let cases = [
             (
                 "dma_element_read",
@@ -1687,29 +1735,27 @@ mod tests {
             );
             assert_json_round_trip(IntrinsicKind::Dma(op));
         }
-        // The `Dma` family appends at IntrinsicKind discriminant 9; every prior
-        // family discriminant is unmoved.
+        // The `Dma` family appends at IntrinsicKind discriminant 10; every prior
+        // family discriminant is unmoved (incl. the deferred-work `DeferredWork=9`).
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Log(LogLevel::Debug)), 0);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Mmio(MmioOp::Read)), 1);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::PollUntil), 2);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)), 3);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::BusyWait), 4);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Sleep), 5);
-        assert_eq!(
-            intrinsic_kind_tag(&IntrinsicKind::Atomic(AtomicOp::Load)),
-            6
-        );
-        assert_eq!(
-            intrinsic_kind_tag(&IntrinsicKind::Clock(ClockOp::Enable)),
-            7
-        );
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Atomic(AtomicOp::Load)), 6);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Clock(ClockOp::Enable)), 7);
         assert_eq!(
             intrinsic_kind_tag(&IntrinsicKind::Pinctrl(PinctrlOp::ApplyState)),
             8
         );
         assert_eq!(
-            intrinsic_kind_tag(&IntrinsicKind::Dma(DmaOp::StreamMap)),
+            intrinsic_kind_tag(&IntrinsicKind::DeferredWork(DeferredWorkOp::Submit)),
             9
+        );
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::Dma(DmaOp::StreamMap)),
+            10
         );
         // `AttrData::Intrinsic` stays at 0 regardless of which family it carries.
         assert_eq!(
@@ -1732,6 +1778,43 @@ mod tests {
         assert_eq!(IntrinsicKind::from_name(symbol("dma_sync_device")), None);
         assert_eq!(IntrinsicKind::from_name(symbol("dma-stream")), None);
         assert_eq!(IntrinsicKind::from_name(symbol("dma")), None);
+    }
+
+    #[test]
+    fn deferred_work_from_name_round_trip_and_discriminants() {
+        // Deferred-work-item-scheduling: the `deferred_work_submit` author op
+        // maps from its underscore-form NAME, round-trips through JSON, and the
+        // `DeferredWork` family appends at IntrinsicKind discriminant 9 with
+        // every prior family unmoved (Log=0 / Mmio=1 / PollUntil=2 / Config=3 /
+        // BusyWait=4 / Sleep=5 / Atomic=6 / Clock=7 / Pinctrl=8).
+        assert_eq!(
+            IntrinsicKind::from_name(symbol("deferred_work_submit")),
+            Some(IntrinsicKind::DeferredWork(DeferredWorkOp::Submit))
+        );
+        assert_json_round_trip(IntrinsicKind::DeferredWork(DeferredWorkOp::Submit));
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Pinctrl(PinctrlOp::ApplyState)), 8);
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::DeferredWork(DeferredWorkOp::Submit)),
+            9
+        );
+        // `AttrData::Intrinsic` stays at 0 regardless of which family it carries.
+        assert_eq!(
+            attr_data_tag(&AttrData::Intrinsic(IntrinsicKind::DeferredWork(
+                DeferredWorkOp::Submit
+            ))),
+            0
+        );
+        // `submit_unique` is reserved (Out of Scope); `init_work`/`cancel_work`
+        // are compiler-managed (not intrinsics); dash-form is rejected (deferred
+        // work uses underscore form, matching the facade tag).
+        assert_eq!(IntrinsicKind::from_name(symbol("deferred_work_submit_unique")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("submit_unique")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("init_work")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("cancel_work")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("acquire_work")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("deferred-work-submit")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("deferred_work")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("submit")), None);
     }
 
     #[test]
@@ -1770,6 +1853,12 @@ mod tests {
     }
 
     #[test]
+    fn deferred_work_op_inner_discriminants_are_stable() {
+        // `DeferredWorkOp` is fieldless, so `as u8` yields its pinned discriminant.
+        assert_eq!(DeferredWorkOp::Submit as u8, 0);
+    }
+
+    #[test]
     fn element_verb_effect_carrier_is_derived() {
         // The two-bit effect carrier rides the verb (GRILL C01/D02):
         // read={1,0}, write={0,1}, update={1,1}.
@@ -1790,11 +1879,30 @@ mod tests {
     }
 
     #[test]
+    fn attr_data_work_handler_discriminant_and_round_trip() {
+        // The `WorkHandler` item-attr variant appends at AttrData discriminant 9
+        // (next-free after `PinStateMarker = 8`) without shifting any prior
+        // variant, and round-trips through JSON for both `field` values (only
+        // the bare `None` form is built; `Some` is design-in).
+        assert_eq!(attr_data_tag(&AttrData::WorkHandler { field: None }), 9);
+        assert_eq!(
+            attr_data_tag(&AttrData::PinStateMarker {
+                id: StringId::from_u32(1),
+            }),
+            8
+        );
+        assert_eq!(attr_data_tag(&attr(LogLevel::Debug)), 0);
+        for field in [None, Some(StringId::from_u32(4))] {
+            assert_json_round_trip(AttrData::WorkHandler { field });
+        }
+    }
+
+    #[test]
     fn attr_data_dma_region_resource_discriminant_and_round_trip() {
         // The `DmaRegionResource` field-attr variant appends at AttrData
-        // discriminant 9 (next-free after `PinStateMarker = 8`) without shifting
-        // any prior variant, and round-trips through JSON (both `Some`/`None`
-        // alignment).
+        // discriminant 10 (next-free after the deferred-work `WorkHandler = 9`)
+        // without shifting any prior variant, and round-trips through JSON (both
+        // `Some`/`None` alignment).
         assert_eq!(
             attr_data_tag(&AttrData::DmaRegionResource {
                 id: StringId::from_u32(1),
@@ -1802,7 +1910,7 @@ mod tests {
                 element_count: 256,
                 alignment: Some(16),
             }),
-            9
+            10
         );
         // Prior variants unmoved.
         assert_eq!(attr_data_tag(&attr(LogLevel::Debug)), 0);
@@ -1812,6 +1920,7 @@ mod tests {
             }),
             8
         );
+        assert_eq!(attr_data_tag(&AttrData::WorkHandler { field: None }), 9);
         for alignment in [Some(16u64), None] {
             assert_json_round_trip(AttrData::DmaRegionResource {
                 id: StringId::from_u32(7),
@@ -1825,7 +1934,7 @@ mod tests {
     #[test]
     fn attr_data_dma_channel_resource_discriminant_and_round_trip() {
         // The `DmaChannelResource` field-attr variant appends at AttrData
-        // discriminant 10 (next-free after `DmaRegionResource = 9`) without
+        // discriminant 11 (next-free after `DmaRegionResource = 10`) without
         // shifting any prior variant, and round-trips through JSON for both
         // directions.
         assert_eq!(
@@ -1833,7 +1942,7 @@ mod tests {
                 id: StringId::from_u32(1),
                 direction: DmaFlow::DeviceToHost,
             }),
-            10
+            11
         );
         assert_eq!(
             attr_data_tag(&AttrData::DmaRegionResource {
@@ -1842,7 +1951,7 @@ mod tests {
                 element_count: 256,
                 alignment: None,
             }),
-            9
+            10
         );
         for direction in [DmaFlow::DeviceToHost, DmaFlow::HostToDevice] {
             assert_json_round_trip(AttrData::DmaChannelResource {
@@ -1855,7 +1964,7 @@ mod tests {
     #[test]
     fn attr_data_dma_completion_binding_discriminant_and_round_trip() {
         // The `DmaCompletionBinding` item-attr variant appends at AttrData
-        // discriminant 11 (next-free after `DmaChannelResource = 10`) without
+        // discriminant 12 (next-free after `DmaChannelResource = 11`) without
         // shifting any prior variant, and round-trips through JSON.
         assert_eq!(
             attr_data_tag(&AttrData::DmaCompletionBinding {
@@ -1863,14 +1972,14 @@ mod tests {
                 handler: ItemId::from_u32(2),
                 payload: StringId::from_u32(3),
             }),
-            11
+            12
         );
         assert_eq!(
             attr_data_tag(&AttrData::DmaChannelResource {
                 id: StringId::from_u32(1),
                 direction: DmaFlow::HostToDevice,
             }),
-            10
+            11
         );
         assert_json_round_trip(AttrData::DmaCompletionBinding {
             channel: StringId::from_u32(4),
@@ -1914,6 +2023,7 @@ mod tests {
             AttrData::PinStateMarker {
                 id: StringId::from_u32(1),
             },
+            AttrData::WorkHandler { field: None },
             AttrData::DmaRegionResource {
                 id: StringId::from_u32(1),
                 element_size: 16,
@@ -1948,6 +2058,7 @@ mod tests {
             IntrinsicKind::Atomic(AtomicOp::Load),
             IntrinsicKind::Clock(ClockOp::Enable),
             IntrinsicKind::Pinctrl(PinctrlOp::ApplyState),
+            IntrinsicKind::DeferredWork(DeferredWorkOp::Submit),
             IntrinsicKind::Dma(DmaOp::StreamMap),
         ];
         let intrinsic_tags: std::collections::BTreeSet<u8> =

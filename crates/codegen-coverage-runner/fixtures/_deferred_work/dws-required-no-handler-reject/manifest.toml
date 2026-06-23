@@ -1,0 +1,10 @@
+name   = "dws-required-no-handler-reject"
+kind   = "rust"
+# C06 (built): a required `Work` with no bound `#[rseq::work_handler]` (GRILL
+# D10). Rejected at the bridge stage.
+covers = ["DWS-6"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "DWS-ERR-REQUIRED-WORK-NO-HANDLER"

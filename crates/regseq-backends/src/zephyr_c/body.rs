@@ -910,6 +910,16 @@ fn emit_call(
                  is invented"
                     .into(),
             )),
+            // Deferred-work-item-scheduling lowering (deferred-work-item-scheduling
+            // construct): the Zephyr backend leg (`k_work`) is design-in, NOT
+            // built — v1 lowers this construct on the generic-c host oracle only
+            // (GRILL D01). Route here so the dispatch is exhaustive; a real
+            // `Work::submit` reaching the Zephyr backend is rejected.
+            IntrinsicKind::DeferredWork(_) => Err(EmitError::Rejected(
+                "deferred-work-item-scheduling is not lowered on the Zephyr backend \
+                 (generic-c host oracle only in v1; the k_work leg is design-in)"
+                    .into(),
+            )),
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {

@@ -402,6 +402,23 @@ fn emit_generic_c_inner(
         ));
         out.push_str(prelude::DMA_HELPERS);
     }
+    // Deferred-work-item-scheduling host work model
+    // (deferred-work-item-scheduling construct, C05): the `regseq_work_*` hooks +
+    // the index-keyed slot table. Gated on resource PRESENCE (NOT submit
+    // presence) — `init_work`/`cancel_work` + the wrapper are synthesized from
+    // the `Work` FIELD even when the author never `submit`s it (D07/I06). A
+    // `Work`-less TU's `.c` is byte-unchanged (no golden churn).
+    if body_emit::model_has_deferred_work_resource(model) {
+        // Size the slot table to the TU's exact `Work`-resource count: the
+        // `#define` precedes the prelude block, which declares
+        // `__regseq_work_slots[REGSEQ_WORK_SLOTS]`. At least 1 so it is not a
+        // zero-length array.
+        out.push_str(&format!(
+            "#define REGSEQ_WORK_SLOTS {}u\n",
+            body_emit::deferred_work_resource_count(model).max(1)
+        ));
+        out.push_str(prelude::WORK_HELPERS);
+    }
     // Pin-controller-and-GPIO-configuration host pinctrl model (pinctrl construct,
     // C05/D05): the `regseq_pinctrl_*` hooks + per-`id` bound state. Gated on a
     // RESOLVED resource (NOT mere field presence) — an optional-absent resource

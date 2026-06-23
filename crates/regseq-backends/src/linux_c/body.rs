@@ -908,6 +908,17 @@ fn emit_call(
                  is invented"
                     .into(),
             )),
+            // Deferred-work-item-scheduling lowering (deferred-work-item-scheduling
+            // construct): the Linux backend leg (`workqueue`/`work_struct`) is
+            // design-in, NOT built — v1 lowers this construct on the generic-c
+            // host oracle only (GRILL D01). Route here so the dispatch is
+            // exhaustive; a real `Work::submit` reaching the Linux backend is
+            // rejected.
+            IntrinsicKind::DeferredWork(_) => Err(EmitError::Unsupported(
+                "deferred-work-item-scheduling is not lowered on the Linux backend \
+                 (generic-c host oracle only in v1; the workqueue leg is design-in)"
+                    .to_string(),
+            )),
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {

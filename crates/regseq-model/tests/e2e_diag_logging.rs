@@ -203,6 +203,9 @@ fn diag_logging_post_peel_shape_and_attrs() {
                 AttrData::DmaCompletionBinding { .. } => {
                     panic!("spurious AttrData on log callee: DmaCompletionBinding")
                 }
+                AttrData::WorkHandler { .. } => {
+                    panic!("spurious AttrData on log callee: WorkHandler")
+                }
             }
         }
     }

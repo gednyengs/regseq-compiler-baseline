@@ -1,0 +1,12 @@
+name   = "dws-field-nonstring-reject"
+kind   = "rust"
+# C06 (built, SF-1): a non-string name-value `#[rseq::work_handler = 123]` — the
+# bare-only check uses `is_word()`, so non-string `= lit` forms reject too (not
+# just string values). Design-in, not built in v1 (GRILL D04/D12). Rejected at the
+# bridge stage.
+covers = ["DWS-6"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "DWS-ERR-HANDLER-SIGNATURE"

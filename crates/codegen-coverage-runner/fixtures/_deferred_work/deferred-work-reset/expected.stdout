@@ -1,0 +1,13 @@
+LC register dwreset match=dt:regseq,dwreset
+LC create
+LC associate
+WRK init 0
+LC call on_init
+WRK submit 0
+WRK drain
+WRK dispatch 0
+LC teardown present=1
+LC call on_deinit
+WRK cancel 0
+WRK submit 0
+WRK drain

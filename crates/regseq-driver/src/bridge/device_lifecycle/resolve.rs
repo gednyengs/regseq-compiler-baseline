@@ -264,6 +264,18 @@ fn classify_fields(
             if crate::bridge::dma::is_dma_channel_field(tcx, field_ty) {
                 continue;
             }
+            // Deferred-work-item-scheduling fields (deferred-work-item-scheduling
+            // construct) are compiler-bound resources owned by
+            // `bridge::deferred_work` (recognized in its Phase-4 pass) — route
+            // them away from the user-data classifier, whose D3 would otherwise
+            // reject the methodless `Work` shell. They are not `ResourceField`s
+            // either: a `Work` has no address footprint; its `init_work`/
+            // `cancel_work` lifecycle is synthesized from the recognized field
+            // (GRILL D04). Recognized BY TYPE (the
+            // `#[rseq::abstraction("deferred_work")]` marker), not a field attr.
+            if crate::bridge::deferred_work::is_work_field(tcx, field_ty) {
+                continue;
+            }
             if is_mmio_resource(tcx, field_ty) {
                 // Recognize the bus-resource-management L1 facts on the shared
                 // `#[rseq::mmio(...)]` field attribute (construct #3, T03): the

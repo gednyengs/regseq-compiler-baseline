@@ -186,6 +186,7 @@ fn root_struct_exposes_spec_field_set() {
         clock,
         pinctrl,
         dma,
+        deferred_work,
     } = m;
 
     assert_eq!(primary_crate, CrateId::ZERO);
@@ -213,6 +214,7 @@ fn root_struct_exposes_spec_field_set() {
     assert_eq!(clock, crate::ClockTables::default());
     assert_eq!(pinctrl, crate::PinctrlTables::default());
     assert_eq!(dma, crate::DmaTables::default());
+    assert_eq!(deferred_work, crate::DeferredWorkTables::default());
 }
 
 // ------------------------------------------------------------------

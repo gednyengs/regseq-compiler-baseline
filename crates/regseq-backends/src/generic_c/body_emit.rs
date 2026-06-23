@@ -2351,6 +2351,18 @@ impl BodyEmit<'_> {
                 let op = *op;
                 return self.emit_dma(op, callee, args, destination, target);
             }
+            // Deferred-work-item-scheduling interception
+            // (deferred-work-item-scheduling construct): a Direct callee carrying
+            // `IntrinsicKind::DeferredWork(Submit)` (the `Work::submit()` wrapper)
+            // lowers against the receiver's bound `Work` resource → its
+            // deterministic per-resource slot index → `regseq_work_submit(
+            // &__regseq_work_slots[idx])` (the `Work` ADT is a ZST with no
+            // storage, so `&f` is the compiler-owned slot, GRILL T07). The
+            // compiler-managed `init_work`/`cancel_work` are NOT here — they are
+            // synthesized in `emit_lifecycle_synthesis`, not author-called.
+            if let Some(IntrinsicKind::DeferredWork(_)) = self.model.instance_intrinsic(*inst) {
+                return self.emit_deferred_work(callee, args, destination, target);
+            }
             // (Device-lifecycle is no longer call-intercepted: the harness verbs
             // were removed, RD-1; the synthesized `main` drives the lifecycle —
             // see `emit_lifecycle_synthesis`.)
@@ -2917,6 +2929,98 @@ impl BodyEmit<'_> {
             }
         };
         Ok(format!("{stmt} goto bb_{};", target.as_u32()))
+    }
+
+    /// Deferred-work-item-scheduling author-op lowering
+    /// (deferred-work-item-scheduling construct): lower an
+    /// `IntrinsicKind::DeferredWork(Submit)` `Work::submit()` Call against the
+    /// receiver's bound `Work` resource. The `Work` ADT is a ZST with no
+    /// storage, so the C `&f` argument is the compiler-owned slot
+    /// `&__regseq_work_slots[idx]`, where `idx` is the deterministic
+    /// per-resource slot index (consistent with `init_work`/`cancel_work`, GRILL
+    /// T07). Submit is infallible-at-surface (`-> ()`), so there is no
+    /// destination write.
+    fn emit_deferred_work(
+        &self,
+        _callee: &CallCallee,
+        args: &[Operand],
+        _destination: &Place,
+        target: Option<regseq_model::BlockId>,
+    ) -> Result<String, EmitError> {
+        let target = target.ok_or(EmitError::Unsupported(
+            "deferred-work submit call with no target",
+        ))?;
+        let recv = args.first().ok_or(EmitError::Unsupported(
+            "deferred-work submit call with no receiver",
+        ))?;
+        let slot = self.recover_work_slot(recv)?;
+        Ok(format!(
+            "regseq_work_submit(&__regseq_work_slots[{slot}]); goto bb_{};",
+            target.as_u32()
+        ))
+    }
+
+    /// Recover the deterministic per-resource slot index of the `Work` field a
+    /// `submit()` receiver borrows (deferred-work-item-scheduling construct).
+    /// Chases the receiver to the place that borrows the `Work` field (the
+    /// shared `resolve_receiver_src`), walks the projection to the final
+    /// struct-field — its `(parent struct ItemId, field index)` — then maps it to
+    /// the resource's global slot index via [`deferred_work_slot_index`]. Mirrors
+    /// `recover_clock`, but keys on the model's `WorkResource::field` (no
+    /// field-attr marker exists; recognition is type-driven). v1 has only the
+    /// required (single) form, so there is no array-index case.
+    fn recover_work_slot(&self, recv: &Operand) -> Result<usize, EmitError> {
+        let src = self.resolve_receiver_src(recv, 0)?;
+        let mut ty = self.body.local_decls[src.local].ty;
+        let mut field_path: Option<FieldPath> = None;
+        for elem in src.projection.iter() {
+            match elem {
+                PlaceElem::Deref => {
+                    ty = match &self.model.types[ty] {
+                        Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                        _ => {
+                            return Err(EmitError::Unsupported(
+                                "deferred-work submit receiver deref of a non-pointer type",
+                            ))
+                        }
+                    };
+                }
+                PlaceElem::Field(idx, field_ty) => {
+                    let item = match &self.model.types[ty] {
+                        Ty::Struct { item, .. } => *item,
+                        _ => {
+                            return Err(EmitError::Unsupported(
+                                "deferred-work submit receiver field projection of a non-struct type",
+                            ))
+                        }
+                    };
+                    field_path = Some(FieldPath {
+                        item,
+                        variant: VariantIdx::ZERO,
+                        field: FieldIdx::from_u32(idx.index() as u32),
+                    });
+                    ty = *field_ty;
+                }
+                PlaceElem::Index(_) | PlaceElem::ConstantIndex { .. } => {
+                    return Err(EmitError::Unsupported(
+                        "deferred-work submit receiver indexes an array (the array form is not built in v1)",
+                    ));
+                }
+                PlaceElem::Downcast(_) | PlaceElem::Subslice { .. } => {
+                    return Err(EmitError::Unsupported(
+                        "deferred-work submit receiver has an unsupported projection element",
+                    ));
+                }
+            }
+        }
+        let field_path = field_path.ok_or(EmitError::Unsupported(
+            "deferred-work submit receiver does not resolve to a single Work field",
+        ))?;
+        deferred_work_slot_index(self.model, field_path.item, field_path.field).ok_or(
+            EmitError::Unsupported(
+                "deferred-work submit receiver field is not a recognized Work resource",
+            ),
+        )
     }
 
     /// Pin-controller-and-GPIO-configuration receiver recovery (pinctrl
@@ -7273,6 +7377,60 @@ pub(crate) fn dma_region_count(model: &RegseqModel) -> usize {
     model.dma.drivers.values().map(|d| d.regions.len()).sum()
 }
 
+/// Whether the model has at least one `Work` resource
+/// (deferred-work-item-scheduling construct). This is the demand gate for the
+/// `WORK_HELPERS` prelude + the `init_work`/`cancel_work`/wrapper synthesis:
+/// emission is gated on resource PRESENCE (NOT on a `submit` intrinsic, GRILL
+/// D07/I06), so a declared-but-never-submitted `Work` still emits its lifecycle
+/// (T-nosubmit), and a `Work`-less TU's `.c` is byte-unchanged (no golden churn).
+pub(crate) fn model_has_deferred_work_resource(model: &RegseqModel) -> bool {
+    model
+        .deferred_work
+        .drivers
+        .values()
+        .any(|d| !d.resources.is_empty())
+}
+
+/// The total number of `Work` resources across all drivers in the model — the
+/// size of the generic-c host work slot table (the global singleton is TU-wide).
+/// The caller emits `#define REGSEQ_WORK_SLOTS {count}` before the
+/// [`super::prelude::WORK_HELPERS`] block (mirroring `REGSEQ_CLOCK_SLOTS`), so
+/// the slot table is sized to the exact `Work` count and the per-resource slot
+/// index ([`deferred_work_slot_index`]) can never overflow it.
+pub(crate) fn deferred_work_resource_count(model: &RegseqModel) -> usize {
+    model
+        .deferred_work
+        .drivers
+        .values()
+        .map(|d| d.resources.len())
+        .sum()
+}
+
+/// The deterministic, TU-wide slot index of the `Work` resource declared by
+/// `field` on driver `item` (deferred-work-item-scheduling construct). It is the
+/// resource's position in the flattened iteration of `model.deferred_work.drivers`
+/// (a `BTreeMap`, so item-sorted + declaration order within each driver) — the
+/// SAME order `init_work` / the wrapper registration / `cancel_work` walk, so a
+/// given `Work` uses one consistent slot across init/submit/cancel (GRILL T07).
+pub(crate) fn deferred_work_slot_index(
+    model: &RegseqModel,
+    item: regseq_model::ItemId,
+    field: regseq_model::FieldIdx,
+) -> Option<usize> {
+    let mut base = 0usize;
+    for (drv_item, drv) in model.deferred_work.drivers.iter() {
+        if *drv_item == item {
+            return drv
+                .resources
+                .iter()
+                .position(|r| r.field == field)
+                .map(|pos| base + pos);
+        }
+        base += drv.resources.len();
+    }
+    None
+}
+
 /// Whether the model has at least one **resolved** pinctrl resource (pinctrl
 /// state-selection construct). This is the demand gate for the `PINCTRL_HELPERS`
 /// prelude — RESOLVED-only (NOT mere field presence): an optional-absent resource
@@ -7433,6 +7591,82 @@ pub(crate) fn max_resolved_bindings_per_driver(model: &RegseqModel) -> usize {
 /// the per-resource line numbers + binding-trace calls, the per-resource
 /// wrapper symbols, and the wrapper definitions. Built once per driver by
 /// [`prepare_irq_emission`]; the emit-stage guards (I05) all fire there.
+/// The per-driver deferred-work emission facts (deferred-work-item-scheduling
+/// construct): the self-recovering wrapper definitions + the lifecycle init /
+/// cancel call lines. The mirror of [`IrqEmission`], strictly simpler (no
+/// `IrqResult` tag read, no arm reachability — a deferred-work handler is
+/// `fn(&mut self) -> ()`).
+struct DeferredWorkEmission {
+    /// The emitted wrapper definitions (`static void rseq_work_*`), placed at
+    /// file scope after the target struct.
+    wrapper_defs: String,
+    /// Per resource (declaration order): the `regseq_work_init(...)` line for
+    /// the init preamble (registers the wrapper + `(void *)&inst`). The matching
+    /// `cancel_work` teardown lines are emitted by the indent-parametric free
+    /// [`work_cancel_block`] (used on both the teardown and init-failure paths).
+    init_calls: Vec<String>,
+}
+
+/// Synthesize the per-driver deferred-work emission (deferred-work-item-scheduling
+/// construct, GRILL T08/T09). Mirrors [`prepare_irq_emission`] but simpler: per
+/// bound `Work` resource, emit a self-recovering lock-free wrapper
+/// `static void rseq_work_<label>_<i>(void *__ctx)` that recovers the driver from
+/// the registered ctx (the target-view container) and runs the authored handler
+/// `h_sym(&__t->inner)` (the spec-view; the exact shape the interrupt wrapper
+/// uses, GRILL T08), plus the `regseq_work_init` / `regseq_work_cancel` lifecycle
+/// lines keyed on the resource's deterministic slot index (the `Work` ZST has no
+/// storage, so `&f` is `&__regseq_work_slots[idx]`, GRILL T07). The wrapper
+/// acquires NO lock (C05 item 3).
+fn prepare_deferred_work_emission(
+    model: &RegseqModel,
+    syms: &InstanceSymbols,
+    label: &str,
+    target_name: &str,
+    driver_item: &ItemId,
+) -> Result<DeferredWorkEmission, EmitError> {
+    let mut wrapper_defs = String::new();
+    let mut init_calls = Vec::new();
+    let Some(dwork) = model.deferred_work.drivers.get(driver_item) else {
+        return Ok(DeferredWorkEmission {
+            wrapper_defs,
+            init_calls,
+        });
+    };
+    for (local_idx, resource) in dwork.resources.iter().enumerate() {
+        let slot = deferred_work_slot_index(model, *driver_item, resource.field).ok_or(
+            EmitError::Unsupported("deferred-work resource has no slot index"),
+        )?;
+        // The bound handler (a required Work has exactly one — frontend-enforced;
+        // defensive here).
+        let iref = resource.handler.ok_or(EmitError::Unsupported(
+            "deferred-work: a lowered Work resource has no bound handler",
+        ))?;
+        let id = resolve_reloc(model, iref).ok_or(EmitError::Unsupported(
+            "deferred-work: handler InstanceRef does not resolve",
+        ))?;
+        let sym = syms.symbol(id).to_string();
+        let wrapper = format!("rseq_work_{label}_{local_idx}");
+        // The self-recovering void wrapper (C05 items 1/2/3): recover the driver
+        // from the registered ctx and run the authored handler. NO lock — the
+        // wrapper is lock-free (C05 item 3). The `&__t->inner` shape is the
+        // interrupt wrapper's (the target-view container embeds the spec driver
+        // as `inner`).
+        wrapper_defs.push_str(&format!(
+            "static void {wrapper}(void *__ctx) {{\n\
+             \x20   struct {target_name} *__t = (struct {target_name} *)__ctx;\n\
+             \x20   {sym}(&__t->inner);\n\
+             }}\n\n"
+        ));
+        init_calls.push(format!(
+            "    regseq_work_init(&__regseq_work_slots[{slot}], {wrapper}, (void *)&inst);\n"
+        ));
+    }
+    Ok(DeferredWorkEmission {
+        wrapper_defs,
+        init_calls,
+    })
+}
+
 struct IrqEmission {
     /// Per resource (declaration order): the `[interrupt.<id>] irq_number`
     /// line (required for the generic-c target, R10).
@@ -7907,6 +8141,36 @@ pub(crate) fn emit_lifecycle_synthesis(
         if let Some((_, e)) = &irq {
             out.push_str(&e.wrapper_defs);
         }
+        // Deferred-work-item-scheduling surface (deferred-work-item-scheduling
+        // construct): the per-driver self-recovering wrapper definitions + the
+        // `init_work`/`cancel_work` lifecycle lines. `None` for a `Work`-less
+        // driver — every existing fixture's emission is byte-unchanged.
+        let dwork = if model.deferred_work.drivers.contains_key(driver_item) {
+            Some(prepare_deferred_work_emission(
+                model,
+                syms,
+                &label,
+                &target_name,
+                driver_item,
+            )?)
+        } else {
+            None
+        };
+        if let Some(e) = &dwork {
+            out.push_str(&e.wrapper_defs);
+        }
+        // Whether this driver actually SUBMITS any `Work` (a recorded submit site,
+        // GRILL T06). The HARNESS-ONLY `regseq_work_drain()` + the post-cancel
+        // re-arm probe model *running the queued work* — so they are emitted only
+        // when there IS queued work to run. The `init_work`/`cancel_work` lifecycle
+        // stays RESOURCE-gated (D07/D13); only the drain/probe are submit-gated, so
+        // a declared-but-never-submitted `Work` (T-nosubmit) traces `init … cancel`
+        // with no `submit`/`drain` line.
+        let has_submit = model
+            .deferred_work
+            .drivers
+            .get(driver_item)
+            .is_some_and(|d| d.resources.iter().any(|r| !r.submit_sites.is_empty()));
         // The on_init capture machinery (an interrupt driver gates its enable
         // on the captured Ok; the init-fail scenario branches its rollback on
         // the same capture).
@@ -8076,6 +8340,9 @@ pub(crate) fn emit_lifecycle_synthesis(
             // callback invoked in THIS scenario is overridden (an empty
             // `impl Lifecycle` would otherwise leave it unused -> -Wunused).
             let needs_inst = irq.is_some()
+                // A bound `Work` always needs the instance: the wrapper's
+                // registered ctx is `(void *)&inst` (GRILL T09 insertion point).
+                || dwork.is_some()
                 || match scenario {
                     LifecycleScenario::Orderly => on_init_sym.is_some() || on_deinit_sym.is_some(),
                     LifecycleScenario::Surprise => {
@@ -8133,6 +8400,20 @@ pub(crate) fn emit_lifecycle_synthesis(
                 }
             }
 
+            // Deferred-work-item-scheduling init_work (deferred-work-item-scheduling
+            // construct, C07/T09): register each bound `Work`'s wrapper +
+            // `(void *)&inst` in its slot, AFTER `inst` is declared and after the
+            // interrupt register preamble, but BEFORE the author `on_init` — so
+            // `WRK init` is traced before any `submit` the author issues inside
+            // `on_init` (I05 holds for the compiler-owned lifecycle entry; the
+            // emission is resource-gated, not submit-gated, D13). Empty for a
+            // `Work`-less driver (no golden churn).
+            if let Some(e) = &dwork {
+                for line in &e.init_calls {
+                    out.push_str(line);
+                }
+            }
+
             // on_init: the marker always prints (CR-3). The author body is
             // invoked iff overridden — its Result discarded (CR-4) in every
             // scenario except `init-fail`, which captures it to drive rollback,
@@ -8167,15 +8448,23 @@ pub(crate) fn emit_lifecycle_synthesis(
             // Pinctrl release follows clock release (the exact reverse of the
             // pins-before-clock preamble — clock release → pinctrl release → unmap,
             // C07/D08); empty for a pinctrl-less driver.
+            // Deferred-work-item-scheduling cancel_work (deferred-work-item-scheduling
+            // construct, C07/I04/T09): cancel-before-free each bound `Work`, in the
+            // teardown AFTER the author `on_deinit` callback and BEFORE the resource
+            // postambles (it rides at the head of the clock/pinctrl teardown block,
+            // which `emit_teardown_dispatch` emits after the deinit callback and
+            // before the resource unmaps). Resource-gated, not submit-gated. Empty
+            // for a `Work`-less driver (no golden churn).
+            let mut clock_teardown = work_cancel_block(model, driver_item, "    ");
+            // DMA-management release_channel (M2/T14/C10): LIFO — channels were
+            // requested AFTER the region alloc, so they release FIRST (before the
+            // region free_coherent). Empty for a channel-less driver.
+            clock_teardown.push_str(&dma_release_channel_block(model, driver_item, "    "));
             // DMA-management free_coherent (dma-management construct, T12/C07):
             // LIFO with `alloc_coherent` (which ran AFTER acquire_clock), so the
             // free runs FIRST among the device-lifetime resource releases —
             // BEFORE the clock release — the exact reverse of the preamble. Empty
             // for a region-less driver.
-            // DMA-management release_channel (M2/T14/C10): LIFO — channels were
-            // requested AFTER the region alloc, so they release FIRST (before the
-            // region free_coherent). Empty for a channel-less driver.
-            let mut clock_teardown = dma_release_channel_block(model, driver_item, "    ");
             clock_teardown.push_str(&dma_free_block(model, driver_item, "    "));
             clock_teardown.push_str(&clock_release_block(model, driver_item, "    "));
             clock_teardown.push_str(&pinctrl_release_block(model, driver_item, "    "));
@@ -8197,6 +8486,17 @@ pub(crate) fn emit_lifecycle_synthesis(
                         true,
                         &mut out,
                     );
+                    // Deferred-work-item-scheduling harness drive (GRILL T10/D09):
+                    // after the author `on_init` returns (where the M1 witness
+                    // issues `self.work.submit()`), the synthesized scenario calls
+                    // the HARNESS-ONLY `regseq_work_drain()` to run the pending
+                    // handler in (simulated) sleepable thread context — the "runs
+                    // later" of deferred work. Never emitted into driver code;
+                    // submit-gated (not resource-gated) so a never-submitted `Work`
+                    // (T-nosubmit) has nothing to drain and traces `init … cancel`.
+                    if has_submit {
+                        out.push_str("    regseq_work_drain();\n");
+                    }
                     let irq_teardown = irq_view
                         .map(|(i, e)| e.teardown_block(i, "    "))
                         .unwrap_or_default();
@@ -8215,6 +8515,29 @@ pub(crate) fn emit_lifecycle_synthesis(
                             if matches!(step, IrqFireStep::PostDeinit) {
                                 out.push_str(&format!("    regseq_irq_fire({}u);\n", e.lines[0]));
                             }
+                        }
+                    }
+                    // Deferred-work post-cancel re-arm probe (deferred-work-item-
+                    // scheduling construct, C05 item 4 / GRILL T15): the teardown's
+                    // `cancel_work` froze the registration (zeroed `fn`), so a
+                    // harness-side submit+drain AFTER teardown must dispatch NOTHING
+                    // — a cancelled `Work` cannot re-arm. This proves item 4, which
+                    // the M1 submit-in-`on_init` shape cannot exercise naturally.
+                    // Harness-side only (never lowered from author DSL); submit-
+                    // gated like the post-`on_init` drain (a never-submitted `Work`
+                    // skips it, so T-nosubmit stays `init … cancel`).
+                    if has_submit {
+                        if let Some(dw) = model.deferred_work.drivers.get(driver_item) {
+                            for resource in &dw.resources {
+                                if let Some(slot) =
+                                    deferred_work_slot_index(model, *driver_item, resource.field)
+                                {
+                                    out.push_str(&format!(
+                                        "    regseq_work_submit(&__regseq_work_slots[{slot}]);\n"
+                                    ));
+                                }
+                            }
+                            out.push_str("    regseq_work_drain();\n");
                         }
                     }
                 }
@@ -8258,10 +8581,15 @@ pub(crate) fn emit_lifecycle_synthesis(
                     // block (8-space indent), so the clock release is rebuilt at
                     // that depth. Pinctrl release follows clock release (LIFO,
                     // pins-before-clock reverse — C07/D08).
-                    // DMA free_coherent runs FIRST (LIFO, reverse of the
-                    // alloc-after-clock-acquire preamble), then clock + pinctrl.
-                    let mut clock_unwind =
-                        dma_release_channel_block(model, driver_item, "        ");
+                    // Deferred-work cancel_work on the init-failure rollback
+                    // (Codex BLOCKING-2): `init_work` ran in the preamble before
+                    // `on_init`, so a failed `on_init` must cancel it too — the
+                    // resource-gated init↔cancel symmetry holds on every path that
+                    // reached `init_work`. At the 8-space init-fail depth.
+                    let mut clock_unwind = work_cancel_block(model, driver_item, "        ");
+                    // DMA release_channel + free_coherent run before clock + pinctrl
+                    // (LIFO, reverse of the alloc-after-clock-acquire preamble).
+                    clock_unwind.push_str(&dma_release_channel_block(model, driver_item, "        "));
                     clock_unwind.push_str(&dma_free_block(model, driver_item, "        "));
                     clock_unwind.push_str(&clock_release_block(model, driver_item, "        "));
                     clock_unwind.push_str(&pinctrl_release_block(model, driver_item, "        "));
@@ -8722,6 +9050,29 @@ fn dma_register_completion_block(
             out.push_str(&format!(
                 "{indent}regseq_dma_register_completion({channel:?});\n"
             ));
+        }
+    }
+    out
+}
+
+/// Compiler-managed `cancel_work` teardown lines (deferred-work-item-scheduling
+/// construct, C07/I04): one `regseq_work_cancel(&__regseq_work_slots[idx])` per
+/// bound `Work` in reverse declaration order (LIFO), at the given `indent`.
+/// Cancel-before-free — the registration is freed so a torn-down `Work` cannot
+/// re-arm. Indent-parametric (mirrors `clock_release_block`) so it serves BOTH
+/// the orderly/surprise teardown (4-space) AND the init-failure rollback
+/// (8-space) — an init'd `Work` is cancelled on every path that ran `init_work`,
+/// including a failed `on_init` (resource-gated init↔cancel symmetry). Empty for
+/// a `Work`-less driver (no golden churn).
+fn work_cancel_block(model: &RegseqModel, driver_item: &ItemId, indent: &str) -> String {
+    let mut out = String::new();
+    if let Some(dwork) = model.deferred_work.drivers.get(driver_item) {
+        for res in dwork.resources.iter().rev() {
+            if let Some(slot) = deferred_work_slot_index(model, *driver_item, res.field) {
+                out.push_str(&format!(
+                    "{indent}regseq_work_cancel(&__regseq_work_slots[{slot}]);\n"
+                ));
+            }
         }
     }
     out

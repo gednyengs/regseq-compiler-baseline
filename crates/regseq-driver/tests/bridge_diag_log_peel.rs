@@ -394,6 +394,8 @@ fn run_bridge_phase5_peels_all_four_severities() {
                         AttrData::DmaRegionResource { .. } => {}
                         AttrData::DmaChannelResource { .. } => {}
                         AttrData::DmaCompletionBinding { .. } => {}
+                        // Deferred-work handler marker; this fixture produces none.
+                        AttrData::WorkHandler { .. } => {}
                     }
                 }
             }
