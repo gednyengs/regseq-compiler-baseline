@@ -13,7 +13,7 @@ use rustc_middle::ty;
 
 use crate::bridge::{
     canonicalize_call_site_callee, intrinsic, synth, ty::translate_ty, BridgeCtxt, BridgeError,
-    CanonicalCallSiteCallee, DslRejectionKind, ItemHandle,
+    CanonicalCallSiteCallee, DmaElementClosureRelaxScope, DslRejectionKind, ItemHandle,
 };
 
 use super::{
@@ -833,7 +833,23 @@ fn translate_call_callee<'tcx>(
             // resulting Item Phase-4-handle-resolvable for the `Item`
             // arm without disturbing the bare-Ty `TyKind::FnDef` arm at
             // `ty::translate_ty`.
-            let model_ty = translate_ty(cx, callee_ty)?;
+            //
+            // dma-management T13 (paired with the Phase-4 scan site): a recognized
+            // `dma_element_{read,write,update}` callee's generic args carry the
+            // borrow-closure type whose reified `for<'r> fn((&'r mut V,))`
+            // self-signature would trip the substantive-HRTB guard here. Bracket
+            // this one translate_ty with the narrow closure-reified-sig carve-out,
+            // scoped to this exact DMA-element-access callee (the guard restores the
+            // flag on every exit, incl. the `?`; the shape gate keeps every other
+            // binder rejected — the global §17.1 guard is unchanged elsewhere).
+            let relax = matches!(
+                intrinsic::intrinsic_kind_for_def_id(cx.input.tcx, callee_def_id),
+                Some(regseq_model::IntrinsicKind::Dma(regseq_model::DmaOp::ElementAccess { .. }))
+            );
+            let model_ty = {
+                let mut guard = DmaElementClosureRelaxScope::enter_with(cx, relax);
+                translate_ty(&mut guard, callee_ty)?
+            };
             let Ty::FnDef(callee_item, model_args) = cx.model.types.resolve(model_ty).clone()
             else {
                 return rejected_terminator(format!("unsupported call callee {func:?}"));
@@ -861,14 +877,24 @@ fn translate_call_callee<'tcx>(
             // replace the Direct callee with a vtable load.
             let def_id_copy = callee_def_id;
             let generic_args_copy = callee_generic_args;
-            let instance_id = lookup_or_create_direct_instance(
-                cx,
-                callee_item,
-                model_args,
-                flavor,
-                virtual_idx,
-                |cx| callsite_fn_sig(cx, def_id_copy, generic_args_copy),
-            )?;
+            // dma-management T13: the recognized `dma_element_*` callee's OWN
+            // signature has the borrow-closure as a parameter, so its FnSig
+            // translation (`callsite_fn_sig`) also walks the closure's reified
+            // self-signature. Re-establish the narrow carve-out for this exact
+            // DMA-element-access callee across the Instance/sig construction (the
+            // guard restores the flag on every exit; the shape gate keeps every
+            // other binder rejected).
+            let instance_id = {
+                let mut guard = DmaElementClosureRelaxScope::enter_with(cx, relax);
+                lookup_or_create_direct_instance(
+                    &mut guard,
+                    callee_item,
+                    model_args,
+                    flavor,
+                    virtual_idx,
+                    |cx| callsite_fn_sig(cx, def_id_copy, generic_args_copy),
+                )?
+            };
             return Ok(CallCallee::Direct(instance_id));
         }
     }

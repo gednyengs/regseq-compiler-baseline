@@ -1,0 +1,16 @@
+LC register pl011dma match=amba:0x41011/0xfffff
+BUS register_driver path=amba binding=none
+LC create
+LC associate
+DMA alloc_coherent rx_buf size=0x40
+DMA request_channel rx dir=0
+DMA register_completion rx
+LC call on_init
+DMA configure rx
+DMA stage_transfer rx addr=0xd0000000 len=0x20 dir=0
+DMA start_transfer rx
+LC teardown present=1
+LC call on_deinit
+DMA stop rx
+DMA release_channel rx
+DMA free_coherent rx_buf

@@ -156,6 +156,15 @@ pub struct RegseqModel {
     #[serde(default)]
     pub pinctrl: crate::pinctrl::PinctrlTables,
 
+    /// DMA-management sibling table (dma-management construct), keyed by the
+    /// `#[rseq::driver]` struct's Item. A DMA region/channel is a capability
+    /// layered on the device (memory it shares / a transport engine it drives),
+    /// so it gets its own top-level table rather than living on `DriverHandle`
+    /// (GRILL C09). `#[serde(default)]` keeps models serialized before the
+    /// construct existed deserializable (R15).
+    #[serde(default)]
+    pub dma: crate::dma::DmaTables,
+
     /// Deferred-work-item-scheduling sibling table, keyed by the
     /// `#[rseq::driver]` struct's Item. A `Work` item is a capability layered on
     /// the device (a sleepable-context callback the driver schedules), so it gets
@@ -1127,6 +1136,7 @@ impl RegseqModel {
             synchronization: crate::synchronization::SynchronizationTables::default(),
             clock: crate::clock::ClockTables::default(),
             pinctrl: crate::pinctrl::PinctrlTables::default(),
+            dma: crate::dma::DmaTables::default(),
             deferred_work: crate::deferred_work::DeferredWorkTables::default(),
         }
     }
@@ -1462,6 +1472,22 @@ impl RegseqModel {
         for (old_id, driver) in old_pinctrls {
             let new_id = remap[old_id.index()];
             self.pinctrl.drivers.insert(new_id, driver);
+        }
+
+        // `dma.drivers` is keyed by the same driver-struct `ItemId`, so re-key
+        // it by the same remap, exactly like `clock`/`pinctrl`. The M1 region
+        // facts carry NO `ItemId` references (StringId/u64/Span only), so
+        // re-keying the map key is the only patch needed this cycle. (The M2
+        // `CompletionBinding.handler` is an `ItemId` that lives *inside* the
+        // value and is NOT visited by `for_each_item_id_mut`; when M2 lands it
+        // must be remapped here too — TODO M2.) Without this re-key a TU that
+        // runs the F4 item sort would leave `dma.drivers` keyed by stale ItemIds
+        // and the post-sort `element_access` site recognition (+ the backend's
+        // `Ty::Struct { item }` lookup) would not find the region.
+        let old_dma = std::mem::take(&mut self.dma.drivers);
+        for (old_id, driver) in old_dma {
+            let new_id = remap[old_id.index()];
+            self.dma.drivers.insert(new_id, driver);
         }
 
         // `deferred_work.drivers` is keyed by the same driver-struct `ItemId`

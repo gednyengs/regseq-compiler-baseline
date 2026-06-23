@@ -1,0 +1,22 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "qemu-q35"
+arch = "x86_64"
+
+# L2 MMIO region binding (the E1000 BAR0 CSR space), joining the L1
+# `#[rseq::mmio(id = "regs", bar = 0)]`. On Linux the literal VALUES are dead
+# (probe-time enumeration supplies the real extent); the literals are required as
+# the resolved-binding trigger (the based MMIO accessors + map_region).
+[mmio.regs]
+base = 0xf0000000
+size = 0x20000
+
+# L2 DMA region binding (dma-management, GRILL C02), joining the L1
+# `#[rseq::dma_region(id = "tx_ring")]`. A 32-bit-addressable coherent ring (the
+# 82540EM legacy descriptor addressing). `device_address_bits` drives the
+# probe-time `set_dma_mask`; `region_cache_maintenance` defaults to `none`
+# (coherent memory — no per-access cache op, C01/D03).
+[dma.tx_ring]
+device_address_bits = 32

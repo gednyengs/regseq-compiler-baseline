@@ -309,6 +309,19 @@ fn materialise_function_body_inner<'tcx>(
         span: translate_span(cx, rustc_body.span),
     };
 
+    // dma-management T13: a body that either (a) IS a recognized DMA-element
+    // closure-call shim or (b) CONTAINS a recognized `dma_element_*` call carries
+    // a borrow-closure type in its local decls / statements, whose reified
+    // self-signature `for<'r> fn((&'r mut V,))` would trip the substantive-HRTB
+    // guard during the local-decl + basic-block translation below. Enable the
+    // narrow closure-reified-sig carve-out for exactly such a body (the shape
+    // gate keeps every non-closure-self binder rejected; the guard restores the
+    // flag on every exit). A body with neither property leaves the flag clear.
+    let dma_relax = body_uses_dma_element_closure(cx, item, &synthetic_kind, rustc_body);
+    let mut dma_guard =
+        crate::bridge::DmaElementClosureRelaxScope::enter_with(cx, dma_relax);
+    let cx = &mut *dma_guard;
+
     // Per regseq-driver-82: enable body-context RPIT opaque reveal for
     // the remainder of this per-Instance body materialisation -- the
     // local-decl loop below AND the basic-block walk (statements,
@@ -925,6 +938,80 @@ fn local_def_id_for_item(
     let wanted = model.item_def_paths[item];
     tcx.hir_body_owners()
         .find(|local_def_id| def_path_hash_matches(tcx, *local_def_id, wanted))
+}
+
+/// dma-management T13: whether the body about to be materialised legitimately
+/// carries a borrow-closure that was passed to a recognized `dma_element_*`
+/// intrinsic — the ONLY case in which the narrow closure-reified-sig HRTB
+/// carve-out is enabled for the body translation. True when ANY of:
+///   (a) this body IS a recognized DMA-element closure-call shim
+///       (`SyntheticItemKind::ClosureCall` whose closure was recorded at the
+///       call's Phase-4 scan, [`BridgeCtxt::dma_element_closure_defs`]); or
+///   (b) the body's MIR CONTAINS a Call whose callee is a
+///       `IntrinsicKind::Dma(ElementAccess)` (the author body that creates +
+///       passes the closure); or
+///   (c) this body IS the `dma_element_{read,write,update}` wrapper method
+///       itself (its `_f: impl FnOnce(&mut V)` parameter puts the borrow-closure
+///       type in its own local decls). The wrapper is an intrinsic — its body is
+///       never emitted (the call is intercepted) — but Phase-5 still materialises
+///       it, so it needs the carve-out too.
+/// Any other body returns false, so the carve-out never reaches non-DMA code.
+fn body_uses_dma_element_closure<'tcx>(
+    cx: &BridgeCtxt<'tcx>,
+    item: regseq_model::ItemId,
+    synthetic_kind: &SyntheticItemKind,
+    rustc_body: &rustc_middle::mir::Body<'tcx>,
+) -> bool {
+    // (a) the DMA-element closure-call shim itself.
+    if let SyntheticItemKind::ClosureCall { closure, .. } = synthetic_kind {
+        if cx.dma_element_closure_defs.contains(closure) {
+            return true;
+        }
+    }
+    // (c) the `dma_element_*` wrapper method's own body (its closure parameter
+    // rides in its local decls). Recognized by the body item's own intrinsic
+    // attribute.
+    if let Some(local_def_id) = local_def_id_for_item(cx.input.tcx, &cx.model, item) {
+        if matches!(
+            crate::bridge::intrinsic::intrinsic_kind_for_def_id(
+                cx.input.tcx,
+                local_def_id.to_def_id()
+            ),
+            Some(IntrinsicKind::Dma(regseq_model::DmaOp::ElementAccess { .. }))
+        ) {
+            return true;
+        }
+    }
+    // (b) an author body that calls a recognized DMA element-access intrinsic.
+    for bb in rustc_body.basic_blocks.iter() {
+        let Some(terminator) = &bb.terminator else {
+            continue;
+        };
+        let rustc_middle::mir::TerminatorKind::Call { func, .. } = &terminator.kind else {
+            continue;
+        };
+        let rustc_middle::mir::Operand::Constant(constant) = func else {
+            continue;
+        };
+        let ty::TyKind::FnDef(def_id, generic_args) = constant.const_.ty().kind() else {
+            continue;
+        };
+        let Ok(canonical) =
+            crate::bridge::canonicalize_call_site_callee(cx.input.tcx, *def_id, generic_args)
+        else {
+            continue;
+        };
+        if matches!(
+            crate::bridge::intrinsic::intrinsic_kind_for_def_id(
+                cx.input.tcx,
+                canonical.callee_def_id
+            ),
+            Some(IntrinsicKind::Dma(regseq_model::DmaOp::ElementAccess { .. }))
+        ) {
+            return true;
+        }
+    }
+    false
 }
 
 fn def_path_hash_matches(

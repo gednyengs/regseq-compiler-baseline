@@ -1,0 +1,15 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "qemu-virt"
+arch = "aarch64"
+
+# L2 DMA region binding (dma-management, GRILL C02), joining the L1
+# `#[rseq::dma_region(id = "rx_buf")]`. A 32-bit-addressable coherent RX buffer;
+# `region_cache_maintenance` defaults to `none` (coherent memory — no per-access
+# cache op, C01/D03). The slave `#[rseq::dma_channel(id = "rx")]` carries its
+# direction at L1; it needs no `[dma.rx]` section this cycle (the channel L2
+# join — endpoint_addr_width / max_burst — is recorded-not-required).
+[dma.rx_buf]
+device_address_bits = 32

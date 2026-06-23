@@ -247,6 +247,23 @@ fn classify_fields(
             if crate::bridge::pinctrl::is_pinctrl_field(tcx, field_ty) {
                 continue;
             }
+            // DMA-management coherent-region fields (dma-management construct) are
+            // compiler-bound resources owned by `bridge::dma` (recognized in its
+            // Phase-4 pass) — route them away from the user-data classifier, whose
+            // D3 would otherwise reject the methodless `DmaRegion<T>` shell. They
+            // are not `ResourceField`s either: the `alloc_coherent` preamble's
+            // position is derived downstream from `model.dma` (GRILL C07/C09).
+            if crate::bridge::dma::is_dma_region_field(tcx, field_ty) {
+                continue;
+            }
+            // DMA-management slave `DmaChannel` fields (dma-management construct,
+            // M2/T07) are compiler-bound resources owned by `bridge::dma` — route
+            // them away from the user-data classifier (whose D3 would reject the
+            // methodless `DmaChannel` shell). The `request_channel`/`release`
+            // lifecycle is synthesized from `model.dma` downstream (T14).
+            if crate::bridge::dma::is_dma_channel_field(tcx, field_ty) {
+                continue;
+            }
             // Deferred-work-item-scheduling fields (deferred-work-item-scheduling
             // construct) are compiler-bound resources owned by
             // `bridge::deferred_work` (recognized in its Phase-4 pass) — route

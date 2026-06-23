@@ -24,6 +24,7 @@
 
 pub mod bus_resource;
 pub mod clock;
+pub mod dma;
 mod error;
 pub mod interrupt;
 pub mod pinctrl;
@@ -63,6 +64,7 @@ const REGISTRY: &[&dyn L2Binder] = &[
     &interrupt::InterruptBinder,
     &clock::ClockBinder,
     &pinctrl::PinctrlBinder,
+    &dma::DmaBinder,
 ];
 
 /// Bind every tenant's platform metadata into `model`. This is the production

@@ -249,11 +249,22 @@ pub enum BarType {
     Io,
 }
 
-/// Closed, append-only resource-family taxonomy. Only `Mmio` exists now.
+/// Closed, append-only resource-family taxonomy. `Mmio` is the original
+/// occupant; the dma-management construct appends `DmaRegion`/`DmaChannel`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResourceKind {
     /// `Mmio<T>` register-access resource.
     Mmio,
+    /// `DmaRegion<T>` coherent DMA region resource (dma-management construct).
+    /// A device-coherent ring/buffer allocated at device lifetime; carries the
+    /// A2 addressing + closure `element_access` surface. Appended after `Mmio`,
+    /// append-only (GRILL C09/S14).
+    DmaRegion,
+    /// `DmaChannel` slave DMA channel resource (dma-management construct). A
+    /// framework-managed transport channel (request/release at device lifetime,
+    /// the 5-op transport surface). Appended after `DmaRegion`, append-only
+    /// (GRILL C09/S14).
+    DmaChannel,
 }
 
 /// A non-resource user-data field, classified per `user-data-initialization.md`
@@ -323,6 +334,23 @@ mod tests {
     #[test]
     fn class_tag_defaults_to_generic() {
         assert_eq!(ClassTag::default(), ClassTag::Generic);
+    }
+
+    #[test]
+    fn resource_kind_variants_round_trip_and_are_distinct() {
+        // The dma-management construct appends `DmaRegion`/`DmaChannel` after the
+        // original `Mmio` occupant (append-only, GRILL C09/S14). All three
+        // round-trip serde and are pairwise distinct.
+        for kind in [
+            ResourceKind::Mmio,
+            ResourceKind::DmaRegion,
+            ResourceKind::DmaChannel,
+        ] {
+            round_trip(kind);
+        }
+        assert_ne!(ResourceKind::Mmio, ResourceKind::DmaRegion);
+        assert_ne!(ResourceKind::Mmio, ResourceKind::DmaChannel);
+        assert_ne!(ResourceKind::DmaRegion, ResourceKind::DmaChannel);
     }
 
     #[test]
