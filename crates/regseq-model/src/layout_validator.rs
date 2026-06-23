@@ -967,6 +967,18 @@ fn validate_attr_data_payload(
             }
             Ok(())
         }
+        // The deferred-work handler-binding marker's optional explicit field
+        // target is interned; range-check it when present (mirrors IsrBinding).
+        AttrData::WorkHandler { field } => {
+            if let Some(field) = field {
+                if field.index() >= model.strings.len() {
+                    return Err(InvariantViolation::DomainAttrMalformed {
+                        reason: "WorkHandler field StringId is out of range",
+                    });
+                }
+            }
+            Ok(())
+        }
     }
 }
 

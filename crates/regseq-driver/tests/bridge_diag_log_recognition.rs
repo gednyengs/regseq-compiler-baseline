@@ -288,6 +288,8 @@ fn item_log_levels(model: &RegseqModel, leaf: &str) -> Vec<LogLevel> {
             // Pinctrl-construct markers are not log levels; skip them.
             AttrData::PinctrlResource { .. } => None,
             AttrData::PinStateMarker { .. } => None,
+            // Deferred-work handler-binding marker is not a log level; skip it.
+            AttrData::WorkHandler { .. } => None,
         })
         .collect()
 }

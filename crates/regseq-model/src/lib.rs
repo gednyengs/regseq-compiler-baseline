@@ -18,6 +18,7 @@ mod const_interner;
 mod const_value;
 mod crate_info;
 mod def_path;
+mod deferred_work;
 mod device_lifecycle;
 mod domain_attr;
 mod fn_sig;
@@ -73,14 +74,17 @@ pub use def_path::{
     def_path_data_sort_rank, render_def_path, DefPath, DefPathData, DefPathHash, DefPathSegment,
 };
 pub use clock::{ClockBinding, ClockMode, ClockResource, ClockTables, DriverClocks};
+pub use deferred_work::{
+    DeferredWorkTables, DriverDeferredWork, SubmitSite, SubmitVariant, WorkResource,
+};
 pub use device_lifecycle::{
     BarType, BusType, ClassTag, DeviceLifecycleTables, DriverDescriptor, DriverHandle,
     DriverLifecycle, LifecycleOps, MatchEntry, MmioBinding, ResourceField, ResourceKind,
     UserDataField, UserDataKind,
 };
 pub use domain_attr::{
-    AtomicElement, AtomicOp, AttrData, ClockOp, ConfigOp, DomainAttrTables, FetchOp, FieldPath,
-    FrameworkType, IntrinsicKind, LogLevel, MmioOp, PinctrlOp,
+    AtomicElement, AtomicOp, AttrData, ClockOp, ConfigOp, DeferredWorkOp, DomainAttrTables, FetchOp,
+    FieldPath, FrameworkType, IntrinsicKind, LogLevel, MmioOp, PinctrlOp,
 };
 pub use fn_sig::{canonical_fn_sig, FnSig};
 pub use fn_sig_interner::FnSigInterner;
