@@ -390,6 +390,10 @@ fn run_bridge_phase5_peels_all_four_severities() {
                         // Pinctrl-construct markers; this fixture produces none.
                         AttrData::PinctrlResource { .. } => {}
                         AttrData::PinStateMarker { .. } => {}
+                        // DMA-management markers; this fixture produces none.
+                        AttrData::DmaRegionResource { .. } => {}
+                        AttrData::DmaChannelResource { .. } => {}
+                        AttrData::DmaCompletionBinding { .. } => {}
                     }
                 }
             }

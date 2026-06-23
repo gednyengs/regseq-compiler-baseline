@@ -967,6 +967,51 @@ fn validate_attr_data_payload(
             }
             Ok(())
         }
+        // The dma-region marker carries the interned resource id; range-check it
+        // against the string table (the `element_size`/`element_count`/`alignment`
+        // are plain integers — no nested model IDs).
+        AttrData::DmaRegionResource { id, .. } => {
+            if id.index() >= model.strings.len() {
+                return Err(InvariantViolation::DomainAttrMalformed {
+                    reason: "DmaRegionResource id StringId is out of range",
+                });
+            }
+            Ok(())
+        }
+        // The dma-channel marker carries the interned resource id; range-check it
+        // against the string table (the `direction` is a closed enum).
+        AttrData::DmaChannelResource { id, .. } => {
+            if id.index() >= model.strings.len() {
+                return Err(InvariantViolation::DomainAttrMalformed {
+                    reason: "DmaChannelResource id StringId is out of range",
+                });
+            }
+            Ok(())
+        }
+        // The completion binding carries the interned channel/payload ids and the
+        // handler Item; range-check each against its table.
+        AttrData::DmaCompletionBinding {
+            channel,
+            handler,
+            payload,
+        } => {
+            if channel.index() >= model.strings.len() {
+                return Err(InvariantViolation::DomainAttrMalformed {
+                    reason: "DmaCompletionBinding channel StringId is out of range",
+                });
+            }
+            if payload.index() >= model.strings.len() {
+                return Err(InvariantViolation::DomainAttrMalformed {
+                    reason: "DmaCompletionBinding payload StringId is out of range",
+                });
+            }
+            if handler.index() >= model.items.len() {
+                return Err(InvariantViolation::DomainAttrMalformed {
+                    reason: "DmaCompletionBinding handler ItemId is out of range",
+                });
+            }
+            Ok(())
+        }
     }
 }
 

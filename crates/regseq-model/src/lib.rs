@@ -19,6 +19,7 @@ mod const_value;
 mod crate_info;
 mod def_path;
 mod device_lifecycle;
+mod dma;
 mod domain_attr;
 mod fn_sig;
 mod fn_sig_interner;
@@ -78,9 +79,15 @@ pub use device_lifecycle::{
     DriverLifecycle, LifecycleOps, MatchEntry, MmioBinding, ResourceField, ResourceKind,
     UserDataField, UserDataKind,
 };
+pub use dma::{
+    AccessEffects, CompletionBinding, DmaChannelBinding, DmaChannelFacts, DmaLayoutFacts,
+    DmaRegionBinding, DmaRegionFacts, DmaRegionSpan, DmaStreamBuffer, DmaStreamFacts, DmaTables,
+    DriverDma, ElementAccessFact, LexicalExtent, RegionCacheMaintenance, SpanAddr, StoreOrderEdge,
+    StoreOrderEndpoint,
+};
 pub use domain_attr::{
-    AtomicElement, AtomicOp, AttrData, ClockOp, ConfigOp, DomainAttrTables, FetchOp, FieldPath,
-    FrameworkType, IntrinsicKind, LogLevel, MmioOp, PinctrlOp,
+    AtomicElement, AtomicOp, AttrData, ClockOp, ConfigOp, DmaFlow, DmaOp, DomainAttrTables,
+    ElementVerb, FetchOp, FieldPath, FrameworkType, IntrinsicKind, LogLevel, MmioOp, PinctrlOp,
 };
 pub use fn_sig::{canonical_fn_sig, FnSig};
 pub use fn_sig_interner::FnSigInterner;

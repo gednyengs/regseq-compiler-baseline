@@ -490,6 +490,166 @@ __attribute__((unused)) static uint32_t regseq_clock_get_rate(const char *clk_id
 }
 "#;
 
+/// DMA-management host DMA device model (dma-management construct, T11 / GRILL
+/// C11). Emitted only for a TU that declares ANY DMA resource (region / channel /
+/// stream — [`super::body_emit::model_has_dma_resource`]), gated on RESOURCE
+/// presence (NOT intrinsic presence), so the compiler-managed `alloc_coherent`/
+/// `free_coherent` lifecycle preamble has its hooks even when the author calls no
+/// `dma_*` op. A DMA-less TU's `.c` is byte-unchanged (no golden churn).
+///
+/// The model mirrors `CLOCK_HELPERS`: a GLOBAL singleton, no device handle, with
+/// each hook printing a `DMA <event>` line — that trace IS the behavioral oracle
+/// for the DMA contract (C05). The coherent-region path additionally allocates a
+/// REAL backing buffer (a fixed-size static slab per region id) so an
+/// `element_access` closure's typed field stores land in observable memory: the
+/// behavioral oracle asserts the descriptor BYTES in that buffer. `alloc_coherent`
+/// returns `(void* cpu, uint64_t dev_addr)`; the dev addr is synthetic (a per-slot
+/// base) and is what `device_addr()`/`device_addr_of(i)` program into a base
+/// register.
+///
+/// `regseq_dma_wmb` is the store→doorbell publishing fence (C07/D09): the golden
+/// asserts it falls between the region stores and the MMIO doorbell write.
+/// `regseq_dma_rmb` is DEFINED but never emitted this cycle (the completion-read
+/// ordering is designed-not-built, D09). The channel hooks record the fake-engine
+/// call sequence (PL011 path, not exercised by the E1000 M1 golden);
+/// `register_completion` records a binding but the engine never fires the callback
+/// (D06). The exact `DMA …` spelling is blessed at the first golden; the shape
+/// (resource-gated hooks, `DMA <event>` trace, real coherent backing buffer) is
+/// the contract.
+///
+/// REGSEQ_DMA_SLOTS is `#define`d just above this block, sized by the caller to the
+/// TU's exact DMA-region count (like REGSEQ_CLOCK_SLOTS), so the slot table never
+/// overflows and a region's backing buffer is never silently dropped.
+pub const DMA_HELPERS: &str = r#"
+/* ---------------------------------------------------------------------------
+ * DMA-management host DMA device model (dma-management construct, C05/C11). Each
+ * hook prints a "DMA <event>" line -- this trace IS the behavioral oracle.
+ * Emitted only for a TU with a DMA resource. GLOBAL singleton, no device handle.
+ * The coherent-region path keeps a REAL per-region backing buffer (a fixed slab)
+ * so an element_access closure's typed stores land in observable memory; the
+ * behavioral oracle asserts those descriptor bytes. REGSEQ_DMA_SLOTS is #defined
+ * just above, sized to the TU's exact region count. */
+#ifndef REGSEQ_DMA_REGION_BYTES
+#define REGSEQ_DMA_REGION_BYTES 65536u  /* per-region backing slab cap */
+#endif
+/* The backing store is a heap pointer from an ALIGNED allocator (NOT an inline
+ * `unsigned char buf[]`): an inline array carries only `unsigned char` alignment,
+ * so a typed store/memcpy at the element stride would assume an alignment the
+ * array cannot guarantee. `aligned_alloc` honors the region's declared `align`,
+ * so the coherent backing buffer is well-aligned and the per-element memcpy is
+ * defined (FIX #3). */
+typedef struct {
+    const char *region_id;
+    uint64_t    dev_base;   /* synthetic device base address handed to device_addr() */
+    void       *buf;        /* real coherent backing store (aligned heap pointer) */
+} regseq_dma_region_slot_t;
+static regseq_dma_region_slot_t regseq_dma_region_table[REGSEQ_DMA_SLOTS] __attribute__((unused));
+static uint64_t regseq_dma_next_dev_base = 0xD0000000ull;  /* synthetic dev-addr allocator */
+__attribute__((unused)) static regseq_dma_region_slot_t *regseq_dma_region_slot(const char *region_id) {
+    for (uint32_t i = 0; i < REGSEQ_DMA_SLOTS; i++) {
+        if (regseq_dma_region_table[i].region_id
+            && strcmp(regseq_dma_region_table[i].region_id, region_id) == 0) {
+            return &regseq_dma_region_table[i];
+        }
+    }
+    return 0;
+}
+/* coherent region: allocate a REAL aligned backing buffer + a synthetic device
+ * base. The buffer is `aligned_alloc(align, size)` so typed element stores land in
+ * properly-aligned memory; `aligned_alloc` requires `align` to be a power of two
+ * (and at least `sizeof(void*)`) and `size` to be a multiple of `align`, so both
+ * are rounded up here. The passed `size`/`align` are now HONORED (no longer
+ * ignored). */
+__attribute__((unused)) static void *regseq_dma_alloc_coherent(const char *region_id, uint64_t size, uint64_t align, uint64_t *out_dev_addr) {
+    printf("DMA alloc_coherent %s size=0x%llx\n", region_id, (unsigned long long)size);
+    regseq_dma_region_slot_t *slot = regseq_dma_region_slot(region_id);
+    if (!slot) {
+        for (uint32_t i = 0; i < REGSEQ_DMA_SLOTS; i++) {
+            if (!regseq_dma_region_table[i].region_id) { slot = &regseq_dma_region_table[i]; break; }
+        }
+    }
+    if (!slot) { if (out_dev_addr) *out_dev_addr = 0; return 0; }
+    /* round align up to a power of two, at least sizeof(void*). */
+    uint64_t a = align ? align : 1u;
+    if (a < sizeof(void *)) a = sizeof(void *);
+    { uint64_t p = 1u; while (p < a) p <<= 1; a = p; }
+    /* size: at least the requested bytes, rounded up to a multiple of `a`. */
+    uint64_t sz = size ? size : a;
+    sz = (sz + (a - 1u)) & ~(a - 1u);
+    void *mem = aligned_alloc((size_t)a, (size_t)sz);
+    if (!mem) { if (out_dev_addr) *out_dev_addr = 0; return 0; }
+    memset(mem, 0, (size_t)sz);
+    slot->region_id = region_id;
+    slot->dev_base = regseq_dma_next_dev_base;
+    regseq_dma_next_dev_base += REGSEQ_DMA_REGION_BYTES;
+    slot->buf = mem;
+    if (out_dev_addr) *out_dev_addr = slot->dev_base;
+    return mem;
+}
+__attribute__((unused)) static void regseq_dma_free_coherent(const char *region_id) {
+    printf("DMA free_coherent %s\n", region_id);
+    regseq_dma_region_slot_t *slot = regseq_dma_region_slot(region_id);
+    if (slot) { free(slot->buf); slot->buf = 0; slot->region_id = 0; }
+}
+/* the CPU pointer + device base of a region's backing buffer (element_access /
+ * device_addr lowering reads these). */
+__attribute__((unused)) static void *regseq_dma_region_cpu(const char *region_id) {
+    regseq_dma_region_slot_t *slot = regseq_dma_region_slot(region_id);
+    return slot ? slot->buf : 0;
+}
+__attribute__((unused)) static uint64_t regseq_dma_region_dev_base(const char *region_id) {
+    regseq_dma_region_slot_t *slot = regseq_dma_region_slot(region_id);
+    return slot ? slot->dev_base : 0;
+}
+/* DMA-coherent publishing/consuming fences. wmb() is the store->doorbell fence
+ * (C07/D09): the golden asserts it brackets the region stores and the doorbell.
+ * rmb() is DEFINED but not emitted this cycle (completion-read ordering, D09). */
+__attribute__((unused)) static void regseq_dma_wmb(void) { printf("DMA wmb\n"); }
+__attribute__((unused)) static void regseq_dma_rmb(void) { printf("DMA rmb\n"); }
+/* streaming map/unmap/sync (PL011 path; designed, not exercised by the E1000 M1
+ * golden). map returns a synthetic device address for the mapped CPU buffer. */
+__attribute__((unused)) static uint64_t regseq_dma_stream(void *cpu, uint64_t len, int dir) {
+    (void)cpu; printf("DMA stream len=0x%llx dir=%d\n", (unsigned long long)len, dir);
+    uint64_t a = regseq_dma_next_dev_base; regseq_dma_next_dev_base += (len ? len : 1u); return a;
+}
+__attribute__((unused)) static void regseq_dma_unmap(uint64_t dev_addr, uint64_t len, int dir) {
+    printf("DMA unmap addr=0x%llx len=0x%llx dir=%d\n", (unsigned long long)dev_addr, (unsigned long long)len, dir);
+}
+__attribute__((unused)) static void regseq_dma_acquire_from_device(uint64_t dev_addr, uint64_t len) {
+    printf("DMA acquire_from_device addr=0x%llx len=0x%llx\n", (unsigned long long)dev_addr, (unsigned long long)len);
+}
+__attribute__((unused)) static void regseq_dma_release_to_device(uint64_t dev_addr, uint64_t len) {
+    printf("DMA release_to_device addr=0x%llx len=0x%llx\n", (unsigned long long)dev_addr, (unsigned long long)len);
+}
+/* channel (fake DMA engine that records the call sequence; PL011 path). */
+__attribute__((unused)) static int regseq_dma_request_channel(const char *id, int dir) {
+    printf("DMA request_channel %s dir=%d\n", id, dir); return 0;
+}
+__attribute__((unused)) static void regseq_dma_release_channel(const char *id) {
+    printf("DMA release_channel %s\n", id);
+}
+__attribute__((unused)) static void regseq_dma_configure(const char *id) {
+    printf("DMA configure %s\n", id);
+}
+__attribute__((unused)) static int regseq_dma_stage_transfer(const char *id, uint64_t addr, uint64_t len, int dir) {
+    printf("DMA stage_transfer %s addr=0x%llx len=0x%llx dir=%d\n", id, (unsigned long long)addr, (unsigned long long)len, dir); return 0;
+}
+__attribute__((unused)) static int regseq_dma_start_transfer(const char *id) {
+    printf("DMA start_transfer %s\n", id); return 0;
+}
+__attribute__((unused)) static void regseq_dma_stop(const char *id) {
+    printf("DMA stop %s\n", id);
+}
+__attribute__((unused)) static int regseq_dma_remaining_bytes(const char *id, uint64_t *out) {
+    printf("DMA remaining_bytes %s\n", id); if (out) *out = 0; return 0;
+}
+/* completion binding: recorded, but the fake engine NEVER fires the callback
+ * (D06 -- registration shape only this cycle). */
+__attribute__((unused)) static void regseq_dma_register_completion(const char *id) {
+    printf("DMA register_completion %s\n", id);
+}
+"#;
+
 /// Pin-controller-and-GPIO-configuration host pinctrl model (pinctrl
 /// state-selection construct, GRILL C05/D05).
 ///

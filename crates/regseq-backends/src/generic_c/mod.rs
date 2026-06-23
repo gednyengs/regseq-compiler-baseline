@@ -384,6 +384,24 @@ fn emit_generic_c_inner(
         ));
         out.push_str(prelude::CLOCK_HELPERS);
     }
+    // DMA-management host DMA device model (dma-management construct, C05/C11):
+    // the `regseq_dma_*` hooks + per-region backing slab. Gated on RESOURCE
+    // presence (region/channel/stream, NOT intrinsic presence) — the
+    // compiler-managed `alloc_coherent`/`free_coherent` preamble is synthesized
+    // from the region FIELD even when the author calls no `dma_*` op. Distinct
+    // from the bus-master `dma_present` flag. A DMA-less TU's `.c` is
+    // byte-unchanged (no golden churn).
+    if body_emit::model_has_dma_resource(model) {
+        // Size the region slot table to the TU's exact coherent-region count (no
+        // fixed cap); the `#define` precedes the prelude block, which declares
+        // `regseq_dma_region_table[REGSEQ_DMA_SLOTS]`. At least 1 so it is not a
+        // zero-length array.
+        out.push_str(&format!(
+            "#define REGSEQ_DMA_SLOTS {}u\n",
+            body_emit::dma_region_count(model).max(1)
+        ));
+        out.push_str(prelude::DMA_HELPERS);
+    }
     // Pin-controller-and-GPIO-configuration host pinctrl model (pinctrl construct,
     // C05/D05): the `regseq_pinctrl_*` hooks + per-`id` bound state. Gated on a
     // RESOLVED resource (NOT mere field presence) — an optional-absent resource

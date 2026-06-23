@@ -41,10 +41,10 @@
 use std::cell::RefCell;
 
 use regseq_model::{
-    args_key_for_generic_args, AggregateKind, ArmReachability, AssertKind, AtomicElement, AtomicOp,
+    args_key_for_generic_args, AccessEffects, AggregateKind, ArmReachability, AssertKind, AtomicElement, AtomicOp,
     AttrData, BinOp, BlockId, Byte,
     CallCallee, CastKind, ClockMode, ClockOp, CompletionOpKind, ConfigOp, Const,
-    ConstId, DriverInterrupts, Endian, EnumShape, FetchOp, FieldIdx, FieldPath, FloatKind,
+    ConstId, DmaFlow, DmaOp, DriverInterrupts, Endian, EnumShape, FetchOp, FieldIdx, FieldPath, FloatKind,
     GenericArg, InstanceId, InstanceKind,
     InstanceRef, InterruptForm, IntKind, IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel,
     MatchEntry, MmioOp, NonDivergingIntrinsic,
@@ -2321,6 +2321,20 @@ impl BodyEmit<'_> {
                 let op = *op;
                 return self.emit_pinctrl(op, callee, args, destination, target);
             }
+            // DMA-management interception (dma-management construct, T13): a Direct
+            // callee carrying `IntrinsicKind::Dma(op)` lowers against the receiver's
+            // bound `DmaRegion` resource. `element_access` computes the typed view
+            // pointer into the region's coherent backing buffer
+            // (`base + i*element_size` cast to `V*`) and INLINES the closure
+            // argument's field stores (so the rust-call closure shim is never
+            // ABI-emitted, the T13 mechanism); `device_addr`/`device_addr_of`/
+            // `element_count` lower from the resource directly (inline offset /
+            // count). The compiler-managed `alloc_coherent`/`free_coherent` are NOT
+            // here — they are synthesized in `emit_lifecycle_synthesis` (T12).
+            if let Some(IntrinsicKind::Dma(op)) = self.model.instance_intrinsic(*inst) {
+                let op = *op;
+                return self.emit_dma(op, callee, args, destination, target);
+            }
             // (Device-lifecycle is no longer call-intercepted: the harness verbs
             // were removed, RD-1; the synthesized `main` drives the lifecycle —
             // see `emit_lifecycle_synthesis`.)
@@ -3186,6 +3200,968 @@ impl BodyEmit<'_> {
             }
         };
         Ok(format!("{stmt} goto bb_{};", target.as_u32()))
+    }
+
+    /// DMA-management author-op lowering (dma-management construct, T13/T16):
+    /// lower an `IntrinsicKind::Dma(op)` Call against the receiver's bound
+    /// `DmaRegion` resource.
+    ///
+    /// * `ElementAccess` — compute the typed view pointer into the region's
+    ///   coherent backing buffer (`(V*)((char*)regseq_dma_region_cpu(id) +
+    ///   i*element_size)`) and INLINE the closure argument's field stores against
+    ///   it (the T13 closure-borrow lowering: the rust-call closure shim is never
+    ///   ABI-emitted — its body's `(*view).field = const` stores are rendered
+    ///   directly). No cache op (coherent memory, C01). For a PUBLISHING access
+    ///   (write/update), emit the `regseq_dma_wmb()` store→doorbell fence right
+    ///   after the stores (T16/C07/D09): the fence falls between the region stores
+    ///   and the later MMIO doorbell write in program order — the golden asserts
+    ///   `…region stores… → regseq_dma_wmb() → regseq_mmio_w32(<doorbell>)`.
+    /// * `DeviceAddr` / `DeviceAddrOf` — the region's synthetic device base
+    ///   (`+ i*element_size` for `_of`), recovered from the host model.
+    /// * `ElementCount` — the declaration constant, inlined.
+    fn emit_dma(
+        &self,
+        op: DmaOp,
+        callee: &CallCallee,
+        args: &[Operand],
+        destination: &Place,
+        target: Option<regseq_model::BlockId>,
+    ) -> Result<String, EmitError> {
+        let target = target.ok_or(EmitError::Unsupported("dma call with no target"))?;
+        let recv = args
+            .first()
+            .ok_or(EmitError::Unsupported("dma call with no receiver"))?;
+        let goto = format!("goto bb_{};", target.as_u32());
+        // The slave-`DmaChannel` transport ops (M2/T14) recover a CHANNEL receiver
+        // (the `AttrData::DmaChannelResource` field), distinct from the coherent
+        // region the A2/element ops recover. Dispatch them first so the region
+        // recovery below is never asked to resolve a channel receiver.
+        if matches!(
+            op,
+            DmaOp::ChannelConfigure
+                | DmaOp::ChannelStageTransfer
+                | DmaOp::ChannelStartTransfer
+                | DmaOp::ChannelStop
+                | DmaOp::ChannelRemainingBytes
+        ) {
+            return self.emit_dma_channel(op, args, destination, &goto);
+        }
+        let (region_id, element_size, element_count, element_ty) = self.recover_dma_region(recv)?;
+        let id_lit = format!("{region_id:?}"); // quoted, escaped C string literal
+        match op {
+            DmaOp::ElementAccess { verb } => {
+                // The element index `i` (args[1]); a constant or a local expr.
+                let idx = args
+                    .get(1)
+                    .ok_or(EmitError::Unsupported("element_access with no index"))?;
+                let idx_expr = self.operand_expr(idx, None)?;
+                // The view type `V`: the per-call reinterpret turbofish on the
+                // callee instance, else the region's declared element type `T`.
+                let view_ty = self
+                    .dma_view_type(callee)
+                    .or(element_ty)
+                    .ok_or(EmitError::Unsupported(
+                        "element_access view type V is unrecoverable (no turbofish, no element type)",
+                    ))?;
+                let view_cty = types::c_type(self.model, self.names, view_ty);
+                let tmp = self.fresh_temp_name("__dma_tmp");
+                let view = self.fresh_temp_name("__dma_view");
+                let effects = AccessEffects::from_verb(verb);
+                // FIX #3 (strict-aliasing/alignment soundness): do NOT cast the
+                // backing buffer to `V*` and store through it (that violates strict
+                // aliasing and assumes an alignment the buffer's byte view does not
+                // carry). Instead operate on a properly-aligned typed temporary
+                // `V __tmp;` and move bytes to/from the backing buffer with
+                // `memcpy` at the element stride:
+                //   * a CONSUMING access (read/update) memcpy's the current bytes
+                //     INTO the temp first;
+                //   * the inlined closure stores run against `&__tmp`;
+                //   * a PUBLISHING access (write/update) memcpy's the temp back OUT
+                //     into the backing buffer.
+                // The closure-store inliner still writes `view->field = …`, so the
+                // view pointer is just `&__tmp` (a pointer to a correctly-aligned
+                // object, no aliasing/alignment hazard). effects + extent ride as
+                // codegen-shape comments (NO cache op — coherent memory, C01).
+                let mut body = format!(
+                    "{{ /* dma element_access {verb:?} region={region_id} effects={{consumes={},publishes={}}} (extent: closure-scoped; no cache op, C01) */ \
+                     {view_cty} {tmp}; {view_cty} *{view} = &{tmp}; \
+                     unsigned char *__dma_slot = (unsigned char *)regseq_dma_region_cpu({id_lit}) + (uint64_t)({idx_expr}) * {element_size}u; ",
+                    effects.consumes_device_data as u8, effects.publishes_cpu_data as u8,
+                );
+                // A consuming access reads the device-written bytes into the temp
+                // BEFORE the closure runs.
+                if effects.consumes_device_data {
+                    body.push_str(&format!(
+                        "memcpy(&{tmp}, __dma_slot, sizeof({view_cty})); "
+                    ));
+                }
+                // Inline the closure body's field stores against the typed temp.
+                let stores = self.inline_dma_element_closure(callee, args, view_ty, &view)?;
+                body.push_str(&stores);
+                // A publishing access (write/update) copies the temp back into the
+                // coherent backing buffer; the store→doorbell fence then orders
+                // those region stores before the later MMIO doorbell write.
+                if effects.publishes_cpu_data {
+                    body.push_str(&format!(
+                        "memcpy(__dma_slot, &{tmp}, sizeof({view_cty})); "
+                    ));
+                    // T16 publishing fence: a write/update publishes CPU data into
+                    // the coherent region, so the store→doorbell fence
+                    // (`regseq_dma_wmb`) is inserted right after the publishing
+                    // memcpy; the later doorbell write observes it (register-access
+                    // emits the plain doorbell, C07).
+                    //
+                    // FIX #4 — DELIBERATE M1 OVER-FENCE: this fires after EVERY
+                    // publishing element write, not only on the genuine LAST
+                    // publishing-store → doorbell edge. That is conservative and
+                    // always-correct (extra `wmb()`s never break ordering, they only
+                    // add fences). The precise `StoreOrderEdge` endpoint analysis —
+                    // which store is the last publishing store before the doorbell —
+                    // is `[Open]` in design §6 / `R-storeorder-trigger` and is wired
+                    // at M4 (PLAN T16/T19). No behavioral change is intended here;
+                    // the M1 contract is "at least the necessary fences".
+                    body.push_str("regseq_dma_wmb(); ");
+                }
+                body.push_str("} ");
+                Ok(format!("{body}{goto}"))
+            }
+            DmaOp::DeviceAddr => {
+                let dst = self.place_lvalue(destination)?;
+                let dst_cty = types::c_type(self.model, self.names, self.place_ty(destination));
+                Ok(format!(
+                    "{dst} = ({dst_cty})regseq_dma_region_dev_base({id_lit}); {goto}"
+                ))
+            }
+            DmaOp::DeviceAddrOf => {
+                let idx = args
+                    .get(1)
+                    .ok_or(EmitError::Unsupported("device_addr_of with no index"))?;
+                let idx_expr = self.operand_expr(idx, None)?;
+                let dst = self.place_lvalue(destination)?;
+                let dst_cty = types::c_type(self.model, self.names, self.place_ty(destination));
+                Ok(format!(
+                    "{dst} = ({dst_cty})(regseq_dma_region_dev_base({id_lit}) + (uint64_t)({idx_expr}) * {element_size}u); {goto}"
+                ))
+            }
+            DmaOp::ElementCount => {
+                let dst = self.place_lvalue(destination)?;
+                let dst_cty = types::c_type(self.model, self.names, self.place_ty(destination));
+                Ok(format!("{dst} = ({dst_cty}){element_count}u; {goto}"))
+            }
+            DmaOp::RegionSpan => {
+                // M3/T26: `region.span(range)` is a NON-borrowing, value-symbolic
+                // endpoint. Its `DmaRegionSpan` result is never materialized as a
+                // real C value — the consuming `stage_transfer` RE-DERIVES the real
+                // device address + len from this span Call (see
+                // `recover_span_endpoint`). So the span Call itself emits a no-op
+                // (the destination temp is left as its zero-init shell; the span's
+                // information is carried by the recognized facts + the re-derivation,
+                // not a runtime value). The element-indexed addr/len are computed at
+                // the stage_transfer site.
+                Ok(format!(
+                    "/* dma region.span(range) on {region_id}: value-symbolic endpoint; the \
+                     consuming stage_transfer re-derives dev_base + offset*stride + len (M3/T26) */ {goto}"
+                ))
+            }
+            // Streaming EMIT (`dma::stream`/acquire/release) is M4 (T15). The
+            // channel transport ops are dispatched above (M2/T14). Everything else
+            // here is a later milestone — fail loud with the milestone reference.
+            other => Err(EmitError::Unsupported(match other {
+                DmaOp::StreamMap
+                | DmaOp::StreamAcquireFromDevice
+                | DmaOp::StreamReleaseToDevice => "dma streaming emit is M4 (T15, not built this cycle)",
+                DmaOp::RegionSpan
+                | DmaOp::ChannelConfigure
+                | DmaOp::ChannelStageTransfer
+                | DmaOp::ChannelStartTransfer
+                | DmaOp::ChannelStop
+                | DmaOp::ChannelRemainingBytes
+                | DmaOp::ElementAccess { .. }
+                | DmaOp::DeviceAddr
+                | DmaOp::DeviceAddrOf
+                | DmaOp::ElementCount => unreachable!(),
+            })),
+        }
+    }
+
+    /// Recover `(region_id, element_size, element_count, element_type V)` of the
+    /// `DmaRegion` resource named by the receiver operand of a DMA wrapper-method
+    /// call. The region is the receiver (`self.tx_ring`, a ZST resource field):
+    /// chase the hoisted borrow to the receiver place, then walk its projection to
+    /// the field carrying the `AttrData::DmaRegionResource` marker (the bridge's
+    /// recognition recorded it). Fails loud rather than emit a guessed region.
+    fn recover_dma_region(
+        &self,
+        recv: &Operand,
+    ) -> Result<(String, u64, u64, Option<TyId>), EmitError> {
+        let src = self.resolve_receiver_src(recv, 0)?;
+        let mut ty = self.body.local_decls[src.local].ty;
+        for elem in src.projection.iter() {
+            match elem {
+                PlaceElem::Deref => {
+                    ty = match &self.model.types[ty] {
+                        Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                        _ => {
+                            return Err(EmitError::Unsupported(
+                                "dma receiver deref of a non-pointer type",
+                            ))
+                        }
+                    };
+                }
+                PlaceElem::Field(idx, field_ty) => {
+                    let item = match &self.model.types[ty] {
+                        Ty::Struct { item, .. } => *item,
+                        _ => {
+                            return Err(EmitError::Unsupported(
+                                "dma receiver field projection of a non-struct type",
+                            ))
+                        }
+                    };
+                    let fp = FieldPath {
+                        item,
+                        variant: VariantIdx::ZERO,
+                        field: FieldIdx::from_u32(idx.index() as u32),
+                    };
+                    if let Some((id, element_size, element_count)) = self.dma_region_marker_at(&fp) {
+                        // The element type T is the `DmaRegion<T>` generic arg of
+                        // the field type.
+                        let element_ty = match &self.model.types[*field_ty] {
+                            Ty::Struct { args, .. } => args.iter().find_map(|a| match a {
+                                GenericArg::Type(t) => Some(*t),
+                                _ => None,
+                            }),
+                            _ => None,
+                        };
+                        let id = self.model.strings.resolve(id).to_string();
+                        return Ok((id, element_size, element_count, element_ty));
+                    }
+                    ty = *field_ty;
+                }
+                _ => {
+                    return Err(EmitError::Unsupported(
+                        "dma receiver has an unexpected projection element",
+                    ))
+                }
+            }
+        }
+        Err(EmitError::Unsupported(
+            "dma receiver does not resolve to a DmaRegion resource field",
+        ))
+    }
+
+    /// The `(id, element_size, element_count)` of the `AttrData::DmaRegionResource`
+    /// marker at `fp`, if any (mirrors the bridge's `dma_region_id_at`).
+    fn dma_region_marker_at(
+        &self,
+        fp: &FieldPath,
+    ) -> Option<(regseq_model::StringId, u64, u64)> {
+        self.model.domain_attrs.field_attrs.get(fp).and_then(|attrs| {
+            attrs.iter().find_map(|a| match a {
+                AttrData::DmaRegionResource {
+                    id,
+                    element_size,
+                    element_count,
+                    ..
+                } => Some((*id, *element_size, *element_count)),
+                _ => None,
+            })
+        })
+    }
+
+    /// Emit a slave-`DmaChannel` transport op (M2/T14) to the existing global-
+    /// singleton host hooks (keyed by the `const char* id`, matching the region
+    /// helpers' convention — the C11 `int ch` handle is elided like every other
+    /// generic-c host model):
+    ///   * `configure`        → `regseq_dma_configure(id)`               (void)
+    ///   * `stage_transfer`   → `regseq_dma_stage_transfer(id, addr, len, dir)` (int)
+    ///   * `start_transfer`   → `regseq_dma_start_transfer(id)`          (int)
+    ///   * `stop`             → `regseq_dma_stop(id)`                    (void, infallible)
+    ///   * `remaining_bytes`  → `regseq_dma_remaining_bytes(id, &out)`   (int)
+    ///
+    /// The author-observed Result destination of the FALLIBLE ops (stage/start/
+    /// remaining) is left to the body's own `Result` lowering — the bridge
+    /// fallibility lint (T17) already guarantees the author consumes it; the host
+    /// hook returns the status `int`, which the emitted code captures into the
+    /// destination scalar (a non-Result destination, e.g. a bare temp, just takes
+    /// the int). `stop` is infallible (void).
+    ///
+    /// stage_transfer M2 boundary (DELIBERATE): the M2 endpoint is a
+    /// `DmaStreamBuffer` (recognized in T07), but streaming EMIT — including the
+    /// stream's device address/length materialization — is M4 (T15). So the
+    /// `addr`/`len` arguments are emitted as `0` placeholders this cycle (the
+    /// channel id + direction are the load-bearing M2 facts the gc-shape golden
+    /// asserts). The `region.span(range)` endpoint is M3 (T09) and is NOT built. A
+    /// real addr/len source rides on stream emit (M4/T15).
+    fn emit_dma_channel(
+        &self,
+        op: DmaOp,
+        args: &[Operand],
+        destination: &Place,
+        goto: &str,
+    ) -> Result<String, EmitError> {
+        let recv = args
+            .first()
+            .ok_or(EmitError::Unsupported("dma channel op with no receiver"))?;
+        let (chan_id, direction) = self.recover_dma_channel(recv)?;
+        let id_lit = format!("{chan_id:?}"); // quoted, escaped C string literal
+        let dir = direction as u8;
+        match op {
+            DmaOp::ChannelConfigure => {
+                // Parameterless; config is declaration/L2-derived (C10). void hook.
+                Ok(format!("regseq_dma_configure({id_lit}); {goto}"))
+            }
+            DmaOp::ChannelStageTransfer => {
+                // M3/T26: recover the endpoint (`args[1]`), TYPE-DISCRIMINATED so a
+                // span endpoint NEVER silently fails open to a zero transfer
+                // (BLOCKING #1 fix):
+                //   * `DmaRegionSpan` endpoint → emit the REAL device address
+                //     (`regseq_dma_region_dev_base("<prov>") + offset*element_size`)
+                //     + byte len; if static recovery FAILS, hard-Unsupported (a
+                //     non-const range / non-local span — never a silent 0/0).
+                //   * `&DmaStreamBuffer` endpoint → the M2 `0ull, 0ull` placeholder
+                //     (streaming emit is M4/T15; the addr/len ride on stream emit).
+                // The direction rides the channel's declared direction (D05/C06).
+                let endpoint = args
+                    .get(1)
+                    .ok_or(EmitError::Unsupported("dma stage_transfer with no endpoint arg"))?;
+                let leaf = self.endpoint_type_leaf(endpoint);
+                let is_span = leaf.as_deref() == Some("DmaRegionSpan");
+                let is_stream = matches!(leaf.as_deref(), Some("DmaStreamBuffer"));
+                let (addr_expr, len_expr) = if is_span {
+                    // A span endpoint MUST statically recover — else fail loud.
+                    let (prov, offset, element_size, len) =
+                        self.recover_span_endpoint(endpoint).ok_or(EmitError::Unsupported(
+                            "dma stage_transfer: could not statically recover the DmaRegionSpan \
+                             endpoint (non-const range or non-local span); the supported form this \
+                             cycle is a directly-applied `region.span(const_range)`",
+                        ))?;
+                    let prov_lit = format!("{prov:?}");
+                    (
+                        format!(
+                            "(regseq_dma_region_dev_base({prov_lit}) + {offset}ull * {element_size}ull)"
+                        ),
+                        format!("{len}ull"),
+                    )
+                } else if is_stream {
+                    // The deferred `&DmaStreamBuffer` endpoint (M4/T15): the M2
+                    // placeholder. The real addr/len materialize with stream emit.
+                    ("0ull".to_string(), "0ull".to_string())
+                } else {
+                    // An endpoint of an unexpected type: also try span recovery (the
+                    // `impl TransferEndpoint` arg may be a span whose type-leaf we
+                    // could not read), else fail loud rather than emit a 0/0.
+                    match self.recover_span_endpoint(endpoint) {
+                        Some((prov, offset, element_size, len)) => {
+                            let prov_lit = format!("{prov:?}");
+                            (
+                                format!(
+                                    "(regseq_dma_region_dev_base({prov_lit}) + {offset}ull * {element_size}ull)"
+                                ),
+                                format!("{len}ull"),
+                            )
+                        }
+                        None => {
+                            return Err(EmitError::Unsupported(
+                                "dma stage_transfer: unrecognized endpoint (neither a recoverable \
+                                 `DmaRegionSpan` nor a deferred `&DmaStreamBuffer`)",
+                            ))
+                        }
+                    }
+                };
+                let call = format!(
+                    "regseq_dma_stage_transfer({id_lit}, {addr_expr}, {len_expr}, {dir})"
+                );
+                let body = self.emit_dma_result(destination, &call, None)?;
+                Ok(format!("{body} {goto}"))
+            }
+            DmaOp::ChannelStartTransfer => {
+                // Fallible: `Result<(), RegseqError>` from the int rc.
+                let call = format!("regseq_dma_start_transfer({id_lit})");
+                let body = self.emit_dma_result(destination, &call, None)?;
+                Ok(format!("{body} {goto}"))
+            }
+            DmaOp::ChannelStop => {
+                // Infallible (void); no Result (C10).
+                Ok(format!("regseq_dma_stop({id_lit}); {goto}"))
+            }
+            DmaOp::ChannelRemainingBytes => {
+                // Fallible: the residue rides an out-param `size_t`; the int rc is
+                // the status. Construct `Result<usize, RegseqError>`: rc == 0 ⇒
+                // Ok(<out>) (the residue is the Ok payload), else Err.
+                let out = self.fresh_temp_name("__dma_residue");
+                let call = format!("regseq_dma_remaining_bytes({id_lit}, &{out})");
+                // The out-param temp is declared in the same brace scope the Result
+                // construction opens; `emit_dma_result` builds that scope and uses
+                // `<out>` as the Ok payload expression.
+                let body =
+                    self.emit_dma_result_with_out(destination, &out, &call, &out)?;
+                Ok(format!("{body} {goto}"))
+            }
+            _ => Err(EmitError::Unsupported(
+                "emit_dma_channel called with a non-channel op",
+            )),
+        }
+    }
+
+    /// The leaf type name of a `stage_transfer` endpoint operand, peeling
+    /// references/pointers to the underlying struct (M3/T26, BLOCKING #1). Used to
+    /// TYPE-DISCRIMINATE a `DmaRegionSpan` endpoint (which MUST statically recover
+    /// or fail loud) from the deferred `&DmaStreamBuffer` endpoint (the M4 0/0
+    /// placeholder). `None` when the operand has no recoverable nominal type.
+    fn endpoint_type_leaf(&self, op: &Operand) -> Option<String> {
+        let mut ty = self.operand_ty(op)?;
+        // Peel ref/ptr layers (a `&DmaStreamBuffer` is `Ref(DmaStreamBuffer)`).
+        loop {
+            match &self.model.types[ty] {
+                Ty::Ref(p, _) | Ty::Ptr(p, _) => ty = *p,
+                Ty::Struct { item, .. } | Ty::Enum { item, .. } | Ty::Union { item, .. } => {
+                    let leaf = self.model.items[*item].def_path.segments.last()?;
+                    return match &leaf.data {
+                        regseq_model::DefPathData::TypeNs(name) => {
+                            Some(self.model.strings.resolve(*name).to_string())
+                        }
+                        _ => None,
+                    };
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Recover a `region.span(range)` endpoint at a `stage_transfer` site
+    /// (M3/T26): given the endpoint operand (`args[1]`), find the `region.span(...)`
+    /// Call that produced it and re-derive `(provenance region id, element_offset,
+    /// element_size, byte len)`. The span value lives in a local whose DEFINING
+    /// terminator is the `RegionSpan` Call (the destination); chase a hoisted
+    /// borrow/use temp to that local, then read the span Call's region receiver +
+    /// const `Range`. Returns `None` when the endpoint is NOT a span (a
+    /// `&DmaStreamBuffer`, M4/T15) or is unresolvable (the caller then keeps the M2
+    /// 0/0 placeholder).
+    fn recover_span_endpoint(&self, endpoint: &Operand) -> Option<(String, u64, u64, u64)> {
+        // The local holding the span value (chase a borrow/use temp to its base).
+        let local = self.span_endpoint_local(endpoint, 0)?;
+        // Find the `RegionSpan` Call whose destination is that local.
+        for bb in self.body.basic_blocks.iter() {
+            let TerminatorKind::Call {
+                callee,
+                args,
+                destination,
+                ..
+            } = &bb.terminator.kind
+            else {
+                continue;
+            };
+            if destination.local != local || !destination.projection.is_empty() {
+                continue;
+            }
+            let CallCallee::Direct(inst) = callee else {
+                continue;
+            };
+            if !matches!(
+                self.model.instance_intrinsic(*inst),
+                Some(IntrinsicKind::Dma(DmaOp::RegionSpan))
+            ) {
+                continue;
+            }
+            // The span's region receiver (`args[0]`) → provenance id + element_size.
+            let recv = args.first()?;
+            let (region_id, element_size, _count, _ty) = self.recover_dma_region(recv).ok()?;
+            // The const `Range` (`args[1]`) → element_offset (start) + len.
+            let (start, end) = args.get(1).and_then(|op| self.recover_range_const(op))?;
+            let len = end.saturating_sub(start).saturating_mul(element_size);
+            return Some((region_id, start, element_size, len));
+        }
+        None
+    }
+
+    /// Chase a `stage_transfer` endpoint operand to the base local holding the
+    /// span value, composing away hoisted borrow/use temps (mirrors
+    /// `resolve_receiver_src`'s reaching-def chase, but yields the LOCAL whose
+    /// defining terminator is the span Call).
+    fn span_endpoint_local(&self, op: &Operand, depth: u32) -> Option<LocalId> {
+        if depth > 8 {
+            return None;
+        }
+        let place = match op {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            Operand::Constant(_) => return None,
+        };
+        // A bare local: it may be the span Call destination directly, or a temp
+        // assigned `&span` / `Use(span)`.
+        if place.projection.is_empty() {
+            // First check: is this local the destination of a span Call? (the
+            // caller scans for that.) Also follow a statement-level def if present.
+            let local = place.local;
+            // Follow a unique whole-local statement def (`_t = &span` / `_t = span`).
+            let mut def: Option<&Rvalue> = None;
+            for bb in self.body.basic_blocks.iter() {
+                for stmt in bb.statements.iter() {
+                    let StatementKind::Assign(dst, rhs) = &stmt.kind else {
+                        continue;
+                    };
+                    if dst.local != local || !dst.projection.is_empty() {
+                        continue;
+                    }
+                    if def.is_some() {
+                        // Ambiguous; fall back to this local (the span Call may
+                        // define it via the terminator, which the caller scans).
+                        return Some(local);
+                    }
+                    def = Some(rhs);
+                }
+            }
+            return match def {
+                Some(Rvalue::Ref(_, src) | Rvalue::RawPtr(_, src)) if src.projection.is_empty() => {
+                    Some(src.local)
+                }
+                Some(Rvalue::Use(inner)) => self.span_endpoint_local(inner, depth + 1),
+                // No statement def (the span Call defines it via the terminator) or
+                // a non-borrow def: this local is the candidate.
+                _ => Some(local),
+            };
+        }
+        // A `Deref` of a borrow temp: peel one level.
+        if matches!(place.projection.first(), Some(PlaceElem::Deref)) {
+            return Some(place.local);
+        }
+        None
+    }
+
+    /// Read `(start, end)` of a const `Range<usize>` operand at emit time
+    /// (M3/T26): the `region.span(0..N)` lowers the range to an
+    /// `Aggregate(Struct, [start, end])` assigned to a temp passed by `&temp`.
+    /// Chase the borrow, find the aggregate, read its two const-uint fields.
+    fn recover_range_const(&self, op: &Operand) -> Option<(u64, u64)> {
+        // Chase a `&range_temp` borrow to the range temp's base local.
+        let local = match op {
+            Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => {
+                // Either the range temp directly, or a borrow temp `_t = &range`.
+                let mut base = p.local;
+                for bb in self.body.basic_blocks.iter() {
+                    for stmt in bb.statements.iter() {
+                        let StatementKind::Assign(dst, rhs) = &stmt.kind else {
+                            continue;
+                        };
+                        if dst.local != p.local || !dst.projection.is_empty() {
+                            continue;
+                        }
+                        if let Rvalue::Ref(_, src) | Rvalue::RawPtr(_, src) = rhs {
+                            if src.projection.is_empty() {
+                                base = src.local;
+                            }
+                        }
+                    }
+                }
+                base
+            }
+            _ => return None,
+        };
+        // Find the aggregate def of `local` and read its two const-uint fields.
+        for bb in self.body.basic_blocks.iter() {
+            for stmt in bb.statements.iter() {
+                let StatementKind::Assign(dst, Rvalue::Aggregate(_, fields)) = &stmt.kind else {
+                    continue;
+                };
+                if dst.local != local || !dst.projection.is_empty() {
+                    continue;
+                }
+                if fields.len() != 2 {
+                    return None;
+                }
+                let start = self.const_uint_operand(&fields[0])?;
+                let end = self.const_uint_operand(&fields[1])?;
+                return Some((start, end));
+            }
+        }
+        None
+    }
+
+    /// Read a direct unsigned-integer constant operand, or `None`.
+    fn const_uint_operand(&self, op: &Operand) -> Option<u64> {
+        let Operand::Constant(id) = op else {
+            return None;
+        };
+        match self.model.consts.resolve(*id) {
+            Const::Uint(_, value) => u64::try_from(*value).ok(),
+            _ => None,
+        }
+    }
+
+    /// Construct a real `Result<P, RegseqError>` into a channel-op destination
+    /// from a fallible host hook's `int` return code (M2/T14, BLOCKING #2 fix).
+    /// Mirrors the pinctrl-fold + `compare_exchange` enum-construction patterns:
+    ///   `{ int __dma_rc = <call>; if (__dma_rc == 0) { Ok(<ok_payload?>) }
+    ///      else { Err(RegseqError::<first variant>) } }`
+    /// — a real discriminant write (+ optional `Ok` payload field write), NOT a
+    /// cast of the int into the Result struct. The `Err` variant is constructed BY
+    /// NAME (the FIRST `RegseqError` variant — the generic-c host hook never
+    /// actually fails, rc is always 0, so the `Err` branch is dead but MUST be
+    /// valid C; the precise rc→variant mapping is post-M2). When the destination is
+    /// NOT a Result enum (e.g. a unit place from a discarded-but-bridge-accepted
+    /// site), the rc is discarded with `(void)` — the bridge fallibility lint (T17)
+    /// guarantees a genuine Result destination is consumed downstream.
+    ///
+    /// `ok_payload` is the C expression for the `Ok` variant's payload (e.g. the
+    /// residue temp for `remaining_bytes`), or `None` for a unit `Ok(())`.
+    fn emit_dma_result(
+        &self,
+        destination: &Place,
+        call: &str,
+        ok_payload: Option<&str>,
+    ) -> Result<String, EmitError> {
+        let dst_ty = self.place_ty(destination);
+        // Not a Result enum (unit/scalar dest): just call the hook, discard the rc.
+        let Some(shape) = enum_emit::enum_shape(self.model, dst_ty) else {
+            return Ok(format!("(void){call};"));
+        };
+        let shape = shape.clone();
+        let dst = self.place_lvalue(destination)?;
+        let rc = self.fresh_temp_name("__dma_rc");
+        let ok_tag = self.emit_set_discriminant(&dst, &shape, 0)?.unwrap_or_default();
+        // The Ok payload field write (variant 0, field 0), when there is a payload.
+        let ok_payload_write = match ok_payload {
+            Some(expr) => match enum_emit::enum_variant_field(self.model, dst_ty, 0, 0) {
+                Some((ok_field, ok_fty)) => {
+                    let ok_cty = types::c_type(self.model, self.names, ok_fty);
+                    format!("{dst}.{ok_field} = ({ok_cty})({expr}); ")
+                }
+                // A unit `Ok(())` has no payload field — nothing to write.
+                None => String::new(),
+            },
+            None => String::new(),
+        };
+        let err = self.emit_dma_err_first_variant(&dst, &shape, dst_ty)?;
+        Ok(format!(
+            "{{ int {rc} = {call}; if ({rc} == 0) {{ {ok_tag} {ok_payload_write}}} else {{ {err} }} }}"
+        ))
+    }
+
+    /// Like [`emit_dma_result`], but declares an out-param temp `out` (a
+    /// `uint64_t`) in the constructed scope and passes its address into `call`
+    /// (used by `remaining_bytes`, whose residue rides an out-param). `ok_payload`
+    /// is the out temp's name (the residue is the `Ok` payload).
+    fn emit_dma_result_with_out(
+        &self,
+        destination: &Place,
+        out: &str,
+        call: &str,
+        ok_payload: &str,
+    ) -> Result<String, EmitError> {
+        let dst_ty = self.place_ty(destination);
+        let Some(shape) = enum_emit::enum_shape(self.model, dst_ty) else {
+            // No Result dest: still call the hook (the out temp is local to the scope).
+            return Ok(format!("{{ uint64_t {out} = 0; (void){call}; (void){out}; }}"));
+        };
+        let shape = shape.clone();
+        let dst = self.place_lvalue(destination)?;
+        let rc = self.fresh_temp_name("__dma_rc");
+        let ok_tag = self.emit_set_discriminant(&dst, &shape, 0)?.unwrap_or_default();
+        let ok_payload_write = match enum_emit::enum_variant_field(self.model, dst_ty, 0, 0) {
+            Some((ok_field, ok_fty)) => {
+                let ok_cty = types::c_type(self.model, self.names, ok_fty);
+                format!("{dst}.{ok_field} = ({ok_cty})({ok_payload}); ")
+            }
+            None => String::new(),
+        };
+        let err = self.emit_dma_err_first_variant(&dst, &shape, dst_ty)?;
+        Ok(format!(
+            "{{ uint64_t {out} = 0; int {rc} = {call}; if ({rc} == 0) {{ {ok_tag} {ok_payload_write}}} else {{ {err} }} }}"
+        ))
+    }
+
+    /// Emit the `Err(RegseqError::<first variant>)` construction into `dst` (a
+    /// `Result<_, RegseqError>` whose `result_shape` is `shape`). Mirrors
+    /// `emit_pinctrl_absent_fold`'s by-NAME, niche-safe construction, but picks the
+    /// FIRST `RegseqError` variant rather than a specific one (the channel host
+    /// model never fails, so this branch is dead but must be valid C; never a
+    /// hardcoded index). Writes the `Result` Err tag (no-op for a niche Result) +
+    /// the inner `RegseqError` tag.
+    fn emit_dma_err_first_variant(
+        &self,
+        dst: &str,
+        result_shape: &EnumShape,
+        dst_ty: TyId,
+    ) -> Result<String, EmitError> {
+        // The Err payload (variant 1, rustc `Result` order) → the inner
+        // `RegseqError` member + its type.
+        let (err_member, err_ty) = enum_emit::enum_variant_field(self.model, dst_ty, 1, 0).ok_or(
+            EmitError::Unsupported("dma channel: Result Err payload field not found"),
+        )?;
+        let err_shape = enum_emit::enum_shape(self.model, err_ty).ok_or(EmitError::Unsupported(
+            "dma channel: RegseqError is not an enum",
+        ))?;
+        let (tag_member, tag_scalar_ty) = match enum_emit::enum_tag(self.model, err_shape) {
+            enum_emit::EnumTag::View {
+                member_path,
+                scalar_ty,
+            } => (member_path, scalar_ty),
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "dma channel: RegseqError is not a Direct (tag-view) enum",
+                ))
+            }
+        };
+        // The FIRST RegseqError variant (by-name resolution off the shape — never a
+        // hardcoded index). The Err mapping detail is post-M2; any present variant
+        // is a valid dead-branch placeholder.
+        let first = match err_shape {
+            EnumShape::Multiple { variants, .. } => variants.first(),
+            EnumShape::Single { variant, .. } => Some(variant),
+            EnumShape::Empty => None,
+        }
+        .ok_or(EmitError::Unsupported(
+            "dma channel: RegseqError has no variants to construct an Err",
+        ))?;
+        let tv = first.tag_value.ok_or(EmitError::Unsupported(
+            "dma channel: the first RegseqError variant has no tag_value",
+        ))?;
+        let tag_lit = render_tag_value(self.model, self.names, tag_scalar_ty, tv)?;
+        let err_tag = self
+            .emit_set_discriminant(dst, result_shape, 1)?
+            .unwrap_or_default();
+        Ok(format!(
+            "/* dma channel fallible Err branch (dead in the generic-c host model; rc is always 0) */ \
+             {err_tag} {dst}.{err_member}.{tag_member} = {tag_lit};"
+        ))
+    }
+
+    /// Recover `(channel_id, direction)` of the `DmaChannel` resource named by the
+    /// receiver operand of a channel transport call (mirrors `recover_dma_region`,
+    /// but resolves the `AttrData::DmaChannelResource` marker). The channel is the
+    /// receiver (`self.tx`, a ZST resource field): chase the hoisted borrow to the
+    /// receiver place, then walk its projection to the marked field. Fails loud.
+    fn recover_dma_channel(&self, recv: &Operand) -> Result<(String, DmaFlow), EmitError> {
+        let src = self.resolve_receiver_src(recv, 0)?;
+        let mut ty = self.body.local_decls[src.local].ty;
+        for elem in src.projection.iter() {
+            match elem {
+                PlaceElem::Deref => {
+                    ty = match &self.model.types[ty] {
+                        Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                        _ => {
+                            return Err(EmitError::Unsupported(
+                                "dma channel receiver deref of a non-pointer type",
+                            ))
+                        }
+                    };
+                }
+                PlaceElem::Field(idx, field_ty) => {
+                    let item = match &self.model.types[ty] {
+                        Ty::Struct { item, .. } => *item,
+                        _ => {
+                            return Err(EmitError::Unsupported(
+                                "dma channel receiver field projection of a non-struct type",
+                            ))
+                        }
+                    };
+                    let fp = FieldPath {
+                        item,
+                        variant: VariantIdx::ZERO,
+                        field: FieldIdx::from_u32(idx.index() as u32),
+                    };
+                    if let Some((id, direction)) = self.dma_channel_marker_at(&fp) {
+                        let id = self.model.strings.resolve(id).to_string();
+                        return Ok((id, direction));
+                    }
+                    ty = *field_ty;
+                }
+                _ => {
+                    return Err(EmitError::Unsupported(
+                        "dma channel receiver has an unexpected projection element",
+                    ))
+                }
+            }
+        }
+        Err(EmitError::Unsupported(
+            "dma channel receiver does not resolve to a DmaChannel resource field",
+        ))
+    }
+
+    /// The `(id, direction)` of the `AttrData::DmaChannelResource` marker at `fp`,
+    /// if any.
+    fn dma_channel_marker_at(&self, fp: &FieldPath) -> Option<(regseq_model::StringId, DmaFlow)> {
+        self.model.domain_attrs.field_attrs.get(fp).and_then(|attrs| {
+            attrs.iter().find_map(|a| match a {
+                AttrData::DmaChannelResource { id, direction } => Some((*id, *direction)),
+                _ => None,
+            })
+        })
+    }
+
+    /// The view type `V` from a DMA element-access call's turbofish (the
+    /// `region.<verb>::<V>(…)` generic arg on the callee instance), or `None` when
+    /// the call carries no explicit reinterpret (the caller then falls back to the
+    /// region's declared element type `T`). When `V != T` the access reinterprets
+    /// the same backing bytes (design §6 per-call reinterpret).
+    fn dma_view_type(&self, callee: &CallCallee) -> Option<TyId> {
+        let CallCallee::Direct(inst) = callee else {
+            return None;
+        };
+        // The view type `V` is the first NON-closure type arg (the closure type
+        // `F` also rides the args for `write<V, F>`; skip it).
+        self.model.instances[*inst]
+            .generic_args
+            .iter()
+            .find_map(|a| match a {
+                GenericArg::Type(t) if !matches!(&self.model.types[*t], Ty::Closure(..)) => {
+                    Some(*t)
+                }
+                _ => None,
+            })
+    }
+
+    /// Inline a DMA `element_access` closure argument's field stores against the
+    /// computed view pointer `view` (typed `V*`), the T13 closure-borrow lowering.
+    /// The closure is `args[2]` (a non-capturing ZST const for the E1000 ring);
+    /// find its `ClosureCall` instance, read its body, and render each
+    /// `Assign((*arg).field_k = <operand>)` statement as `view->field_k =
+    /// <operand>;`. The closure's single `&[mut] V` argument is the `arg` local
+    /// (the only non-`_0` arg local); a non-store statement in the closure body is
+    /// rejected loud (M1 supports only the structured field-store element write —
+    /// richer closure bodies are post-M1).
+    fn inline_dma_element_closure(
+        &self,
+        callee: &CallCallee,
+        args: &[Operand],
+        view_ty: TyId,
+        view: &str,
+    ) -> Result<String, EmitError> {
+        // The closure type. The closure argument (`args[2]`) is a ZST CONSTANT for
+        // a non-capturing closure (so `operand_ty` yields None); recover the
+        // `Ty::Closure` from the callee instance's generic args (`F` rides as a
+        // type param of `write<V, F>`). Fall back to the operand's own type for a
+        // capturing closure passed by a non-constant operand.
+        let closure_ty = args
+            .get(2)
+            .and_then(|op| self.operand_ty(op))
+            .filter(|t| matches!(&self.model.types[*t], Ty::Closure(..)))
+            .or_else(|| match callee {
+                CallCallee::Direct(inst) => {
+                    self.model.instances[*inst].generic_args.iter().find_map(|a| match a {
+                        GenericArg::Type(t)
+                            if matches!(&self.model.types[*t], Ty::Closure(..)) =>
+                        {
+                            Some(*t)
+                        }
+                        _ => None,
+                    })
+                }
+                CallCallee::Indirect(_) => None,
+            })
+            .ok_or(EmitError::Unsupported(
+                "element_access closure type is unrecoverable (no closure arg, no closure generic param)",
+            ))?;
+        let Ty::Closure(closure_item, _) = &self.model.types[closure_ty] else {
+            return Err(EmitError::Unsupported(
+                "element_access argument is not a closure",
+            ));
+        };
+        let closure_item = *closure_item;
+        // The closure's DefPathHash links its captures Item (the `Ty::Closure`
+        // item) to its separate ClosureCall shim Item (whose body carries the
+        // field stores). Recover the hash from the captures item's synthetic kind.
+        let closure_hash = match &self.model.item_synthetic_kinds[closure_item] {
+            SyntheticItemKind::ClosureCaptures { closure }
+            | SyntheticItemKind::ClosureCall { closure, .. } => *closure,
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "element_access closure item is not a closure synthetic",
+                ))
+            }
+        };
+        // Find the ClosureCall Function instance for this closure (its body carries
+        // the field stores). Match by the shared closure DefPathHash on the call
+        // shim's synthetic kind.
+        let closure_body = self
+            .model
+            .instances
+            .iter()
+            .find_map(|inst| match &inst.kind {
+                InstanceKind::Function(f)
+                    if matches!(
+                        &self.model.item_synthetic_kinds[inst.item],
+                        SyntheticItemKind::ClosureCall { closure, .. } if *closure == closure_hash
+                    ) =>
+                {
+                    f.body()
+                }
+                _ => None,
+            })
+            .ok_or(EmitError::Unsupported(
+                "element_access closure has no materialised body",
+            ))?;
+        // The closure's `&[mut] V` argument local: the closure-call shim body's
+        // arg locals are `[receiver(captures), view_arg]` (arg_count == 2); the
+        // view arg is the last arg local. A non-capturing closure's receiver is a
+        // ZST. Recover the view-arg local by its `Ref(V, _)` decl type.
+        let view_arg_local = (0..closure_body.local_decls.len())
+            .map(|i| LocalId::from_u32(i as u32))
+            .find(|&l| {
+                l.index() >= 1
+                    && l.index() <= closure_body.arg_count
+                    && matches!(
+                        &self.model.types[closure_body.local_decls[l].ty],
+                        Ty::Ref(p, _) | Ty::Ptr(p, _) if *p == view_ty
+                    )
+            })
+            .ok_or(EmitError::Unsupported(
+                "element_access closure has no &mut V argument local",
+            ))?;
+        let mut out = String::new();
+        for bb in closure_body.basic_blocks.iter() {
+            for stmt in bb.statements.iter() {
+                let StatementKind::Assign(dst, rhs) = &stmt.kind else {
+                    return Err(EmitError::Unsupported(
+                        "M1 element_access closure body supports only field-store assignments",
+                    ));
+                };
+                // The LHS must project the view-arg local: `[Deref, Field(k, fty)]`.
+                if dst.local != view_arg_local {
+                    return Err(EmitError::Unsupported(
+                        "M1 element_access closure stores must target the &mut V argument",
+                    ));
+                }
+                let mut proj = dst.projection.iter();
+                let Some(PlaceElem::Deref) = proj.next() else {
+                    return Err(EmitError::Unsupported(
+                        "M1 element_access closure store LHS must deref the &mut V argument",
+                    ));
+                };
+                let Some(PlaceElem::Field(fidx, field_ty)) = proj.next() else {
+                    return Err(EmitError::Unsupported(
+                        "M1 element_access closure store LHS must be a field of *V",
+                    ));
+                };
+                if proj.next().is_some() {
+                    return Err(EmitError::Unsupported(
+                        "M1 element_access closure store LHS has an unsupported nested projection",
+                    ));
+                }
+                let (fname, _) = layout_emit::field_c_name_ty(self.model, view_ty, fidx.index())
+                    .ok_or(EmitError::Unsupported(
+                        "element_access closure field is not a member of V",
+                    ))?;
+                // Render the RHS against the field type, using the CLOSURE body's
+                // const table (the stored values are closure-body constants).
+                let value = match rhs {
+                    Rvalue::Use(Operand::Constant(cid)) => const_expr(
+                        self.model,
+                        self.names,
+                        self.syms,
+                        self.model.consts.resolve(*cid),
+                        Some(*field_ty),
+                        false,
+                    )?,
+                    _ => {
+                        return Err(EmitError::Unsupported(
+                            "M1 element_access closure stores must be constant field values",
+                        ))
+                    }
+                };
+                out.push_str(&format!("{view}->{fname} = {value}; "));
+            }
+        }
+        Ok(out)
     }
 
     /// Bus-resource-management config-space intrinsic (construct #3 M5): a
@@ -6008,6 +6984,32 @@ pub(crate) fn clock_resource_count(model: &RegseqModel) -> usize {
         .sum()
 }
 
+/// Whether the model has ANY recognized DMA resource — a coherent `DmaRegion`, a
+/// slave `DmaChannel`, or a streaming buffer (dma-management construct, T11) —
+/// the demand gate for emitting [`super::prelude::DMA_HELPERS`]. Gated on RESOURCE
+/// presence (NOT intrinsic presence, GRILL D06): the compiler-managed
+/// `alloc_coherent`/`free_coherent` lifecycle preamble is synthesized from the
+/// region FIELD even when the author calls no `dma_*` op, so the hooks must be
+/// present whenever a DMA resource is. This is DISTINCT from the bus-master
+/// `dma_present` flag (which gates `pci_set_master`): PL011 (a slave channel, no
+/// region) still gets the helpers, but never sets `dma_present`. A DMA-less TU's
+/// `.c` is byte-unchanged.
+pub(crate) fn model_has_dma_resource(model: &RegseqModel) -> bool {
+    model.dma.drivers.values().any(|d| {
+        !d.regions.is_empty() || !d.channels.is_empty() || !d.streams.is_empty()
+    })
+}
+
+/// The number of coherent `DmaRegion` resources across all drivers — the size of
+/// the generic-c host DMA region slot table (each region gets a real backing
+/// slab). The caller emits `#define REGSEQ_DMA_SLOTS {count}` before the
+/// [`super::prelude::DMA_HELPERS`] block (mirroring `REGSEQ_CLOCK_SLOTS`), so the
+/// table is sized to the exact region count and can never overflow. At least 1
+/// (the caller `.max(1)`s it) so it is not a zero-length array.
+pub(crate) fn dma_region_count(model: &RegseqModel) -> usize {
+    model.dma.drivers.values().map(|d| d.regions.len()).sum()
+}
+
 /// Whether the model has at least one **resolved** pinctrl resource (pinctrl
 /// state-selection construct). This is the demand gate for the `PINCTRL_HELPERS`
 /// prelude — RESOLVED-only (NOT mere field presence): an optional-absent resource
@@ -6765,6 +7767,31 @@ pub(crate) fn emit_lifecycle_synthesis(
             // clock-less driver (no golden churn).
             out.push_str(&clock_acquire_block(model, driver_item, "    "));
 
+            // DMA-management alloc_coherent (dma-management construct, T12/C07):
+            // synthesized AFTER acquire_clock, in region declaration order. The
+            // compiler-managed coherent allocation is bound to the device lifetime
+            // (the matching `free_coherent` postamble runs LIFO at teardown). Each
+            // allocates the region's real backing buffer + a synthetic device base
+            // in the host model. Compiler-managed (no author call); empty for a
+            // region-less driver (no golden churn).
+            out.push_str(&dma_alloc_block(model, driver_item, "    "));
+
+            // DMA-management request_channel (dma-management construct, M2/T14/C10):
+            // synthesized AFTER alloc_coherent, in channel declaration order. The
+            // slave channel is requested once the device's coherent memory exists;
+            // the matching `release_channel` postamble runs LIFO at teardown
+            // (before the region free). Compiler-managed (no author call); empty
+            // for a channel-less driver (no golden churn).
+            out.push_str(&dma_request_channel_block(model, driver_item, "    "));
+
+            // DMA-management completion registration (dma-management construct,
+            // M3/T18/D06/C05): synthesized AFTER request_channel (the channel must
+            // exist before its completion callback is registered), one
+            // `regseq_dma_register_completion("<channel>")` per binding. Registration
+            // SHAPE only — the host model never fires the callback this cycle.
+            // Empty for a driver with no completion bindings (no golden churn).
+            out.push_str(&dma_register_completion_block(model, driver_item, "    "));
+
             // Synchronization init_primitives (C05/I05): initialize every declared
             // lock/completion HERE — after the bus/map_region keystone, BEFORE the
             // interrupt register-disabled below and before `on_init` (which may
@@ -6877,7 +7904,17 @@ pub(crate) fn emit_lifecycle_synthesis(
             // Pinctrl release follows clock release (the exact reverse of the
             // pins-before-clock preamble — clock release → pinctrl release → unmap,
             // C07/D08); empty for a pinctrl-less driver.
-            let mut clock_teardown = clock_release_block(model, driver_item, "    ");
+            // DMA-management free_coherent (dma-management construct, T12/C07):
+            // LIFO with `alloc_coherent` (which ran AFTER acquire_clock), so the
+            // free runs FIRST among the device-lifetime resource releases —
+            // BEFORE the clock release — the exact reverse of the preamble. Empty
+            // for a region-less driver.
+            // DMA-management release_channel (M2/T14/C10): LIFO — channels were
+            // requested AFTER the region alloc, so they release FIRST (before the
+            // region free_coherent). Empty for a channel-less driver.
+            let mut clock_teardown = dma_release_channel_block(model, driver_item, "    ");
+            clock_teardown.push_str(&dma_free_block(model, driver_item, "    "));
+            clock_teardown.push_str(&clock_release_block(model, driver_item, "    "));
             clock_teardown.push_str(&pinctrl_release_block(model, driver_item, "    "));
 
             // Scenario-specific on_init handling + teardown/shutdown suffix.
@@ -6958,7 +7995,12 @@ pub(crate) fn emit_lifecycle_synthesis(
                     // block (8-space indent), so the clock release is rebuilt at
                     // that depth. Pinctrl release follows clock release (LIFO,
                     // pins-before-clock reverse — C07/D08).
-                    let mut clock_unwind = clock_release_block(model, driver_item, "        ");
+                    // DMA free_coherent runs FIRST (LIFO, reverse of the
+                    // alloc-after-clock-acquire preamble), then clock + pinctrl.
+                    let mut clock_unwind =
+                        dma_release_channel_block(model, driver_item, "        ");
+                    clock_unwind.push_str(&dma_free_block(model, driver_item, "        "));
+                    clock_unwind.push_str(&clock_release_block(model, driver_item, "        "));
                     clock_unwind.push_str(&pinctrl_release_block(model, driver_item, "        "));
                     emit_init_fail_body(
                         &on_init_capture,
@@ -7311,6 +8353,112 @@ fn clock_release_block(model: &RegseqModel, driver_item: &ItemId, indent: &str) 
         for res in clocks.resources.iter().rev() {
             let id = model.strings.resolve(res.id);
             out.push_str(&format!("{indent}regseq_clock_release({id:?});\n"));
+        }
+    }
+    out
+}
+
+/// Compiler-managed `alloc_coherent` preamble lines (dma-management construct,
+/// T12/C07): one `regseq_dma_alloc_coherent("<id>", <size>, <align>, &__discard)`
+/// per coherent `DmaRegion` resource in DECLARATION order, slotted AFTER
+/// `acquire_clock`. Each allocates the region's real backing buffer (size =
+/// `element_size * element_count`) + a synthetic device base in the host model;
+/// the device base is what `device_addr()` returns. The allocation is bound to the
+/// device lifetime (the `free_coherent` postamble runs LIFO at teardown).
+/// Compiler-managed (no author call). Empty for a region-less driver (no golden
+/// churn).
+fn dma_alloc_block(model: &RegseqModel, driver_item: &ItemId, indent: &str) -> String {
+    let mut out = String::new();
+    if let Some(dma) = model.dma.drivers.get(driver_item) {
+        for region in &dma.regions {
+            let id = model.strings.resolve(region.id);
+            let size = region.element_size.saturating_mul(region.element_count);
+            // The alignment defaults to the element_size when omitted (the
+            // `align_of::<T>()` layout default lands later, GRILL C03/D08).
+            let align = region.alignment.unwrap_or(region.element_size).max(1);
+            out.push_str(&format!(
+                "{indent}{{ uint64_t __dma_dev; (void)regseq_dma_alloc_coherent({id:?}, {size}ull, {align}ull, &__dma_dev); }}\n"
+            ));
+        }
+    }
+    out
+}
+
+/// Compiler-managed `free_coherent` postamble lines (dma-management construct,
+/// T12/C07): one `regseq_dma_free_coherent("<id>")` per coherent `DmaRegion`
+/// resource in REVERSE declaration order (LIFO), slotted FIRST among the
+/// device-lifetime resource releases (BEFORE the clock release) — the exact
+/// reverse of the alloc-after-clock-acquire preamble. Compiler-managed (no author
+/// call). Empty for a region-less driver.
+fn dma_free_block(model: &RegseqModel, driver_item: &ItemId, indent: &str) -> String {
+    let mut out = String::new();
+    if let Some(dma) = model.dma.drivers.get(driver_item) {
+        for region in dma.regions.iter().rev() {
+            let id = model.strings.resolve(region.id);
+            out.push_str(&format!("{indent}regseq_dma_free_coherent({id:?});\n"));
+        }
+    }
+    out
+}
+
+/// Compiler-managed `request_channel` preamble lines (dma-management construct,
+/// M2/T14/C10): one `regseq_dma_request_channel("<id>", <dir>)` per slave
+/// `DmaChannel` resource in DECLARATION order, slotted AFTER `alloc_coherent`
+/// (region) — the channel is requested once the device's coherent memory exists.
+/// `request_channel`/`release` are compiler-emitted lifecycle bound to the device
+/// lifetime (NOT author-called, C10). `<dir>` is the declared `DmaFlow`
+/// discriminant. Empty for a channel-less driver (no golden churn).
+fn dma_request_channel_block(model: &RegseqModel, driver_item: &ItemId, indent: &str) -> String {
+    let mut out = String::new();
+    if let Some(dma) = model.dma.drivers.get(driver_item) {
+        for channel in &dma.channels {
+            let id = model.strings.resolve(channel.id);
+            let dir = channel.direction as u8;
+            out.push_str(&format!(
+                "{indent}(void)regseq_dma_request_channel({id:?}, {dir});\n"
+            ));
+        }
+    }
+    out
+}
+
+/// Compiler-managed `release_channel` postamble lines (dma-management construct,
+/// M2/T14/C10): one `regseq_dma_release_channel("<id>")` per slave `DmaChannel`
+/// resource in REVERSE declaration order (LIFO), slotted at teardown BEFORE the
+/// region `free_coherent` (channels were requested AFTER the region alloc, so LIFO
+/// releases them first). Compiler-managed (no author call). Empty for a
+/// channel-less driver.
+fn dma_release_channel_block(model: &RegseqModel, driver_item: &ItemId, indent: &str) -> String {
+    let mut out = String::new();
+    if let Some(dma) = model.dma.drivers.get(driver_item) {
+        for channel in dma.channels.iter().rev() {
+            let id = model.strings.resolve(channel.id);
+            out.push_str(&format!("{indent}regseq_dma_release_channel({id:?});\n"));
+        }
+    }
+    out
+}
+
+/// Compiler-managed completion-REGISTRATION lines (dma-management construct,
+/// M3/T18, GRILL D06/C05): one `regseq_dma_register_completion("<channel_id>")`
+/// per recognized `#[rseq::dma_completion(channel = …)]` binding, in binding
+/// (declaration) order, slotted in the preamble AFTER `request_channel` (the
+/// channel must exist before its completion is registered). Registration-shape
+/// ONLY — the host model NEVER fires the callback this cycle (D06): the binding's
+/// handler rides in the IR; the codegen shows the registration call + its trace.
+/// Empty for a driver with no completion bindings (no golden churn).
+fn dma_register_completion_block(
+    model: &RegseqModel,
+    driver_item: &ItemId,
+    indent: &str,
+) -> String {
+    let mut out = String::new();
+    if let Some(dma) = model.dma.drivers.get(driver_item) {
+        for binding in &dma.completions {
+            let channel = model.strings.resolve(binding.channel);
+            out.push_str(&format!(
+                "{indent}regseq_dma_register_completion({channel:?});\n"
+            ));
         }
     }
     out

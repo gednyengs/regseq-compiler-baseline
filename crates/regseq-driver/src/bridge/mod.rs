@@ -21,6 +21,7 @@ pub mod body;
 pub mod const_;
 pub mod def_path;
 mod device_lifecycle;
+mod dma;
 pub mod diag_log;
 mod discovery;
 pub mod fnsig;
@@ -191,6 +192,29 @@ pub struct BridgeCtxt<'tcx> {
     /// so the RJ-009 bucket-4 `signature_non_rigid` carve-out is
     /// preserved.
     pub reveal_opaque_types: bool,
+    /// Transient flag (dma-management T13) gating a NARROW carve-out in the
+    /// substantive-HRTB / fn-ptr-binder safety check (spec §17.1): while set,
+    /// `ty::translate_generic_args` permits a closure's OWN reified
+    /// `for<'a> extern "rust-call" fn((&'a mut V,))` signature FnPtr — and ONLY
+    /// that exact shape (RustCall ABI + a single tupled input, the closure
+    /// self-signature artifact) — instead of rejecting it as a substantive HRTB.
+    /// Default `false`; set to `true` ONLY for the duration of translating the
+    /// callee `FnDef` type of a recognized `IntrinsicKind::Dma(ElementAccess)`
+    /// call (whose generic args carry the borrow-closure type) via the
+    /// [`DmaElementClosureRelaxScope`] RAII guard, restored on guard `Drop`. It
+    /// MUST stay `false` everywhere else: the global HRTB guard is UNCHANGED for
+    /// all non-DMA code (and a relational/projection HRTB is still rejected even
+    /// under this flag — the shape gate matches only the benign closure-self
+    /// signature). See `ty::closure_reified_sig_relaxable`.
+    pub dma_element_closure_relax: bool,
+    /// The `DefPathHash`es of the borrow closures passed to a recognized
+    /// `IntrinsicKind::Dma(ElementAccess)` call (dma-management T13). Recorded at
+    /// the call's Phase-4 scan; consulted by `construct_closure_call_instances`
+    /// to relax the closure-reified-sig HRTB carve-out ONLY for these specific
+    /// closures (the call-site relax flag does not reach that later, per-closure
+    /// pass). A non-DMA borrow closure is never inserted here, so it is never
+    /// relaxed; it is in any case rejected upstream.
+    pub dma_element_closure_defs: std::collections::HashSet<DefPathHash>,
 }
 
 impl<'tcx> BridgeCtxt<'tcx> {
@@ -219,6 +243,8 @@ impl<'tcx> BridgeCtxt<'tcx> {
             ty_forward_cache: HashMap::new(),
             diag_log_peel_residue: DiagLogPeelResidue::default(),
             reveal_opaque_types: false,
+            dma_element_closure_relax: false,
+            dma_element_closure_defs: std::collections::HashSet::new(),
         }
     }
 }
@@ -273,6 +299,54 @@ impl<'tcx> std::ops::DerefMut for RevealOpaqueScope<'_, 'tcx> {
 impl Drop for RevealOpaqueScope<'_, '_> {
     fn drop(&mut self) {
         self.cx.reveal_opaque_types = self.prev;
+    }
+}
+
+/// RAII guard (dma-management T13) that enables the NARROW closure-reified-sig
+/// carve-out in the substantive-HRTB safety check (`BridgeCtxt::
+/// dma_element_closure_relax`) for the duration of translating the callee
+/// `FnDef` type of a recognized `IntrinsicKind::Dma(ElementAccess)` call. The
+/// guard saves the prior flag and restores it on `Drop` (every exit path,
+/// including `?`), so the relaxation can never leak past the one `translate_ty`
+/// it brackets. The carve-out itself additionally matches ONLY the closure
+/// self-signature SHAPE (`ty::closure_reified_sig_relaxable`), so even within
+/// the window a relational/projection HRTB or a user fn-ptr binder is still
+/// rejected — the global spec-§17.1 guard is unchanged for all other code.
+pub(crate) struct DmaElementClosureRelaxScope<'a, 'tcx> {
+    cx: &'a mut BridgeCtxt<'tcx>,
+    prev: bool,
+}
+
+impl<'a, 'tcx> DmaElementClosureRelaxScope<'a, 'tcx> {
+    /// Save the current flag, set it to `value`, and return a guard that
+    /// restores the saved value on `Drop`. Callers pass `value = true` only when
+    /// the callee being translated is a recognized DMA element-access intrinsic;
+    /// passing `false` leaves the global guard semantics unchanged while still
+    /// providing a tidy restore-on-drop bracket.
+    pub(crate) fn enter_with(cx: &'a mut BridgeCtxt<'tcx>, value: bool) -> Self {
+        let prev = cx.dma_element_closure_relax;
+        cx.dma_element_closure_relax = value;
+        Self { cx, prev }
+    }
+}
+
+impl<'tcx> std::ops::Deref for DmaElementClosureRelaxScope<'_, 'tcx> {
+    type Target = BridgeCtxt<'tcx>;
+
+    fn deref(&self) -> &Self::Target {
+        self.cx
+    }
+}
+
+impl<'tcx> std::ops::DerefMut for DmaElementClosureRelaxScope<'_, 'tcx> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.cx
+    }
+}
+
+impl Drop for DmaElementClosureRelaxScope<'_, '_> {
+    fn drop(&mut self) {
+        self.cx.dma_element_closure_relax = self.prev;
     }
 }
 
@@ -683,6 +757,210 @@ pub enum BridgeError {
     /// deferred-surface rejections (e.g. `AllWaiters` cardinality).
     #[error("synchronization validation: {0}")]
     SynchronizationValidation(SyncDiagnostic),
+
+    /// A dma-management frontend (recognition) check failed (dma-management
+    /// construct, GRILL C03/C10 — the `DMA-ERR-*` recognition set). The
+    /// binding-side `DMA-L2-*` set lives in `regseq-l2`.
+    #[error("dma-management validation: {0}")]
+    DmaValidation(DmaDiagnostic),
+}
+
+/// Per-construct dma-management frontend (recognition) diagnostics
+/// (dma-management construct, M1 region path; GRILL C03/C10). Carried by
+/// [`BridgeError::DmaValidation`]. The `DMA-ERR-*` family is the recognition
+/// half (this enum); the binding half is the `regseq-l2` `DMA-L2-*` family. This
+/// is the M1 subset (mandatory `#[rseq::dma_region]` keys, unsupported form,
+/// attr-on-non-region, duplicate id); the layout/anti-form/fallibility rejects
+/// are later milestones (T17/T19/T20/T22).
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum DmaDiagnostic {
+    /// `DMA-ERR-MISSING-KEY`: a `#[rseq::dma_region]` field is missing a
+    /// mandatory key (`id`/`element_size`/`element_count`, GRILL C03/S01). The
+    /// `alignment` key is optional (omitted ⇒ `align_of::<T>()`).
+    #[error(
+        "DMA-ERR-MISSING-KEY: driver `{driver}` dma_region field `{field}` is missing the \
+         mandatory `#[rseq::dma_region]` key `{key}` (id/element_size/element_count are all \
+         required; alignment is optional)"
+    )]
+    MissingKey {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+        /// The missing key.
+        key: &'static str,
+    },
+    /// `DMA-ERR-MALFORMED-ATTR`: a structurally bad `#[rseq::dma_region(...)]`
+    /// attribute (empty id, non-literal value, duplicate or unknown key).
+    #[error(
+        "DMA-ERR-MALFORMED-ATTR: driver `{driver}` dma_region field `{field}`: {detail}"
+    )]
+    MalformedAttr {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+        /// What is wrong with the attribute.
+        detail: String,
+    },
+    /// `DMA-ERR-ATTR-ON-NON-REGION`: a `#[rseq::dma_region]` attribute on a field
+    /// whose type is not a `DmaRegion<T>`.
+    #[error(
+        "DMA-ERR-ATTR-ON-NON-REGION: driver `{driver}` field `{field}` carries a \
+         `#[rseq::dma_region]` attribute but is not a `DmaRegion<T>` resource"
+    )]
+    AttrOnNonRegion {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+    },
+    /// `DMA-ERR-UNSUPPORTED-FORM`: a recognized DMA-region declaration form M1
+    /// does not build (`Option<DmaRegion<T>>` / `[DmaRegion<T>; N]` /
+    /// `&DmaRegion<T>`); only the required `DmaRegion<T>` form is built.
+    #[error(
+        "DMA-ERR-UNSUPPORTED-FORM: driver `{driver}` dma_region field `{field}` uses the \
+         unsupported form `{form}` (M1 builds only the required `DmaRegion<T>` form)"
+    )]
+    UnsupportedForm {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+        /// The rejected form's spelling.
+        form: String,
+    },
+    /// `DMA-ERR-DUPLICATE-ID`: two `#[rseq::dma_region(id = "…")]` fields on one
+    /// driver share an L1 id (the `[dma.<id>]` join key must be unique).
+    #[error(
+        "DMA-ERR-DUPLICATE-ID: driver `{driver}` declares more than one DMA resource with \
+         id `{id}` (the `[dma.<id>]` join key must be unique within a driver)"
+    )]
+    DuplicateId {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The duplicated id.
+        id: String,
+    },
+    /// `DMA-ERR-LAYOUT-MISMATCH`: the declaration-time layout guard (dma-management
+    /// FIX #2) found the `#[rseq::dma_region(...)]` constants inconsistent with the
+    /// element type `T`'s resolved ABI layout — the declared `element_size` is
+    /// smaller than `size_of::<T>()`, the effective alignment is below
+    /// `align_of::<T>()`, the effective alignment is not a power of two, or the
+    /// stride is not a multiple of the effective alignment. (The full per-access
+    /// size-fits-view verify is M4/T19; this is the minimal declaration guard.)
+    #[error(
+        "DMA-ERR-LAYOUT-MISMATCH: driver `{driver}` dma_region field `{field}`: {detail}"
+    )]
+    LayoutMismatch {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+        /// What is inconsistent between the declared constants and `T`'s layout.
+        detail: String,
+    },
+    /// `DMA-ERR-MISSING-DIRECTION`: a `#[rseq::dma_channel(...)]` field is missing
+    /// (or carries a malformed) mandatory `direction` key (dma-management M2/T07;
+    /// `direction = "device_to_host" | "host_to_device"` is mandatory — a channel's
+    /// declared direction fixes the source-vs-destination role of a transfer
+    /// endpoint, GRILL S02/D05/C06). Also covers a missing `id`, a structurally bad
+    /// attribute, or an unknown direction token.
+    #[error(
+        "DMA-ERR-MISSING-DIRECTION: driver `{driver}` dma_channel field `{field}`: {detail}"
+    )]
+    ChannelAttr {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+        /// What is wrong (missing id/direction, malformed attr, bad direction).
+        detail: String,
+    },
+    /// `DMA-ERR-DISCARDED-RESULT`: the fallibility lint (GRILL C10/I06, M2/T17). A
+    /// fallible DMA op (`dma::stream`/`stage_transfer`/`start_transfer`/
+    /// `remaining_bytes`) whose `Result` is DISCARDED — including the explicit
+    /// `let _ = …` form that Rust's `unused_must_use` does NOT catch. `stop` is
+    /// infallible and exempt. The author must consume the `Result` (e.g. `?` or a
+    /// match).
+    #[error(
+        "DMA-ERR-DISCARDED-RESULT: the fallible DMA op `{op}` returns a `Result` that must be \
+         consumed (e.g. with `?`), but it is discarded here (an explicit `let _ = …` also \
+         discards it); GRILL C10/I06"
+    )]
+    DiscardedResult {
+        /// The author-facing spelling of the discarded fallible op.
+        op: &'static str,
+    },
+    /// `DMA-ERR-COMPLETION-ATTR`: a `#[rseq::dma_completion(channel = "…")]` handler
+    /// is malformed (dma-management M3/T09(b), GRILL C05/D06): a missing/empty
+    /// `channel` key, a structurally bad attribute, or a handler that is not an
+    /// inherent method on a `#[rseq::driver]` struct.
+    #[error("DMA-ERR-COMPLETION-ATTR: completion handler `{method}`: {detail}")]
+    CompletionAttr {
+        /// The offending handler method name.
+        method: String,
+        /// What is wrong (missing channel, malformed attr, non-driver method).
+        detail: String,
+    },
+    /// `DMA-ERR-UNKNOWN-COMPLETION-CHANNEL`: a `#[rseq::dma_completion(channel =
+    /// "…")]` binds a channel id that NO `#[rseq::dma_channel(id = "…")]` on the
+    /// owning driver declares (dma-management M3/T18, GRILL C05). Registering a
+    /// dangling completion for a never-`request_channel`'d channel is rejected: the
+    /// `channel` id must name a declared slave channel.
+    #[error(
+        "DMA-ERR-UNKNOWN-COMPLETION-CHANNEL: completion handler `{method}` binds channel `{channel}`, \
+         which no `#[rseq::dma_channel(id = \"{channel}\")]` on driver `{driver}` declares (C05)"
+    )]
+    UnknownCompletionChannel {
+        /// The offending handler method name.
+        method: String,
+        /// The dangling channel id the binding references.
+        channel: String,
+        /// The owning driver's logical name.
+        driver: String,
+    },
+    /// `DMA-ERR-ANTI-FORM`: a forbidden `stage_transfer(&DmaRegion<T>)` anti-form
+    /// (dma-management M3/T20, GRILL C06/I07): a coherent region was passed to
+    /// `stage_transfer` DIRECTLY instead of via `region.span(range)`. A staged
+    /// transfer endpoint must be a `region.span(range)` (a `DmaRegionSpan`) or a
+    /// `&DmaStreamBuffer` — never the bare region.
+    #[error(
+        "DMA-ERR-ANTI-FORM: `stage_transfer` was passed the coherent region `{region}` directly; \
+         pass a `region.span(range)` (a `DmaRegionSpan`) endpoint, not the bare region (C06/I07)"
+    )]
+    AntiForm {
+        /// The region id passed directly (the anti-form).
+        region: String,
+    },
+    /// `DMA-ERR-DIRECTION-MISMATCH`: a `stage_transfer` endpoint is incompatible
+    /// with the channel's declared direction (dma-management M3/T20, GRILL
+    /// D05/C06). The span's role (source vs destination) is fixed by the CHANNEL
+    /// direction; a region/flow that cannot serve that role is rejected.
+    #[error(
+        "DMA-ERR-DIRECTION-MISMATCH: the transfer endpoint is incompatible with channel `{channel}`'s \
+         declared direction `{direction}`: {detail} (D05/C06)"
+    )]
+    DirectionMismatch {
+        /// The channel id.
+        channel: String,
+        /// The channel's declared direction (the OS-agnostic spelling).
+        direction: String,
+        /// Why the endpoint cannot serve the direction's role.
+        detail: String,
+    },
+    /// `DMA-ERR-SPAN-BOUNDS`: a `region.span(range)` is out of bounds or empty
+    /// (dma-management M3/T20, GRILL C06): `range.end > element_count`, or a
+    /// zero-length (`range.start >= range.end`) span, where statically known.
+    #[error(
+        "DMA-ERR-SPAN-BOUNDS: `region.span(range)` on region `{region}` is invalid: {detail} (C06)"
+    )]
+    SpanBounds {
+        /// The provenance region id.
+        region: String,
+        /// What is out of bounds (OOB end, or zero-length).
+        detail: String,
+    },
 }
 
 /// Per-construct atomic-memory-access-and-ordering (atomicity) frontend
@@ -2329,6 +2607,25 @@ fn scan_terminator_for_synthesis<'tcx>(
                 // must still run for fn-ptr calls whose args carry
                 // vtable / drop-glue needs.
                 if !matches!(canonical.flavor, FunctionInstanceFlavor::FnPtrShim) {
+                    // dma-management T13: a recognized `dma_element_{read,write,
+                    // update}` callee's generic args carry the borrow-closure
+                    // type, whose reified self-signature `for<'r> fn((&'r mut V,))`
+                    // would trip the substantive-HRTB guard during the FnDef-type
+                    // translation below. Bracket BOTH translate_ty calls with the
+                    // narrow closure-reified-sig carve-out, scoped to this exact
+                    // DMA-element-access callee only (the guard restores the flag on
+                    // every exit — incl. the `?` below; the shape gate keeps every
+                    // other binder rejected).
+                    let relax = matches!(
+                        intrinsic::intrinsic_kind_for_def_id(ctxt.input.tcx, canonical.callee_def_id),
+                        Some(regseq_model::IntrinsicKind::Dma(regseq_model::DmaOp::ElementAccess { .. }))
+                    );
+                    // The guard sets the flag to `relax` on enter and restores the
+                    // prior value on drop (every exit, incl. the `?` below). For a
+                    // non-DMA callee `relax` is false, so the global guard is
+                    // unaffected for all other code.
+                    let mut guard = DmaElementClosureRelaxScope::enter_with(ctxt, relax);
+                    let ctxt: &mut BridgeCtxt<'_> = &mut guard;
                     let _ = ty::translate_ty(ctxt, canonical.callee_ty);
                     if intrinsic::intrinsic_kind_for_def_id(
                         ctxt.input.tcx,
@@ -2355,6 +2652,38 @@ fn scan_terminator_for_synthesis<'tcx>(
                                 &callee_def_path,
                                 canonical.callee_def_id,
                             )?;
+                        }
+                    }
+                }
+            }
+        }
+        // dma-management T13: if this call is a recognized `dma_element_*`
+        // intrinsic, record the DefPathHash of every closure passed as an
+        // argument, so the later (per-closure, not per-call) closure-instance
+        // construction pass can relax the closure-reified-sig HRTB carve-out for
+        // exactly these closures. A non-DMA closure is never recorded here.
+        if let rustc_middle::mir::Operand::Constant(constant) = func {
+            if let TyKind::FnDef(def_id, generic_args) = constant.const_.ty().kind() {
+                if let Ok(canonical) =
+                    canonicalize_call_site_callee(ctxt.input.tcx, *def_id, generic_args)
+                {
+                    if matches!(
+                        intrinsic::intrinsic_kind_for_def_id(ctxt.input.tcx, canonical.callee_def_id),
+                        Some(regseq_model::IntrinsicKind::Dma(regseq_model::DmaOp::ElementAccess {
+                            ..
+                        }))
+                    ) {
+                        for arg in args.iter() {
+                            let arg_ty = arg.node.ty(local_decls, ctxt.input.tcx);
+                            if let TyKind::Closure(closure_def_id, _) = arg_ty.kind() {
+                                let hash = ctxt.input.tcx.def_path_hash(*closure_def_id);
+                                ctxt.dma_element_closure_defs.insert(DefPathHash {
+                                    stable_crate_id: StableCrateId(
+                                        hash.stable_crate_id().as_u64(),
+                                    ),
+                                    local_hash: hash.local_hash().as_u64(),
+                                });
+                            }
                         }
                     }
                 }
@@ -2752,6 +3081,30 @@ fn construct_instances_and_resolve_cross_references(
     // recorded — the same placement discipline, and the first pass that both
     // consumes and produces context markings (all intraprocedural/lexical, I04).
     synchronization::analyse_sync_contexts(&mut ctxt.model)?;
+    // DMA-management coherent-region call-site recognition (dma-management
+    // construct, M1 region path): walk the materialized bodies and record each
+    // `element_access` closure-borrow site (verb + view type `V` + index +
+    // lexical extent) onto its `DmaRegion` resource facts, disambiguating the
+    // generic read/write/update verbs from `Mmio<T>`'s by the receiver resource
+    // type (GRILL T06/T08). Runs here — after the bodies are materialized and the
+    // item sort has re-keyed `dma.drivers` — the same placement discipline as
+    // `synchronization::recognise_acquire_sites`.
+    dma::recognise_dma_region_sites(&mut ctxt.model)?;
+    // DMA-management streaming recognition + the fallibility lint (dma-management
+    // construct, M2/T07 + M2/T17): record `dma::stream(buf, flow)` sites into the
+    // owning driver's `streams` table, and reject a DISCARDED `Result` from a
+    // fallible DMA op (`stream`/`stage_transfer`/`start_transfer`/`remaining_bytes`
+    // — including the explicit `let _ = …` form `unused_must_use` misses, GRILL
+    // C10/I06). Runs right after the region call-site pass — same placement
+    // discipline.
+    dma::recognise_dma_streams_and_fallibility(&mut ctxt.model)?;
+    // DMA-management `stage_transfer` endpoint verify (dma-management construct,
+    // M3/T20, GRILL C06/I07): reject the bare `stage_transfer(&DmaRegion<T>)`
+    // anti-form (a region passed directly instead of a `region.span(range)`). The
+    // span-bounds (OOB/zero-length) check fires at span recognition; this pass owns
+    // the anti-form check. Runs after `recognise_dma_region_sites` recorded the
+    // region field markers it chases.
+    dma::validate_stage_transfer_endpoints(&ctxt.model)?;
     Ok(())
 }
 
@@ -3731,7 +4084,16 @@ fn resolve_closure_scratch(
     if !matches!(closure_rustc_ty.kind(), TyKind::Closure(..)) {
         return Ok(None);
     }
-    let closure_ty_id = ty::translate_ty(ctxt, closure_rustc_ty)?;
+    // dma-management T13: this per-closure pass runs after the call-site relax
+    // window has closed, so re-establish the narrow closure-reified-sig carve-out
+    // for exactly the closures recorded as DMA element-access arguments (and only
+    // those). The guard restores the flag on every exit; the shape gate keeps
+    // every non-closure-self binder rejected even within the window.
+    let relax = ctxt.dma_element_closure_defs.contains(&closure_hash);
+    let closure_ty_id = {
+        let mut guard = DmaElementClosureRelaxScope::enter_with(ctxt, relax);
+        ty::translate_ty(&mut guard, closure_rustc_ty)?
+    };
     let captures_struct_ty_id = match ctxt
         .model
         .closure_captures_struct_ty
