@@ -17,6 +17,7 @@ use regseq_model::{
 mod assign;
 mod atomic;
 mod clock;
+mod deferred_work;
 pub mod body;
 pub mod const_;
 pub mod def_path;
@@ -683,6 +684,13 @@ pub enum BridgeError {
     /// deferred-surface rejections (e.g. `AllWaiters` cardinality).
     #[error("synchronization validation: {0}")]
     SynchronizationValidation(SyncDiagnostic),
+
+    /// A deferred-work-item-scheduling frontend check failed
+    /// (deferred-work-item-scheduling construct, contract C06 — the `DWS-ERR-*`
+    /// recognition/binding set). There is no L2 binding for this construct
+    /// (0 L1 / 0 L2 properties, GRILL D02), so there is no `DWS-L2-*` family.
+    #[error("deferred-work-item-scheduling validation: {0}")]
+    DeferredWorkValidation(DeferredWorkDiagnostic),
 }
 
 /// Per-construct atomic-memory-access-and-ordering (atomicity) frontend
@@ -1225,6 +1233,105 @@ pub enum ClockDiagnostic {
         method: String,
         /// The receiver type the method is declared on.
         receiver: String,
+    },
+}
+
+/// Per-construct deferred-work-item-scheduling frontend diagnostics
+/// (deferred-work-item-scheduling construct, contract C06; GRILL D04/D10/D17,
+/// G4/G5/G6). Carried by [`BridgeError::DeferredWorkValidation`]. The `DWS-ERR-*`
+/// family is the whole frontend set — there is no L2 binding (0 L1 / 0 L2
+/// properties, GRILL D02), so there is no `DWS-L2-*` half. This is the v1 BUILT
+/// subset; the design-in IDs (`DWS-ERR-BARE-WH-AMBIGUOUS` for ≥2 `Work`,
+/// `DWS-ERR-EXCLUDED-PRIMITIVE`, `DWS-ERR-COLLAPSE-WITH-TIMER`) are NOT added
+/// (append-only later). Concrete numbering is blessed here within the locked
+/// `DWS-ERR-*` family (GRILL D17).
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum DeferredWorkDiagnostic {
+    /// `DWS-ERR-HANDLER-SIGNATURE`: a `#[rseq::work_handler]` method whose
+    /// signature is not the required `fn(&mut self)` shape — wrong receiver
+    /// (must be `&mut self`) or a non-`()` return (a deferred-work handler runs
+    /// in thread context and returns nothing, GRILL G2/I01).
+    #[error(
+        "DWS-ERR-HANDLER-SIGNATURE: driver `{driver}` work handler `{method}`: {detail} \
+         (a `#[rseq::work_handler]` must be `fn(&mut self)` returning `()`)"
+    )]
+    HandlerSignature {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The handler method name.
+        method: String,
+        /// What is wrong with the signature.
+        detail: String,
+    },
+    /// `DWS-ERR-REQUIRED-WORK-NO-HANDLER`: a required `Work` resource with no
+    /// bound `#[rseq::work_handler]` (a `Work` you can never run is broken — the
+    /// analogue of a required `Clock` with no resolved section, GRILL G5).
+    #[error(
+        "DWS-ERR-REQUIRED-WORK-NO-HANDLER: driver `{driver}` declares a required `Work` field \
+         `{field}` with no bound `#[rseq::work_handler]` (a required Work needs exactly one handler)"
+    )]
+    RequiredWorkNoHandler {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending `Work` field name.
+        field: String,
+    },
+    /// `DWS-ERR-DUPLICATE-HANDLER`: two `#[rseq::work_handler]` methods bound to
+    /// the same `Work` resource (a `Work` has exactly one handler, GRILL D10).
+    /// Fires with a single `Work` resource (the ≥2-`Work` ambiguity is the
+    /// design-in `DWS-ERR-BARE-WH-AMBIGUOUS`, NOT built).
+    #[error(
+        "DWS-ERR-DUPLICATE-HANDLER: driver `{driver}` binds more than one `#[rseq::work_handler]` \
+         to the `Work` field `{field}` (a Work has exactly one handler)"
+    )]
+    DuplicateHandler {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The over-bound `Work` field name.
+        field: String,
+    },
+    /// `DWS-ERR-BARE-WH-ZERO-WORK`: a bare `#[rseq::work_handler]` on a driver
+    /// that declares no `Work` resource (the bare handler binds the sole `Work`;
+    /// with zero `Work` there is nothing to bind, GRILL G6/D10).
+    #[error(
+        "DWS-ERR-BARE-WH-ZERO-WORK: driver `{driver}` method `{method}` is a `#[rseq::work_handler]` \
+         but the driver declares no `Work` resource (the bare handler binds the sole Work)"
+    )]
+    BareHandlerZeroWork {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The handler method name.
+        method: String,
+    },
+    /// `DWS-ERR-SPOOFED-RECEIVER`: a `#[rseq::intrinsic("deferred_work_submit")]`
+    /// tag on a method whose receiver is not the `Work` resource shell — a
+    /// spoofed submit op (the `submit` op exists only on `Work`, GRILL D11,
+    /// mirror clock N22), OR a `.submit()` whose receiver is not a direct field
+    /// path to a bound `Work` (aliases/projections are design-in, NOT built).
+    #[error(
+        "DWS-ERR-SPOOFED-RECEIVER: a `deferred_work_submit` op has receiver `{receiver}`, not a \
+         direct field path to a bound `Work` resource (submit exists only on a directly-named Work field)"
+    )]
+    SpoofedReceiver {
+        /// The receiver type / path the submit op resolves to.
+        receiver: String,
+    },
+    /// `DWS-ERR-UNSUPPORTED-FORM`: a recognized `Work` field in a form v1 does
+    /// not build — `Option<Work>` / `[Work; N]` / `Vec<Work>` / `&Work`. v1
+    /// builds only the required single `Work` form (GRILL D01/T04; their
+    /// *rejection* is built, their *support* is design-in).
+    #[error(
+        "DWS-ERR-UNSUPPORTED-FORM: driver `{driver}` work field `{field}` uses the unsupported \
+         `{form}` form; v1 builds only the required single `Work` form \
+         (`Option<Work>`/`[Work; N]`/`Vec<Work>`/`&Work` are designed-in, not built)"
+    )]
+    UnsupportedForm {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+        /// The recognized-but-rejected form (e.g. `Option<Work>`).
+        form: String,
     },
 }
 
@@ -2646,6 +2753,12 @@ fn construct_instances_and_resolve_cross_references(
     // drain, exactly like the lifecycle callbacks. The pending attribute
     // records are finalised after the late-item barriers below.
     let pending_isr_attrs = interrupt::resolve_isrs(ctxt)?;
+    // Deferred-work-item-scheduling: discover + validate + bind the
+    // #[rseq::work_handler] handlers and force-materialize their instances before
+    // the drain, exactly like the lifecycle callbacks / ISRs (so the handler
+    // body exists for the backend wrapper). The pending attribute records are
+    // finalised after the late-item barriers below.
+    let pending_work_attrs = deferred_work::resolve_work_handlers(ctxt)?;
     body::run_phase5_body_passes(ctxt)?;
     // Body materialisation calls `translate_const`, which can synthesise
     // late `ConstMemoryStatic` pending items for reference-typed const
@@ -2725,6 +2838,11 @@ fn construct_instances_and_resolve_cross_references(
     // has materialized their bodies — record the `AttrData::IsrBinding`
     // markers and compute the `IrqResult` arm-reachability facts.
     interrupt::finalise_isrs(ctxt, pending_isr_attrs)?;
+    // Deferred-work-item-scheduling finalisation: every barrier above has given
+    // the handler function Items their final `ItemId`s and the drain has
+    // materialized their bodies — record the `AttrData::WorkHandler` markers
+    // (mirror `finalise_isrs`, minus the IrqResult arm-reachability pass).
+    deferred_work::finalise_work_handlers(ctxt, pending_work_attrs)?;
     // Timed-cpu-delay-and-sleep frontend context legality (TCD construct,
     // C05/D05): reject a `sleep` intrinsic call lexically within a marked
     // `#[rseq::isr]` handler body. Runs last — after the handler bodies are
@@ -2744,6 +2862,13 @@ fn construct_instances_and_resolve_cross_references(
     // (so the lock fields recognized in Phase 4 are looked up under their final
     // `ItemId`s) — the same placement discipline as `validate_isr_no_sleep`.
     synchronization::recognise_acquire_sites(&mut ctxt.model)?;
+    // Deferred-work-item-scheduling submit-site recognition: walk the
+    // materialized bodies and record each `self.work.submit()` direct-field-path
+    // call on its bound `Work` resource (rejecting a non-direct receiver). Runs
+    // here — after the bodies are materialized and the item sort has re-keyed
+    // `deferred_work.drivers` — the same placement discipline as the sync
+    // acquire-site pass (Codex pre-finalize BLOCKING-2).
+    deferred_work::recognise_submit_sites(&mut ctxt.model)?;
     // Synchronization context-marking analysis (M3 — the thesis component):
     // produce the spinlock-held atomic-section markings over each spinning-kind
     // guard's (approximated) live range, and run the §7.1 ISR-legality / §7.2

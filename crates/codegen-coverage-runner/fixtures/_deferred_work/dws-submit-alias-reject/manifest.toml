@@ -1,0 +1,12 @@
+name   = "dws-submit-alias-reject"
+kind   = "rust"
+# C06 (built): `submit` through a local alias (`let w = &self.work; w.submit()`)
+# is NOT a direct field path to the bound `Work`; v1 recognizes `Work::submit`
+# only on a direct field path (GRILL D11 + Out-of-Scope: alias/projection
+# receiver recognition is design-in). Rejected at the bridge (acquire) stage.
+covers = ["DWS-6"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "DWS-ERR-SPOOFED-RECEIVER"

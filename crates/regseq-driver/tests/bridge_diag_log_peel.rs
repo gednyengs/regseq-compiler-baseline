@@ -390,6 +390,8 @@ fn run_bridge_phase5_peels_all_four_severities() {
                         // Pinctrl-construct markers; this fixture produces none.
                         AttrData::PinctrlResource { .. } => {}
                         AttrData::PinStateMarker { .. } => {}
+                        // Deferred-work handler marker; this fixture produces none.
+                        AttrData::WorkHandler { .. } => {}
                     }
                 }
             }

@@ -165,6 +165,21 @@ pub enum AttrData {
         /// The interned pin-state name (`#[rseq::pin_state(id = "…")]`).
         id: StringId,
     } = 8,
+    /// Deferred-work handler-binding method marker (`#[rseq::work_handler]`,
+    /// deferred-work-item-scheduling construct), stored in
+    /// `DomainAttrTables.item_attrs` on the author-declared
+    /// `fn(&mut self)` method item. The bare form (`field = None`) binds the
+    /// sole `Work` resource (the only built form, GRILL D06/D10); the explicit
+    /// `field = "…"` target (`Some`) is design-in for the multi-`Work` future
+    /// and NOT built. The joined per-driver facts (the bound handler
+    /// `InstanceRef` + submit sites) live in the `DeferredWorkTables` sibling
+    /// table. Appended at discriminant 9 (next-free after `PinStateMarker = 8`),
+    /// append-only (GRILL D04/I06).
+    WorkHandler {
+        /// The interned explicit `field = "…"` target, `None` for the bare form
+        /// (which resolves against exactly one `Work`). Only `None` is built.
+        field: Option<StringId>,
+    } = 9,
 }
 
 /// Closed, append-only framework-type taxonomy.
@@ -246,6 +261,16 @@ pub enum IntrinsicKind {
     /// they have no `IntrinsicKind`. Appended at discriminant 8, preserving the
     /// discriminants above (GRILL D04/D09/C03).
     Pinctrl(PinctrlOp) = 8,
+    /// Deferred-work-item-scheduling operation family
+    /// (deferred-work-item-scheduling construct). The author op on a typed
+    /// driver-local `Work` resource (`submit()`), tagged via the facade
+    /// `#[rseq::intrinsic("deferred_work_submit")]` marker. The compiler-managed
+    /// `init_work`/`cancel_work` are NOT intrinsics — they are synthesized from
+    /// the `Work` *field* (the `model.deferred_work` resource), so they have no
+    /// `IntrinsicKind`. `DeferredWorkOp::SubmitUnique` is reserved (not added)
+    /// until `submit_unique` is built. Appended at discriminant 9, preserving
+    /// the discriminants above (GRILL D04/D16/C03).
+    DeferredWork(DeferredWorkOp) = 9,
 }
 
 /// Config-space operation carried by [`IntrinsicKind::Config`]
@@ -422,6 +447,22 @@ pub enum PinctrlOp {
     ApplyState = 0,
 }
 
+/// Deferred-work-item-scheduling author operation carried by
+/// [`IntrinsicKind::DeferredWork`] (deferred-work-item-scheduling construct).
+/// This corresponds to the `#[rseq::intrinsic("deferred_work_submit")]`-tagged
+/// `submit()` method on the `Work` resource. Closed, append-only — `SubmitUnique`
+/// is reserved (not added) until `submit_unique` is built (GRILL D04/G4, Out of
+/// Scope). The compiler-managed `init_work`/`cancel_work` are NOT ops (they are
+/// synthesized from the `Work` field, not author-called intrinsics).
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum DeferredWorkOp {
+    /// `deferred_work_submit`: schedule the bound handler to run later in
+    /// sleepable thread context (`self.work.submit()`). Author-called,
+    /// infallible-at-surface (`-> ()`, GRILL I07).
+    Submit = 0,
+}
+
 impl IntrinsicKind {
     /// Closed-vocabulary lookup from dash-form attribute NAME to an
     /// intrinsic kind.
@@ -480,6 +521,12 @@ impl IntrinsicKind {
             // `acquire_pinctrl`/`release_pinctrl` are compiler-managed (not
             // author-called intrinsics).
             "pinctrl_apply" => Some(IntrinsicKind::Pinctrl(PinctrlOp::ApplyState)),
+            // Deferred-work-item-scheduling intrinsic (underscore form, matching
+            // the facade `#[rseq::intrinsic("deferred_work_submit")]` tag).
+            // `submit_unique` is NOT in the vocabulary (reserved, Out of Scope)
+            // and `init_work`/`cancel_work` are compiler-managed, not
+            // author-called intrinsics.
+            "deferred_work_submit" => Some(IntrinsicKind::DeferredWork(DeferredWorkOp::Submit)),
             _ => None,
         }
     }
@@ -1423,6 +1470,88 @@ mod tests {
     }
 
     #[test]
+    fn deferred_work_from_name_round_trip_and_discriminants() {
+        // Deferred-work-item-scheduling: the `deferred_work_submit` author op
+        // maps from its underscore-form NAME, round-trips through JSON, and the
+        // `DeferredWork` family appends at IntrinsicKind discriminant 9 with
+        // every prior family unmoved (Log=0 / Mmio=1 / PollUntil=2 / Config=3 /
+        // BusyWait=4 / Sleep=5 / Atomic=6 / Clock=7 / Pinctrl=8).
+        assert_eq!(
+            IntrinsicKind::from_name(symbol("deferred_work_submit")),
+            Some(IntrinsicKind::DeferredWork(DeferredWorkOp::Submit))
+        );
+        assert_json_round_trip(IntrinsicKind::DeferredWork(DeferredWorkOp::Submit));
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Log(LogLevel::Debug)), 0);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Mmio(MmioOp::Read)), 1);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::PollUntil), 2);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)), 3);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::BusyWait), 4);
+        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Sleep), 5);
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::Atomic(AtomicOp::Load)),
+            6
+        );
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::Clock(ClockOp::Enable)),
+            7
+        );
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::Pinctrl(PinctrlOp::ApplyState)),
+            8
+        );
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::DeferredWork(DeferredWorkOp::Submit)),
+            9
+        );
+        // `AttrData::Intrinsic` stays at 0 regardless of which family it carries.
+        assert_eq!(
+            attr_data_tag(&AttrData::Intrinsic(IntrinsicKind::DeferredWork(
+                DeferredWorkOp::Submit
+            ))),
+            0
+        );
+        // `submit_unique` is reserved (Out of Scope); `init_work`/`cancel_work`
+        // are compiler-managed (not intrinsics); dash-form is rejected (deferred
+        // work uses underscore form, matching the facade tag).
+        assert_eq!(IntrinsicKind::from_name(symbol("deferred_work_submit_unique")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("submit_unique")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("init_work")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("cancel_work")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("acquire_work")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("deferred-work-submit")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("deferred_work")), None);
+        assert_eq!(IntrinsicKind::from_name(symbol("submit")), None);
+    }
+
+    #[test]
+    fn deferred_work_op_inner_discriminants_are_stable() {
+        // `DeferredWorkOp` is fieldless, so `as u8` yields its pinned discriminant.
+        assert_eq!(DeferredWorkOp::Submit as u8, 0);
+    }
+
+    #[test]
+    fn attr_data_work_handler_discriminant_and_round_trip() {
+        // The `WorkHandler` item-attr variant appends at AttrData discriminant 9
+        // (next-free after `PinStateMarker = 8`) without shifting any prior
+        // variant, and round-trips through JSON for both `field` values (only
+        // the bare `None` form is built; `Some` is design-in).
+        assert_eq!(
+            attr_data_tag(&AttrData::WorkHandler { field: None }),
+            9
+        );
+        assert_eq!(
+            attr_data_tag(&AttrData::PinStateMarker {
+                id: StringId::from_u32(1),
+            }),
+            8
+        );
+        assert_eq!(attr_data_tag(&attr(LogLevel::Debug)), 0);
+        for field in [None, Some(StringId::from_u32(4))] {
+            assert_json_round_trip(AttrData::WorkHandler { field });
+        }
+    }
+
+    #[test]
     fn attr_data_and_intrinsic_kind_discriminants_have_no_collision() {
         // Explicit no-collision check (PLAN T01/T12/T25): the clock AND pinctrl
         // additions (AttrData::{PinctrlResource, PinStateMarker} +
@@ -1457,6 +1586,7 @@ mod tests {
             AttrData::PinStateMarker {
                 id: StringId::from_u32(1),
             },
+            AttrData::WorkHandler { field: None },
         ];
         let attr_tags: std::collections::BTreeSet<u8> =
             attr_variants.iter().map(attr_data_tag).collect();
@@ -1476,6 +1606,7 @@ mod tests {
             IntrinsicKind::Atomic(AtomicOp::Load),
             IntrinsicKind::Clock(ClockOp::Enable),
             IntrinsicKind::Pinctrl(PinctrlOp::ApplyState),
+            IntrinsicKind::DeferredWork(DeferredWorkOp::Submit),
         ];
         let intrinsic_tags: std::collections::BTreeSet<u8> =
             intrinsic_variants.iter().map(intrinsic_kind_tag).collect();

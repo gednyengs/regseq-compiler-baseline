@@ -1,0 +1,11 @@
+name   = "dws-vec-form-reject"
+kind   = "rust"
+# C06 (built): `Vec<Work>` — the dynamic-collection form (the extra Adt case
+# beyond clock/interrupt), design-in not built (GRILL D01/T04). Rejected at the
+# bridge stage.
+covers = ["DWS-6"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "DWS-ERR-UNSUPPORTED-FORM"
