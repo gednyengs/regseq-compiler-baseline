@@ -26,8 +26,10 @@
 //! lifecycle ops are synthesized from the region *field* in the backend preamble,
 //! not author-called. The slave `DmaChannel` + streaming recognition is M2 (T07).
 
+mod layout;
 mod recognition;
 
+pub(crate) use layout::verify_dma_layout;
 pub(crate) use recognition::{
     is_dma_channel_field, is_dma_region_field, materialise_dma_completions, materialise_dma_regions,
     recognise_dma_region_sites, recognise_dma_streams_and_fallibility,

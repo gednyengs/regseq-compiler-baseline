@@ -532,6 +532,14 @@ pub const DMA_HELPERS: &str = r#"
 #ifndef REGSEQ_DMA_REGION_BYTES
 #define REGSEQ_DMA_REGION_BYTES 65536u  /* per-region backing slab cap */
 #endif
+/* The symbolic byte length a streaming `dma::stream(buf, flow)` maps. The mapped
+ * buffer's length is not on the L1 surface call (it is platform/runtime-derived),
+ * so the generic-c host model uses a fixed non-zero symbolic length — the gc-shape
+ * streaming oracle asserts the map/acquire/release/unmap CALL SEQUENCE, not exact
+ * lengths (dma-management M4/T15). */
+#ifndef REGSEQ_DMA_STREAM_LEN
+#define REGSEQ_DMA_STREAM_LEN 4096u
+#endif
 /* The backing store is a heap pointer from an ALIGNED allocator (NOT an inline
  * `unsigned char buf[]`): an inline array carries only `unsigned char` alignment,
  * so a typed store/memcpy at the element stride would assume an alignment the

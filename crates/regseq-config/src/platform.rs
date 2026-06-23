@@ -103,13 +103,12 @@ pub struct PinctrlBindingSpec {
     pub pin_states: Vec<String>,
 }
 
-/// One `[dma.<id>]` region binding parsed from a platform file (dma-management
-/// construct, contract C02). Structural parse only: every key is captured as a
-/// typed scalar; the presence/consistency checks (and the
-/// `region_cache_maintenance` vocabulary) are the `regseq-l2` dma tenant's. All
-/// fields are `Option` at parse time (mirroring `ClockBindingSpec`). This is the
-/// M1 region subset; the slave-channel keys (`endpoint_addr_width`,
-/// `endpoint_max_burst_beats`, cap flags) are the M2 extension.
+/// One `[dma.<id>]` binding parsed from a platform file (dma-management construct,
+/// contract C02). Structural parse only: every key is captured as a typed scalar;
+/// the presence/consistency checks (the `region_cache_maintenance` vocabulary, the
+/// capability `present|absent|unknown` vocabulary, and the D07 `absent`-only-in-a-
+/// concrete-binding rule) are the `regseq-l2` dma tenant's. All fields are `Option`
+/// / empty at parse time (mirroring `ClockBindingSpec`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DmaBindingSpec {
     /// `device_address_bits` (was `dma_mask`); the addressable bus-address width.
@@ -120,6 +119,20 @@ pub struct DmaBindingSpec {
     /// `region_cache_maintenance` token, verbatim (`"none"` | `"per_access"`);
     /// the closed-vocabulary check is the `regseq-l2` dma tenant's (GRILL D03).
     pub region_cache_maintenance: Option<String>,
+    /// `binding_scope` token, verbatim — the binding's resolution scope (GRILL D07).
+    /// OMITTED ⇒ a CONCRETE binding (a fully-resolved controller/channel). A
+    /// `"template"` / `"family"` / `"conditional"` binding is non-concrete: a
+    /// capability `cap_* = "absent"` is NOT authoritative there (the resolved
+    /// controller is unknown), so the dma tenant rejects an `absent` in a
+    /// non-concrete binding (D07). The vocabulary check is the `regseq-l2` tenant's.
+    pub binding_scope: Option<String>,
+    /// The `cap_<name> = "<value>"` capability flags, captured verbatim, keyed by
+    /// the capability name (e.g. `pause`/`cyclic`). Value vocabulary
+    /// `present | absent | unknown` (GRILL C02/D07) is the `regseq-l2` tenant's; an
+    /// omitted capability is absence in this map (⇒ `unknown`). The capability OPS
+    /// themselves are designed-not-built this cycle; only the L2 `absent`-in-a-
+    /// non-concrete-binding rejection is buildable (PLAN T21).
+    pub capabilities: BTreeMap<String, String>,
 }
 
 /// The L2 bindings parsed from a platform file: the `[mmio.<id>]` and
@@ -638,10 +651,34 @@ fn parse_dma_section(id: &str, section: &toml::Table) -> Result<DmaBindingSpec, 
         Some(toml::Value::String(s)) => Some(s.clone()),
         Some(_) => return Err(bad("region_cache_maintenance", "expected a string".to_string())),
     };
+    // `binding_scope` (GRILL D07): the binding's resolution scope. A string token,
+    // verbatim; the vocabulary (`concrete`/`template`/`family`/`conditional`) + the
+    // `absent`-only-in-concrete rule are the `regseq-l2` dma tenant's.
+    let binding_scope = match section.get("binding_scope") {
+        None => None,
+        Some(toml::Value::String(s)) => Some(s.clone()),
+        Some(_) => return Err(bad("binding_scope", "expected a string".to_string())),
+    };
+    // `cap_<name> = "<value>"` capability flags (GRILL C02/D07): every key prefixed
+    // `cap_` is captured verbatim under its bare name (`cap_pause` ⇒ `pause`). The
+    // value must be a string (the `present|absent|unknown` vocabulary check is the
+    // dma tenant's).
+    let mut capabilities = BTreeMap::new();
+    for (key, value) in section {
+        let Some(cap_name) = key.strip_prefix("cap_") else {
+            continue;
+        };
+        let toml::Value::String(token) = value else {
+            return Err(bad(key, "a `cap_*` capability flag must be a string".to_string()));
+        };
+        capabilities.insert(cap_name.to_string(), token.clone());
+    }
     Ok(DmaBindingSpec {
         device_address_bits,
         alignment,
         region_cache_maintenance,
+        binding_scope,
+        capabilities,
     })
 }
 

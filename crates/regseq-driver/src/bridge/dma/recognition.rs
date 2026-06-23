@@ -1777,11 +1777,15 @@ fn dma_region_id_at(model: &RegseqModel, fp: &FieldPath) -> Option<StringId> {
     })
 }
 
-/// The FIRST type generic arg `TyId` of the callee instance (the
-/// `region.<verb>::<V>(…)` view type `V`), or `None` when the callee has no type
-/// generic arg (no turbofish). Mirrors pinctrl's `apply::<S>` generic-arg
-/// resolution; the call-site recognition reads the `TyId` (for `V`'s layout) and
-/// derives the interned name via [`type_name`].
+/// The FIRST type generic arg `TyId` of the callee instance, recorded by M1 as a
+/// best-effort `view_type`/`view_layout` carrier. NOTE: for a
+/// `DmaRegion::<T>::write::<V, F>` instance this is the region's declared `T`, NOT
+/// the method-level reinterpret view `V` (the generic args are `[T, V, F=closure]`
+/// and `V` is only unambiguously recoverable by peeling the closure `F`'s rust-call
+/// sig, which needs `TyCtxt`). So this M1 carrier is exact for the common `V = T`
+/// case and a documented best-effort otherwise; the load-bearing C03 reinterpret
+/// check reads `V` directly off the closure sig in the TyCtxt-aware M4/T19 verify
+/// pass (`dma::layout::element_access_view_rustc`), NOT from this field.
 fn first_type_arg_ty(model: &RegseqModel, callee: regseq_model::InstanceId) -> Option<TyId> {
     model.instances[callee]
         .generic_args
@@ -1829,6 +1833,75 @@ fn type_name(model: &RegseqModel, ty: TyId) -> Option<StringId> {
         }
         _ => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// M4/T19 layout-verify helpers (thin `pub(crate)` re-exports of the private
+// receiver/const/element-type resolvers so `dma::layout::verify_dma_layout` can
+// reuse the exact recognition logic rather than re-deriving it).
+// ---------------------------------------------------------------------------
+
+/// Recover the `(driver item, region id)` a DMA element-access receiver names, for
+/// the M4/T19 layout verify pass (a `pub(crate)` shim over the private
+/// [`recover_dma_region_receiver`] so the verify pass reuses the SAME receiver
+/// chase the recognition uses — no drift).
+pub(crate) fn recover_region_for_layout(
+    model: &RegseqModel,
+    body: &Body,
+    recv: &Operand,
+) -> Option<(ItemId, StringId)> {
+    recover_dma_region_receiver(model, body, recv)
+}
+
+/// Read a direct unsigned-integer constant operand (the static element index `i`)
+/// for the M4/T19 layout verify pass (`pub(crate)` shim over [`const_uint_operand`]).
+pub(crate) fn const_uint_for_layout(model: &RegseqModel, op: &Operand) -> Option<u64> {
+    const_uint_operand(model, op)
+}
+
+/// The `DmaRegion<T>` element type `T` of a field type, for the M4/T19 layout
+/// verify pass (`pub(crate)` shim over the private [`dma_region_element_ty`]).
+pub(crate) fn dma_region_element_ty_pub<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+    dma_region_element_ty(tcx, ty)
+}
+
+/// Read the `id = "…"` of a `#[rseq::dma_region(...)]` attribute, for the M4/T19
+/// verify pass's region-id → declared-`T` map. Returns the id string, or `None`
+/// when the attribute is absent/malformed (the verify pass then SKIPs that field).
+pub(crate) fn dma_region_attr_id(attr: &Attribute) -> Option<String> {
+    let Attribute::Unparsed(item) = attr else {
+        return None;
+    };
+    let AttrArgs::Delimited(delim) = &item.args else {
+        return None;
+    };
+    if delim.delim != Delimiter::Parenthesis {
+        return None;
+    }
+    let mut iter = delim.tokens.iter().peekable();
+    while iter.peek().is_some() {
+        let Some(TokenTree::Token(key_tok, _)) = iter.next() else {
+            return None;
+        };
+        let key = key_tok.ident().map(|(ident, _)| ident.name)?;
+        match iter.next() {
+            Some(TokenTree::Token(tok, _)) if matches!(tok.kind, TokenKind::Eq) => {}
+            _ => return None,
+        }
+        let value = iter.next();
+        if key.as_str() == "id" {
+            return expect_str_lit(value).filter(|s| !s.trim().is_empty());
+        }
+        // Skip to the next `,`-separated key.
+        match iter.peek() {
+            None => break,
+            Some(TokenTree::Token(tok, _)) if matches!(tok.kind, TokenKind::Comma) => {
+                iter.next();
+            }
+            _ => return None,
+        }
+    }
+    None
 }
 
 /// Read a direct unsigned-integer constant operand (the element index `i`), or

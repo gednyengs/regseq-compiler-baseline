@@ -14,6 +14,10 @@ kind   = "rust"
 # Run by the dedicated sole-binary `dma_e1000_region_e2e` ONLY (clean-process
 # interner isolation, like e1000_composed_e2e / clock-pl011-static): the emit's
 # MIR byte-snapshot is reproducible only in a dedicated process.
-covers = ["DMA-1", "DMA-A2", "DMA-FENCE", "DMA-LIFECYCLE"]
+# The E1000 coherent half exercises: region alloc/free lifecycle (DMA-1), A2
+# addressing (DMA-2), element_access (DMA-3), the store_order fence (DMA-4), and
+# the generic-c host DMA model (DMA-12). Numeric DMA-N row ids match the Doc-1
+# matrix (`is_row_id`: `[A-Z]{2,3}-\d+`); `dma_covers.rs` is the coverage gate.
+covers = ["DMA-1", "DMA-2", "DMA-3", "DMA-4", "DMA-12"]
 lifecycle_scenario = "orderly"
 expect = "pass"

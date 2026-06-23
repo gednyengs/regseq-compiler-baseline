@@ -961,6 +961,58 @@ pub enum DmaDiagnostic {
         /// What is out of bounds (OOB end, or zero-length).
         detail: String,
     },
+    /// `DMA-ERR-LAYOUT-VERIFY`: the C03 layout verify rule (dma-management M4/T19,
+    /// GRILL C03/D08) found a `#[rseq::dma_region]` declaration or an
+    /// `element_access` reinterpret view that violates a layout clause: the
+    /// declared `T` or an access view `V` is not `Sized + DmaPod` (repr(C) POD: no
+    /// Drop, no refs/pointers, no DST/`dyn`, no unresolved generics), or
+    /// `size_of::<V>() > element_size`, or `align_of::<V>() > region_alignment`, or
+    /// `element_size % align_of::<V>() != 0`, or a static index `i` is out of
+    /// `[0, element_count)`. The diagnostic NAMES the violated clause (C03). This
+    /// is the full per-access verify; the M1 `DMA-ERR-LAYOUT-MISMATCH` is the
+    /// declaration-time size/align/stride numeric guard.
+    #[error(
+        "DMA-ERR-LAYOUT-VERIFY: region `{region}` violates the layout clause `{clause}`: {detail} \
+         (C03/D08)"
+    )]
+    LayoutVerify {
+        /// The offending region id.
+        region: String,
+        /// The violated C03 clause (e.g. `V: DmaPod (access view)`,
+        /// `size_of::<V>() <= element_size`, `i in [0, element_count)`).
+        clause: &'static str,
+        /// The concrete numbers / POD reason behind the violation.
+        detail: String,
+    },
+}
+
+impl DmaDiagnostic {
+    /// The stable `DMA-ERR-*` diagnostic code for this rejection (dma-management
+    /// M4/T22). The programmatic accessor for the recognition-half diagnostic family
+    /// (the binding-half codes are `DmaL2Error::code` — the `DMA-L2-*` set). Every
+    /// `DmaDiagnostic` variant carries exactly one code, mirroring the embedded
+    /// `#[error("DMA-ERR-…")]` prefix, so the compile-fail oracle corpus can assert a
+    /// rejection by code without string-matching the message body. The full coded
+    /// reject set: recognition + fallibility (T17) + layout (T19) + anti-form/
+    /// direction/span (T20) + the M1 attr/form rejects.
+    pub fn code(&self) -> &'static str {
+        match self {
+            DmaDiagnostic::MissingKey { .. } => "DMA-ERR-MISSING-KEY",
+            DmaDiagnostic::MalformedAttr { .. } => "DMA-ERR-MALFORMED-ATTR",
+            DmaDiagnostic::AttrOnNonRegion { .. } => "DMA-ERR-ATTR-ON-NON-REGION",
+            DmaDiagnostic::UnsupportedForm { .. } => "DMA-ERR-UNSUPPORTED-FORM",
+            DmaDiagnostic::DuplicateId { .. } => "DMA-ERR-DUPLICATE-ID",
+            DmaDiagnostic::LayoutMismatch { .. } => "DMA-ERR-LAYOUT-MISMATCH",
+            DmaDiagnostic::ChannelAttr { .. } => "DMA-ERR-MISSING-DIRECTION",
+            DmaDiagnostic::DiscardedResult { .. } => "DMA-ERR-DISCARDED-RESULT",
+            DmaDiagnostic::CompletionAttr { .. } => "DMA-ERR-COMPLETION-ATTR",
+            DmaDiagnostic::UnknownCompletionChannel { .. } => "DMA-ERR-UNKNOWN-COMPLETION-CHANNEL",
+            DmaDiagnostic::AntiForm { .. } => "DMA-ERR-ANTI-FORM",
+            DmaDiagnostic::DirectionMismatch { .. } => "DMA-ERR-DIRECTION-MISMATCH",
+            DmaDiagnostic::SpanBounds { .. } => "DMA-ERR-SPAN-BOUNDS",
+            DmaDiagnostic::LayoutVerify { .. } => "DMA-ERR-LAYOUT-VERIFY",
+        }
+    }
 }
 
 /// Per-construct atomic-memory-access-and-ordering (atomicity) frontend
@@ -3105,6 +3157,15 @@ fn construct_instances_and_resolve_cross_references(
     // the anti-form check. Runs after `recognise_dma_region_sites` recorded the
     // region field markers it chases.
     dma::validate_stage_transfer_endpoints(&ctxt.model)?;
+    // DMA-management C03 layout verify rule (dma-management construct, M4/T19,
+    // GRILL C03/D08): a TyCtxt-aware pass (the real `DmaPod` predicate reads the
+    // rustc `Ty` of the declared `T` AND every `element_access` reinterpret view
+    // `V`) enforcing `V: Sized + DmaPod`, `size_of::<V>() <= element_size`,
+    // `align_of::<V>() <= region_alignment`, `element_size % align_of::<V>() == 0`,
+    // and `i in [0, element_count)` (static). Runs after `recognise_dma_region_sites`
+    // recorded the per-access view sites; takes the full `BridgeCtxt` so `tcx` is in
+    // hand (the model-only `layout_validator` cannot inspect Drop/refs/generics).
+    dma::verify_dma_layout(ctxt)?;
     Ok(())
 }
 

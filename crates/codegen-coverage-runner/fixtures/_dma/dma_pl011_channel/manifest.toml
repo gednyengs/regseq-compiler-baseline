@@ -18,6 +18,11 @@ kind   = "rust"
 # Run by the dedicated sole-binary `dma_pl011_e2e` ONLY (clean-process interner
 # isolation, like dma_e1000_region_e2e): the emit's MIR byte-snapshot is
 # reproducible only in a dedicated process.
-covers = ["DMA-CHANNEL", "DMA-SPAN", "DMA-COMPLETION", "DMA-LIFECYCLE"]
+# The PL011 channel half exercises: channel transport + lifecycle (DMA-5), the
+# span endpoint (DMA-6), completion registration shape (DMA-7), the region
+# alloc/free lifecycle of its `DmaRegion<u8>` RX buffer (DMA-1), and the host DMA
+# model (DMA-12). Numeric DMA-N row ids match the Doc-1 matrix; `dma_covers.rs`
+# is the coverage gate.
+covers = ["DMA-1", "DMA-5", "DMA-6", "DMA-7", "DMA-12"]
 lifecycle_scenario = "orderly"
 expect = "pass"

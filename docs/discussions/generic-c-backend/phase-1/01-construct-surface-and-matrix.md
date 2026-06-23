@@ -626,6 +626,64 @@ separate parity row, and the rejects stay at their as-built PIN-8/PIN-9 ids.
 | PIN-8 | recognition C06 reject family | acquire-stage `PIN-ERR-*` rejection: missing-id, malformed/unknown attr, attr-on-non-pinctrl, unsupported form (`[PinCtrl;N]`/`Vec<PinCtrl>`/bare `&PinCtrl`), duplicate L1 id, malformed/duplicate/non-ZST/invalid state marker, unresolved generic `S`, author-managed field, spoofed receiver | deferred | GRILL C06/D13/D14 | **PIN-C06-RECOGNITION**: one reject fixture per check, `fires it and only it` via stage+diagnostic |
 | PIN-9 | binding C06 reject family | bind-stage `PIN-L2-*` rejection: missing inventory (required), orphan section, empty states, empty state name, no `default`, duplicate state; SHAPE errors (missing key / non-array / non-string) stay parser-`BadPinctrl` (`PIN-L2-MANY-MATCH` is structurally unreachable — enforced by construction, no fixture) | deferred | GRILL C01/C06/D07 | **PIN-C06-BINDING**: one reject fixture per check, `fires it and only it` via stage+diagnostic |
 
+### DMA-management rows (dma-management unit; M4/M5 generic-c slice, `candidate-prototype`)
+
+The coherent-DMA data path: a typed `DmaRegion<T>` field (`#[rseq::dma_region(id,
+element_size, element_count, alignment?)]`) the author addresses (A2:
+`device_addr`/`device_addr_of`/`element_count`) and accesses element-wise through a
+closure-scoped typed borrow (`read`/`write`/`update`, the two-bit effect carrier); a
+slave `DmaChannel` (`#[rseq::dma_channel(id, direction)]`) with the 5-op transport
+(configure/stage_transfer/start_transfer/stop/remaining_bytes); a streaming
+`DmaStreamBuffer` (`dma::stream` → acquire/release → RAII unmap); the
+direction-neutral `region.span(range)` endpoint; and a completion-binding
+registration shape (`#[rseq::dma_completion(channel)]`). The compiler synthesizes the
+region `alloc_coherent`/`free_coherent` + channel `request_channel`/`release_channel`
+lifecycle framing; the DMA↔MMIO `store_order` fence (`regseq_dma_wmb`) brackets the
+last publishing region store and the MMIO doorbell. The generic-c `regseq_dma_*` host
+DMA device model is the behavioral/codegen-shape oracle (a real coherent backing slab
++ synthetic device addresses + a recorded call sequence). The L2 `[dma.<id>]` schema
+binds `device_address_bits`/`alignment`/`region_cache_maintenance` (region) +
+`binding_scope`/`cap_*` (capability contract). C03 layout-verify, C10 fallibility, and
+T21 capability-gating are the enforcement families.
+
+**Status is `deferred` by the LC/IRQ/CLK/PIN precedent:** the `_dma` fixtures live
+under `fixtures/_dma/` (interner-isolated, nested outside Mode-A `discover`, so a
+`covered` status would mint `covered_without_green` drift in `ledger::build`). The
+REAL coverage gate is the dedicated covers-aggregation test (`tests/dma_covers.rs`),
+which classifies every DMA-* row into FIXTURE-COVERED (a `_dma` six-stage fixture),
+TEST-VERIFIED (a non-fixture witness — a gc-shape test or a bridge/L2 unit test), or
+DESIGNED-NOT-BUILT (an honest deferral with NO witness this cycle). The `_dma`
+six-stage fixtures are `dma_e1000_region` (the E1000 coherent half) + `dma_pl011_channel`
+(the PL011 channel half); the streaming + reject families are TEST-VERIFIED by
+`dma_streaming_gc_shape` / `bridge_dma_recognition` / the `regseq-l2` `dma` tests.
+
+**DESIGNED-NOT-BUILT this cycle (NO coverage, recorded honestly — NOT a green
+cover):** completion DELIVERY/firing (D06 — only the registration shape is built, the
+host model never fires the callback); `completion_marker_order` + `regseq_dma_rmb`
+(D09 — only the `store_order` fence is built); the capability OPS
+(`pause`/`resume`/`stage_circular`/`stage_segments`) + the concrete-`absent` cap-op
+rejection (T21/S08 — only the L2 `absent`-in-a-non-concrete-binding contract is built);
+Linux/Zephyr lowering + Tier-2 (designed in model §7 / design §5, not built).
+
+| id | construct | C lowering | status | spec ref | notes |
+| -- | --------- | ---------- | ------ | -------- | ----- |
+| DMA-1 | region alloc/free lifecycle | `DMA alloc_coherent <id>` after the bus `map` keystone (region declaration order); `DMA free_coherent <id>` LIFO at teardown — compiler-synthesized, never authored | deferred | dma-management GRILL C09/C10/C11, PLAN T12 | **DMA-LIFECYCLE** (FIXTURE-COVERED): `dma_e1000_region`, `dma_pl011_channel` |
+| DMA-2 | region A2 addressing | `device_addr()` → `regseq_dma_region_dev_base(<id>)`; `device_addr_of(i)` → `+ i*element_size`; `element_count()` → the declaration const — NOT `dma_present` triggers | deferred | GRILL FIX1-A2/C09, PLAN T03/T06/T13 | **DMA-A2** (FIXTURE-COVERED): `dma_e1000_region` (TDBA program) |
+| DMA-3 | region element_access verbs | `read`/`write`/`update(i, \|&[mut] V\| …)` closure-scoped typed borrow — typed memcpy at `base+i*element_size` through an aligned temp; the two-bit effect carrier rides as codegen-shape (NO cache op, coherent memory, C01) | deferred | GRILL D01/D02/C01, PLAN T06/T13 | **DMA-ELEMENT** (FIXTURE-COVERED): `dma_e1000_region` (descriptor bytes oracle) |
+| DMA-4 | store_order fence | `regseq_dma_wmb()` between the last publishing region store and the MMIO doorbell — register-access emits the plain doorbell, dma-management inserts ONLY the fence | deferred | GRILL C07/D09, PLAN T16 | **DMA-FENCE** (FIXTURE-COVERED): `dma_e1000_region` (`…stores → wmb → mmio_w32(TDT)` order) |
+| DMA-5 | channel transport + lifecycle | `request_channel`/`release_channel` framing + the 5 transport ops → `regseq_dma_{configure,stage_transfer,start_transfer,stop,remaining_bytes}(<id>…)`; fallible ops build a real `Result` | deferred | GRILL C10/C11, PLAN T07/T14 | **DMA-CHANNEL** (FIXTURE-COVERED): `dma_pl011_channel` (request→configure→stage→start→remaining→stop→release order) |
+| DMA-6 | span endpoint | `region.span(range)` → a value-symbolic `DmaRegionSpan`; the consuming `stage_transfer` re-derives `dev_base + start*element_size` + `len` (element-indexed, direction-neutral) | deferred | GRILL D05/C06, PLAN T09/T20 | **DMA-SPAN** (FIXTURE-COVERED): `dma_pl011_channel` (real span addr/len into `stage_transfer`) |
+| DMA-7 | completion registration shape | `#[rseq::dma_completion(channel)]` → `regseq_dma_register_completion(<channel>)` with the handler + payload type — REGISTRATION ONLY (the host model never fires it, D06) | deferred | GRILL D06/C05, PLAN T09/T18 | **DMA-COMPLETION** (FIXTURE-COVERED): `dma_pl011_channel` (registration emitted, callback never invoked) |
+| DMA-8 | streaming map/acquire/release/unmap | `dma::stream` → `regseq_dma_stream(cpu,len,dir)`; `acquire_from_device`/`release_to_device` → hooks; RAII unmap → `regseq_dma_unmap` at function-exit (scope-exit cleanup; the IR carries no `Drop` terminator) | deferred | GRILL C10/S03, PLAN T15 | **DMA-STREAM** (TEST-VERIFIED): `dma_streaming_gc_shape` (map→release→acquire→unmap order) |
+| DMA-9 | C03 layout-verify reject family | `DMA-ERR-LAYOUT-VERIFY`: `V: Sized + DmaPod` (repr(C) integer/float POD; no Drop/refs/pointers/DST/`dyn`/unresolved-generics/`bool`/`char`/enums), `size_of::<V>() ≤ element_size`, `align_of::<V>() ≤ region_alignment`, `element_size % align_of::<V>() == 0`, static `i ∈ [0,element_count)`, non-const index reject, fail-closed on unresolvable `T`/`V` | deferred | GRILL C03/D08, PLAN T19 | **DMA-C03-LAYOUT** (TEST-VERIFIED): `bridge_dma_recognition` (one bridge reject per clause + neuter-witnessed) |
+| DMA-10 | C10 fallibility lint reject family | `DMA-ERR-DISCARDED-RESULT`: a discarded `Result` from `dma::stream`/`stage_transfer`/`start_transfer`/`remaining_bytes` (incl. the `let _ = …` / `mem::drop` discard forms that `unused_must_use` misses) | deferred | GRILL C10/I06, PLAN T17 | **DMA-C10-FALLIBILITY** (TEST-VERIFIED): `bridge_dma_recognition` (discard rejects) |
+| DMA-11 | T21 capability-gating contract | `DMA-L2-004/005/006`: `binding_scope` vocabulary, `cap_*` value vocabulary, and `cap_* = "absent"` legal ONLY in a concrete binding (a template/family/conditional `absent` → reject); the cap OPS are designed-not-built (DMA-15) | deferred | GRILL D07/C04, PLAN T21 | **DMA-C04-CAPABILITY** (TEST-VERIFIED): `regseq-l2` `dma` tests (absent-in-template reject + neuter-witnessed) |
+| DMA-12 | generic-c host DMA model | the `regseq_dma_*` host device model: a real aligned coherent backing slab + synthetic device addresses + a recorded `DMA <event>` call sequence; emitted for ANY DMA resource (`region`/`channel`/`stream`), distinct from the bus-master `dma_present` flag | deferred | GRILL C11, PLAN T11 | **DMA-HOST-MODEL** (FIXTURE-COVERED): `dma_e1000_region`, `dma_pl011_channel` (the `DMA_HELPERS` prelude + behavioral bytes/trace) |
+| DMA-13 | completion delivery/firing | the host model fires the registered `dma_callback` with a constructed `DmaCompletion` payload — DESIGNED, NOT BUILT (only the DMA-7 registration shape is built; the callback is never invoked this cycle) | deferred | GRILL D06/C05 (designed-not-built) | **DMA-COMPLETION-DELIVERY** (DESIGNED-NOT-BUILT): no witness this cycle |
+| DMA-14 | completion_marker_order / rmb | the DD/phase consume fence: `regseq_dma_rmb()` between a device-written completion marker read and the rest of the slot (FM1/FM3) — DESIGNED, NOT BUILT (only the `store_order` fence is built, DMA-4) | deferred | GRILL D09/C07 (designed-not-built) | **DMA-RMB-ORDER** (DESIGNED-NOT-BUILT): no witness this cycle |
+| DMA-15 | capability ops + concrete-absent reject | the cap-gated ops `pause`/`resume`/`stage_circular_transfer`/`stage_segments` + the concrete-`absent` cap-op compile-fail — DESIGNED, NOT BUILT (only the DMA-11 L2 `absent`-in-non-concrete-binding contract is built; no cap op exists to reject yet, S08) | deferred | GRILL D07/C04/S08 (designed-not-built) | **DMA-CAP-OPS** (DESIGNED-NOT-BUILT): no witness this cycle |
+| DMA-16 | Linux/Zephyr lowering + Tier-2 | the real-backend DMA lowering (Linux `dma_alloc_coherent`/`dmaengine_*`/`dma_wmb`; Zephyr stateful `dma_config`/`dma_start`/cache-op ordering) + a Tier-2 behavioral leg — DESIGNED (model §7, design §5), NOT BUILT this cycle (generic-c only) | deferred | GRILL Out-of-Scope (designed-not-built) | **DMA-OS-LOWERING** (DESIGNED-NOT-BUILT): no witness this cycle |
+
 ---
 
 ## Output of this doc — the gap list

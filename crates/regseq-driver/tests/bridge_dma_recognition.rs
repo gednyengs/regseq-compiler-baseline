@@ -315,6 +315,39 @@ impl DmaChannel {
 pub struct DmaCompletion {
     pub status: u32,
 }
+
+// ---------------------------------------------------------------------------
+// M4 / T19 layout-verify view types: a set of reinterpret view types `V` for the
+// C03 `region.<verb>::<V>(i, …)` layout verify negative tests.
+// ---------------------------------------------------------------------------
+
+// A NON-DmaPod view: a `#[repr(C)]` struct that carries a RAW POINTER field. A
+// host pointer is never a device-visible descriptor field, so this view fails the
+// `V: DmaPod` clause (T19) even though it is repr(C) and Drop-free.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PtrView {
+    pub p: *const u8,
+}
+
+// A NON-repr(C) view: a plain `#[repr(Rust)]` struct whose field order/padding the
+// ABI does not pin — fails the `V: DmaPod` clause (unpinned aggregate layout).
+#[derive(Clone, Copy)]
+pub struct RustView {
+    pub a: u32,
+    pub b: u32,
+}
+
+// An OVERSIZED view: a `#[repr(C)]` 32-byte descriptor. Used as `write::<BigView>`
+// against a 16-byte `element_size` region to trip `size_of::<V>() <= element_size`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BigView {
+    pub a: u64,
+    pub b: u64,
+    pub c: u64,
+    pub d: u64,
+}
 "#;
 
 /// A region driver whose `Lifecycle::on_init` body runs `init_body`, on the given
@@ -1271,5 +1304,258 @@ fn completion_unknown_channel_is_rejected() {
     assert!(
         err.contains("DMA-ERR-UNKNOWN-COMPLETION-CHANNEL") && err.contains("typo"),
         "the reject must name the dangling channel; got: {err}"
+    );
+}
+
+// ===========================================================================
+// M4 / T19 — C03 layout verify rule (the real `DmaPod` predicate + per-access
+// view clauses). Each negative test is empirically witness-able: it FAILS if the
+// corresponding clause in `dma::layout::verify_dma_layout` is neutered. The
+// positive `valid_default_view_passes_layout_verify` is the neuter baseline (a
+// genuinely-valid view must still bridge, so a check that always-rejects is also
+// caught).
+// ===========================================================================
+
+#[test]
+fn valid_default_view_passes_layout_verify() {
+    // The neuter-witness baseline: the E1000 ring (`element_size = 16`,
+    // `element_count = 256`) written through `write::<LegacyTxDesc>(0, …)` — a
+    // repr(C) 16-byte POD view at a valid index — must PASS every C03 clause. (If
+    // the verify rule rejected unconditionally, this would fail.)
+    let _ok = with_model(
+        "dma_layout_ok",
+        &region_source(
+            "pci",
+            E1000_REGION_FIELD,
+            "self.tx_ring.write::<LegacyTxDesc>(0, |d: &mut LegacyTxDesc| { d.buffer_addr = 0x2000; });",
+        ),
+        |model| model.dma.drivers.len(),
+    )
+    .expect("a valid repr(C) POD view at a valid index must pass the C03 layout verify");
+}
+
+#[test]
+fn non_dma_pod_pointer_view_is_rejected() {
+    // T19 `V: DmaPod` clause: a reinterpret view `V` that carries a RAW POINTER
+    // field is not a sound DMA view (a host pointer is never a device-visible
+    // descriptor field), so `write::<PtrView>` must compile-fail naming the
+    // `V: DmaPod` clause. Witnesses the real POD predicate (the M1 `!needs_drop`
+    // proxy would WRONGLY accept `PtrView` — it has no Drop glue).
+    let err = with_model(
+        "dma_pod_ptr_view",
+        &region_source(
+            "pci",
+            E1000_REGION_FIELD,
+            "self.tx_ring.write::<PtrView>(0, |v: &mut PtrView| { v.p = core::ptr::null(); });",
+        ),
+        |_| (),
+    )
+    .expect_err("a reinterpret view carrying a raw pointer must reject (V: DmaPod)");
+    assert!(
+        err.contains("DMA-ERR-LAYOUT-VERIFY") && err.contains("raw pointer"),
+        "the reject must name the V: DmaPod clause + the raw-pointer reason; got: {err}"
+    );
+}
+
+#[test]
+fn non_repr_c_declared_t_is_rejected() {
+    // T19 declaration `V: DmaPod` clause over the declared `T`: a `DmaRegion<T>`
+    // whose `T` is a plain `#[repr(Rust)]` struct has an unpinned field layout, so
+    // the declaration must compile-fail. Witnesses the POD predicate over the
+    // declared type (the M1 `!needs_drop` proxy would WRONGLY accept `RustView`).
+    let bad_field = "#[rseq::dma_region(id = \"tx_ring\", element_size = 8, element_count = 256)] \
+                     pub tx_ring: DmaRegion<RustView>";
+    let err = with_model(
+        "dma_pod_rust_t",
+        &region_source("pci", bad_field, "let _a = self.tx_ring.device_addr();"),
+        |_| (),
+    )
+    .expect_err("a non-repr(C) declared T must reject (declaration V: DmaPod)");
+    assert!(
+        err.contains("DMA-ERR-LAYOUT-VERIFY") && err.contains("repr(C)"),
+        "the reject must name the declaration DmaPod clause + the repr(C) reason; got: {err}"
+    );
+}
+
+#[test]
+fn oversized_reinterpret_view_is_rejected() {
+    // T19 `size_of::<V>() <= element_size` clause: a 32-byte `write::<BigView>`
+    // reinterpret against a 16-byte `element_size` ring would read past the slot,
+    // so it must compile-fail. Witnesses the size clause (a verify that skipped the
+    // size check would accept the oversized view).
+    let err = with_model(
+        "dma_oversized_view",
+        &region_source(
+            "pci",
+            E1000_REGION_FIELD,
+            "self.tx_ring.write::<BigView>(0, |v: &mut BigView| { v.a = 1; });",
+        ),
+        |_| (),
+    )
+    .expect_err("an oversized reinterpret view must reject (size_of::<V>() <= element_size)");
+    assert!(
+        err.contains("DMA-ERR-LAYOUT-VERIFY") && err.contains("size_of::<V>()"),
+        "the reject must name the size clause; got: {err}"
+    );
+}
+
+#[test]
+fn out_of_bounds_static_index_is_rejected() {
+    // T19 `i in [0, element_count)` clause: a `write::<LegacyTxDesc>(999, …)` on a
+    // 256-element ring is out of bounds at a statically-known index, so it must
+    // compile-fail. Witnesses the index-bound clause (a verify that skipped the
+    // bound check would accept index 999).
+    let err = with_model(
+        "dma_oob_index",
+        &region_source(
+            "pci",
+            E1000_REGION_FIELD,
+            "self.tx_ring.write::<LegacyTxDesc>(999, |d: &mut LegacyTxDesc| { d.buffer_addr = 0x2000; });",
+        ),
+        |_| (),
+    )
+    .expect_err("an out-of-bounds static index must reject (i in [0, element_count))");
+    assert!(
+        err.contains("DMA-ERR-LAYOUT-VERIFY") && err.contains("out of bounds"),
+        "the reject must name the index-bound clause; got: {err}"
+    );
+}
+
+// ===========================================================================
+// M4 / T22 — diagnostic family + compile-fail oracle corpus. The `DmaDiagnostic`
+// family carries a uniform `DMA-ERR-*` code per rejection case (the recognition
+// half; the binding half is `DmaL2Error`'s `DMA-L2-*` set). This corpus test
+// asserts (a) every variant's `code()` is the prefix of its rendered message (so
+// `code()` and the `#[error]` text never drift), and (b) the FULL coded reject set
+// is present — the inventory that every rejection case has a coded diagnostic.
+// ===========================================================================
+
+#[test]
+fn dma_diagnostic_codes_match_messages_and_cover_the_corpus() {
+    use regseq_driver::bridge::DmaDiagnostic;
+
+    let s = || "x".to_string();
+    // One representative of every `DmaDiagnostic` variant (the full rejection corpus).
+    let corpus: Vec<DmaDiagnostic> = vec![
+        DmaDiagnostic::MissingKey { driver: s(), field: s(), key: "element_size" },
+        DmaDiagnostic::MalformedAttr { driver: s(), field: s(), detail: s() },
+        DmaDiagnostic::AttrOnNonRegion { driver: s(), field: s() },
+        DmaDiagnostic::UnsupportedForm { driver: s(), field: s(), form: s() },
+        DmaDiagnostic::DuplicateId { driver: s(), id: s() },
+        DmaDiagnostic::LayoutMismatch { driver: s(), field: s(), detail: s() },
+        DmaDiagnostic::ChannelAttr { driver: s(), field: s(), detail: s() },
+        DmaDiagnostic::DiscardedResult { op: "dma::stream" },
+        DmaDiagnostic::CompletionAttr { method: s(), detail: s() },
+        DmaDiagnostic::UnknownCompletionChannel { method: s(), channel: s(), driver: s() },
+        DmaDiagnostic::AntiForm { region: s() },
+        DmaDiagnostic::DirectionMismatch { channel: s(), direction: s(), detail: s() },
+        DmaDiagnostic::SpanBounds { region: s(), detail: s() },
+        DmaDiagnostic::LayoutVerify { region: s(), clause: "V: DmaPod (access view)", detail: s() },
+    ];
+
+    // (a) Every variant's `code()` is the literal prefix of its rendered message.
+    for d in &corpus {
+        let msg = d.to_string();
+        assert!(
+            msg.starts_with(d.code()),
+            "DmaDiagnostic::{:?} message must start with its code {:?}; got: {msg}",
+            d,
+            d.code()
+        );
+    }
+
+    // (b) The full coded reject set is present (the corpus inventory). Every code is
+    // a `DMA-ERR-*`, and the load-bearing M4 additions (LAYOUT-VERIFY, T19) +
+    // M2/M3/T17 cases are all covered.
+    let codes: std::collections::BTreeSet<&'static str> =
+        corpus.iter().map(|d| d.code()).collect();
+    for expected in [
+        "DMA-ERR-MISSING-KEY",
+        "DMA-ERR-MALFORMED-ATTR",
+        "DMA-ERR-ATTR-ON-NON-REGION",
+        "DMA-ERR-UNSUPPORTED-FORM",
+        "DMA-ERR-DUPLICATE-ID",
+        "DMA-ERR-LAYOUT-MISMATCH",
+        "DMA-ERR-MISSING-DIRECTION",
+        "DMA-ERR-DISCARDED-RESULT",
+        "DMA-ERR-COMPLETION-ATTR",
+        "DMA-ERR-UNKNOWN-COMPLETION-CHANNEL",
+        "DMA-ERR-ANTI-FORM",
+        "DMA-ERR-DIRECTION-MISMATCH",
+        "DMA-ERR-SPAN-BOUNDS",
+        "DMA-ERR-LAYOUT-VERIFY",
+    ] {
+        assert!(codes.contains(expected), "the reject corpus must include {expected}");
+        assert!(expected.starts_with("DMA-ERR-"), "every recognition code is a DMA-ERR-* code");
+    }
+}
+
+// ===========================================================================
+// M4 / T19 — Codex milestone-review folds (bit-validity + fail-closed). Each is
+// witness-able: it FAILS if the corresponding hardened clause is neutered.
+// ===========================================================================
+
+#[test]
+fn bool_reinterpret_view_is_rejected() {
+    // BLOCKING-1 (bit-validity): a `write::<bool>` reinterpret view is rejected even
+    // though `bool` is 1 byte (fits element_size) and Drop-free — only 0x00/0x01 are
+    // valid `bool` bit patterns, but a DMA device writes ARBITRARY bytes, so
+    // reinterpreting a device-written byte as `bool` is UB. The M1 `!needs_drop`
+    // proxy (and the pre-fold predicate, which accepted `bool`) would WRONGLY accept
+    // this. DMA-ERR-LAYOUT-VERIFY naming the V: DmaPod clause + the bool reason.
+    let err = with_model(
+        "dma_bool_view",
+        &region_source(
+            "pci",
+            E1000_REGION_FIELD,
+            "self.tx_ring.write::<bool>(0, |v: &mut bool| { *v = false; });",
+        ),
+        |_| (),
+    )
+    .expect_err("a `bool` reinterpret view must reject (bit-validity, V: DmaPod)");
+    assert!(
+        err.contains("DMA-ERR-LAYOUT-VERIFY") && err.contains("bool"),
+        "the reject must name the V: DmaPod clause + the bool bit-validity reason; got: {err}"
+    );
+}
+
+#[test]
+fn char_reinterpret_view_is_rejected() {
+    // BLOCKING-1 (bit-validity), the `char` companion: `char` must be a valid Unicode
+    // scalar, so a device-written 4 bytes reinterpreted as `char` is UB.
+    let err = with_model(
+        "dma_char_view",
+        &region_source(
+            "pci",
+            E1000_REGION_FIELD,
+            "self.tx_ring.write::<char>(0, |v: &mut char| { *v = 'a'; });",
+        ),
+        |_| (),
+    )
+    .expect_err("a `char` reinterpret view must reject (bit-validity, V: DmaPod)");
+    assert!(
+        err.contains("DMA-ERR-LAYOUT-VERIFY") && err.contains("char"),
+        "the reject must name the char bit-validity reason; got: {err}"
+    );
+}
+
+#[test]
+fn non_const_element_index_is_rejected() {
+    // BLOCKING-2 (non-const index): an `element_access` whose index is a RUNTIME
+    // value (here the result of `element_count()`, a non-const local) is rejected —
+    // generic-c emits `base + i*element_size` runtime pointer arithmetic with NO
+    // runtime bounds guard, so a non-const index cannot be statically bounded
+    // (mirrors the M3 non-const-span-range reject). DMA-ERR-LAYOUT-VERIFY.
+    let init = "let i = self.tx_ring.element_count();\n        \
+                self.tx_ring.write::<LegacyTxDesc>(i, |d: &mut LegacyTxDesc| { d.buffer_addr = 0x2000; });";
+    let err = with_model(
+        "dma_nonconst_index",
+        &region_source("pci", E1000_REGION_FIELD, init),
+        |_| (),
+    )
+    .expect_err("a non-const element index must reject (no runtime bounds guard)");
+    assert!(
+        err.contains("DMA-ERR-LAYOUT-VERIFY") && err.contains("non-const element index"),
+        "the reject must name the non-const element index; got: {err}"
     );
 }

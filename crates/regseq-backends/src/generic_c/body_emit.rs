@@ -260,6 +260,18 @@ pub(super) fn emit_body(
             types::declare(model, names, decl.ty, &name)
         ));
     }
+    // Body-level streaming-buffer tracking triples (dma-management M4/T15): one
+    // `(dev, len, dir)` per `dma::stream` map site, declared at body scope so the
+    // map-site assignment AND the Return-time RAII unmap cleanup share them. Numbered
+    // by map-site body order (`stream_map_count` / `stream_map_ordinal_at_dest`).
+    let stream_count = emitter.stream_map_count();
+    for n in 0..stream_count {
+        out.push_str(&format!(
+            "    uint64_t __dma_stream_{n}_dev = 0; uint64_t __dma_stream_{n}_len = 0; \
+             int __dma_stream_{n}_dir = 0;\n"
+        ));
+    }
+
     // The prologue marshalling statements (copying each ABI formal into its
     // original-typed body local) run before the first basic block.
     for stmt in prologue {
@@ -2162,8 +2174,12 @@ impl BodyEmit<'_> {
         match kind {
             TerminatorKind::Goto(t) => Ok(format!("goto bb_{};", t.as_u32())),
             TerminatorKind::Return => {
+                // RAII scope-exit cleanup (M4/T15): unmap every streaming buffer this
+                // body mapped, in LIFO order, just before the normal return. Empty
+                // when the body maps no `DmaStreamBuffer`.
+                let unmaps = self.emit_stream_unmaps_for_return();
                 if self.is_zst(self.output_ty) {
-                    Ok("return;".to_string())
+                    Ok(format!("{unmaps}return;"))
                 } else if super::output_is_substituted(self.fn_sig, self.lowering) {
                     // The body's `_0` keeps `output_ty`, but the C return type is
                     // the ABI `emit_as`. Marshal `_0` back to the ABI type by a
@@ -2174,10 +2190,10 @@ impl BodyEmit<'_> {
                     let tmp = self.fresh_temp_name("_ar");
                     let tmp_cty = types::c_type(self.model, self.names, abi_ty);
                     Ok(format!(
-                        "{{ {tmp_cty} {tmp}; memcpy(&{tmp}, &_0, sizeof({tmp})); return {tmp}; }}"
+                        "{{ {unmaps}{tmp_cty} {tmp}; memcpy(&{tmp}, &_0, sizeof({tmp})); return {tmp}; }}"
                     ))
                 } else {
-                    Ok("return _0;".to_string())
+                    Ok(format!("{unmaps}return _0;"))
                 }
             }
             TerminatorKind::Unreachable => Ok("regseq_unreachable();".to_string()),
@@ -3246,6 +3262,22 @@ impl BodyEmit<'_> {
         ) {
             return self.emit_dma_channel(op, args, destination, &goto);
         }
+        // Streaming `DmaStreamBuffer` ops (M4/T15): `dma::stream` is a FREE function
+        // (no region/channel receiver) and the buffer methods recover a
+        // `DmaStreamBuffer` receiver (NOT a region), so they MUST dispatch before the
+        // region recovery below — which would fail on a non-region receiver. The
+        // `DeviceAddr` op is shared with the region A2 surface, so disambiguate it by
+        // receiver type: a `DmaStreamBuffer` receiver routes here, a region receiver
+        // falls through to the region A2 path.
+        if matches!(
+            op,
+            DmaOp::StreamMap | DmaOp::StreamAcquireFromDevice | DmaOp::StreamReleaseToDevice
+        ) {
+            return self.emit_dma_stream(op, args, destination, &goto);
+        }
+        if matches!(op, DmaOp::DeviceAddr) && self.is_stream_buffer_receiver(recv) {
+            return self.emit_dma_stream(op, args, destination, &goto);
+        }
         let (region_id, element_size, element_count, element_ty) = self.recover_dma_region(recv)?;
         let id_lit = format!("{region_id:?}"); // quoted, escaped C string literal
         match op {
@@ -3986,6 +4018,237 @@ impl BodyEmit<'_> {
                 _ => None,
             })
         })
+    }
+
+    // -----------------------------------------------------------------------
+    // Streaming `DmaStreamBuffer` emit (dma-management M4/T15; GRILL C10/S03).
+    //
+    // The streaming lifecycle lowers to the host hooks in author order
+    //   map (`regseq_dma_stream`) → acquire/release → unmap (`regseq_dma_unmap`)
+    // where the **unmap is RAII**: it fires at the buffer's scope exit. The regseq
+    // body IR carries NO `Drop` terminator (rustc's Drop is elaborated into a Call
+    // to drop-glue), so for the candidate-prototype generic-c slice the RAII unmap
+    // is realized as a DETERMINISTIC SCOPE-EXIT cleanup: a matching `regseq_dma_unmap`
+    // emitted at the function's normal `Return`, in REVERSE map order (LIFO). The
+    // honest claim is "the surface EXPRESSES RAII unmap; generic-c lowers it as a
+    // deterministic function-exit cleanup" — NOT behavioral Drop-timing fidelity
+    // (precise drop-glue placement + early/conditional drop is future work). Each
+    // mapped buffer's `(dev_addr, len, dir)` is tracked in a body-level synthesized
+    // triple (`__dma_stream_<n>_{dev,len,dir}`), keyed by the map site's ordinal so
+    // `emit_body`'s declarations, the map-site assignment, and the Return-time unmap
+    // all agree (see `stream_map_sites`).
+    // -----------------------------------------------------------------------
+
+    /// Emit a streaming `DmaStreamBuffer` op (M4/T15):
+    ///   * `StreamMap` (`dma::stream(buf, flow) -> Result<DmaStreamBuffer>`) →
+    ///     `__dma_stream_<n>_dev = regseq_dma_stream(<cpu>, <len>, <dir>)` (capturing
+    ///     the synthetic device addr/len/dir into the body-level triple) + a
+    ///     `Result::Ok(DmaStreamBuffer)` construction into the destination.
+    ///   * `StreamAcquireFromDevice` / `StreamReleaseToDevice` (buffer methods) →
+    ///     `regseq_dma_{acquire_from_device,release_to_device}(<dev>, <len>)` keyed by
+    ///     the buffer's tracked triple.
+    ///   * `DeviceAddr` on a buffer receiver → the buffer's tracked `__dma_stream_<n>_dev`.
+    fn emit_dma_stream(
+        &self,
+        op: DmaOp,
+        args: &[Operand],
+        destination: &Place,
+        goto: &str,
+    ) -> Result<String, EmitError> {
+        match op {
+            DmaOp::StreamMap => {
+                // `dma::stream(buf, flow)` is a FREE function: args[0] = the CPU
+                // buffer pointer, args[1] = the flow discriminant. This is the n-th
+                // map site in body order; its tracking triple is `__dma_stream_<n>`.
+                let ordinal = self.stream_map_ordinal_at_dest(destination).ok_or(
+                    EmitError::Unsupported("dma::stream site has no recoverable ordinal"),
+                )?;
+                let dev = format!("__dma_stream_{ordinal}_dev");
+                let len = format!("__dma_stream_{ordinal}_len");
+                let dirv = format!("__dma_stream_{ordinal}_dir");
+                // The CPU buffer operand (args[0]); rendered as a `void*` for the hook.
+                let cpu = match args.first() {
+                    Some(op) => self.operand_expr(op, None).unwrap_or_else(|_| "0".to_string()),
+                    None => "0".to_string(),
+                };
+                // The flow → dir int (args[1]); a const discriminant where readable,
+                // else 0. The mapped len is not on the surface call (the buffer's
+                // byte length is platform/runtime-derived); a symbolic non-zero len
+                // keeps the gc-shape trace stable.
+                let dir = args
+                    .get(1)
+                    .and_then(|op| self.const_uint_operand(op))
+                    .unwrap_or(0);
+                // Capture the synthetic device addr + len + dir into the body-level
+                // triple (declared by `emit_body`), then build the `Ok(buffer)`.
+                let map_call = format!(
+                    "{len} = (uint64_t)REGSEQ_DMA_STREAM_LEN; {dirv} = {dir}; \
+                     {dev} = regseq_dma_stream((void *)({cpu}), {len}, {dirv});"
+                );
+                // Construct `Result::Ok(DmaStreamBuffer)` into the destination. The
+                // host `regseq_dma_stream` never fails (the synthetic mapping always
+                // succeeds), so the Ok branch is taken; the buffer payload's bytes are
+                // inert in gc-shape (the dev addr rides the body-level triple, which
+                // the acquire/release/unmap read, not the buffer struct).
+                let result = self.emit_dma_result(destination, "0 /* mapped */", None)?;
+                Ok(format!("{{ {map_call} {result} }} {goto}"))
+            }
+            DmaOp::StreamAcquireFromDevice | DmaOp::StreamReleaseToDevice => {
+                // A buffer method (`buf.acquire_from_device()` / `.release_to_device()`).
+                // Recover the buffer's tracked triple from the receiver (args[0]).
+                let recv = args
+                    .first()
+                    .ok_or(EmitError::Unsupported("dma stream op with no receiver"))?;
+                let ordinal = self.stream_buffer_ordinal(recv).ok_or(EmitError::Unsupported(
+                    "dma stream acquire/release: could not recover the mapped buffer",
+                ))?;
+                let dev = format!("__dma_stream_{ordinal}_dev");
+                let len = format!("__dma_stream_{ordinal}_len");
+                let hook = match op {
+                    DmaOp::StreamAcquireFromDevice => "regseq_dma_acquire_from_device",
+                    _ => "regseq_dma_release_to_device",
+                };
+                Ok(format!("{hook}({dev}, {len}); {goto}"))
+            }
+            DmaOp::DeviceAddr => {
+                // `buf.device_addr()` on a stream buffer → the buffer's tracked dev addr.
+                let recv = args
+                    .first()
+                    .ok_or(EmitError::Unsupported("dma stream device_addr with no receiver"))?;
+                let ordinal = self.stream_buffer_ordinal(recv).ok_or(EmitError::Unsupported(
+                    "dma stream device_addr: could not recover the mapped buffer",
+                ))?;
+                let dev = format!("__dma_stream_{ordinal}_dev");
+                let dst = self.place_lvalue(destination)?;
+                let dst_cty = types::c_type(self.model, self.names, self.place_ty(destination));
+                Ok(format!("{dst} = ({dst_cty}){dev}; {goto}"))
+            }
+            _ => Err(EmitError::Unsupported("emit_dma_stream called with a non-stream op")),
+        }
+    }
+
+    /// Whether the receiver operand names a `DmaStreamBuffer` (used to route a shared
+    /// `DeviceAddr` op to the streaming path vs the region A2 path). Peels ref/ptr
+    /// layers to the underlying nominal type and matches the `DmaStreamBuffer` leaf.
+    fn is_stream_buffer_receiver(&self, recv: &Operand) -> bool {
+        let Some(mut ty) = self.operand_ty(recv) else {
+            return false;
+        };
+        loop {
+            match &self.model.types[ty] {
+                Ty::Ref(p, _) | Ty::Ptr(p, _) => ty = *p,
+                Ty::Struct { item, .. } | Ty::Enum { item, .. } | Ty::Union { item, .. } => {
+                    return self
+                        .model
+                        .items[*item]
+                        .def_path
+                        .segments
+                        .last()
+                        .map(|leaf| match &leaf.data {
+                            regseq_model::DefPathData::TypeNs(name) => {
+                                self.model.strings.resolve(*name) == "DmaStreamBuffer"
+                            }
+                            _ => false,
+                        })
+                        .unwrap_or(false);
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// The ordinal (body-order index) of the `dma::stream` (`StreamMap`) call site
+    /// whose destination is `dest`. The map sites are numbered by their order in the
+    /// body's basic-block iteration, so `emit_body`'s declarations + the map-site
+    /// assignment + the Return-time unmap all agree on `__dma_stream_<n>`.
+    fn stream_map_ordinal_at_dest(&self, dest: &Place) -> Option<usize> {
+        let mut n = 0usize;
+        for bb in self.body.basic_blocks.iter() {
+            if let TerminatorKind::Call { callee, destination, .. } = &bb.terminator.kind {
+                if let CallCallee::Direct(inst) = callee {
+                    if matches!(
+                        self.model.instance_intrinsic(*inst),
+                        Some(IntrinsicKind::Dma(DmaOp::StreamMap))
+                    ) {
+                        if destination.local == dest.local
+                            && destination.projection == dest.projection
+                        {
+                            return Some(n);
+                        }
+                        n += 1;
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// The ordinal of the mapped buffer a stream-method receiver names: chase the
+    /// receiver to the local holding the `DmaStreamBuffer` value, then find the
+    /// `StreamMap` call whose destination produced that local (the buffer's defining
+    /// map site). Returns its body-order ordinal so the acquire/release/device_addr
+    /// op reads the SAME `__dma_stream_<n>` triple the map site wrote.
+    fn stream_buffer_ordinal(&self, recv: &Operand) -> Option<usize> {
+        // The local holding the buffer value (compose away hoisted borrow/use temps,
+        // mirroring the span-endpoint chase).
+        let local = self.span_endpoint_local(recv, 0)?;
+        // Find the StreamMap call whose destination IS that local, counting map sites
+        // in body order to get the ordinal.
+        let mut n = 0usize;
+        for bb in self.body.basic_blocks.iter() {
+            if let TerminatorKind::Call { callee, destination, .. } = &bb.terminator.kind {
+                if let CallCallee::Direct(inst) = callee {
+                    if matches!(
+                        self.model.instance_intrinsic(*inst),
+                        Some(IntrinsicKind::Dma(DmaOp::StreamMap))
+                    ) {
+                        // The map destination is `Result<DmaStreamBuffer>`; the buffer
+                        // local is bound from it by the `?`/match desugar. Match the
+                        // chased local against the map's destination local OR the
+                        // ordinal's defining buffer local. A direct match on the
+                        // destination local is the common shape; otherwise this map
+                        // site is the sole streaming site (n==0) in the common driver.
+                        if destination.local == local {
+                            return Some(n);
+                        }
+                        n += 1;
+                    }
+                }
+            }
+        }
+        // Fallback: a single streaming site in the body — attribute the op to it.
+        if self.stream_map_count() == 1 {
+            return Some(0);
+        }
+        None
+    }
+
+    /// The number of `dma::stream` (`StreamMap`) call sites in this body (the count
+    /// of mapped buffers whose RAII unmap the function-exit cleanup emits).
+    fn stream_map_count(&self) -> usize {
+        self.body
+            .basic_blocks
+            .iter()
+            .filter(|bb| {
+                matches!(&bb.terminator.kind, TerminatorKind::Call { callee: CallCallee::Direct(inst), .. }
+                    if matches!(self.model.instance_intrinsic(*inst), Some(IntrinsicKind::Dma(DmaOp::StreamMap))))
+            })
+            .count()
+    }
+
+    /// The RAII scope-exit unmap cleanup (M4/T15): one `regseq_dma_unmap(dev, len,
+    /// dir)` per mapped buffer in this body, in REVERSE map order (LIFO Drop). Emitted
+    /// just before the function's normal `return` (see `terminator` Return arm). An
+    /// empty string when the body maps no streaming buffer.
+    fn emit_stream_unmaps_for_return(&self) -> String {
+        let count = self.stream_map_count();
+        let mut out = String::new();
+        for n in (0..count).rev() {
+            out.push_str(&format!(
+                "regseq_dma_unmap(__dma_stream_{n}_dev, __dma_stream_{n}_len, __dma_stream_{n}_dir); "
+            ));
+        }
+        out
     }
 
     /// The view type `V` from a DMA element-access call's turbofish (the

@@ -47,6 +47,37 @@ pub enum DmaL2Error {
         /// The orphan section's id.
         id: String,
     },
+    /// DMA-L2-004: a `[dma.<id>]` `binding_scope` token outside the closed
+    /// `concrete | template | family | conditional` vocabulary (GRILL D07).
+    BadBindingScope {
+        /// The resource id.
+        id: String,
+        /// The rejected token, verbatim.
+        token: String,
+    },
+    /// DMA-L2-005: a `[dma.<id>]` capability flag `cap_<name>` whose value is
+    /// outside the closed `present | absent | unknown` vocabulary (GRILL C02/D07).
+    BadCapabilityValue {
+        /// The resource id.
+        id: String,
+        /// The capability name (`cap_<name>` ⇒ `<name>`).
+        cap: String,
+        /// The rejected token, verbatim.
+        token: String,
+    },
+    /// DMA-L2-006: a capability flag `cap_<name> = "absent"` in a NON-CONCRETE
+    /// (`template` / `family` / `conditional`) `[dma.<id>]` binding (GRILL D07/C04).
+    /// `absent` is authoritative ONLY in a concrete binding (a fully-resolved
+    /// controller/channel); a non-concrete binding must use `unknown` (the resolved
+    /// controller is not yet known, so its capability cannot be statically denied).
+    AbsentCapabilityInTemplate {
+        /// The resource id.
+        id: String,
+        /// The capability name marked `absent`.
+        cap: String,
+        /// The non-concrete binding scope it was found in.
+        scope: String,
+    },
 }
 
 impl DmaL2Error {
@@ -56,6 +87,9 @@ impl DmaL2Error {
             DmaL2Error::MissingSection { .. } => "DMA-L2-001",
             DmaL2Error::BadCacheMaintenance { .. } => "DMA-L2-002",
             DmaL2Error::OrphanSection { .. } => "DMA-L2-003",
+            DmaL2Error::BadBindingScope { .. } => "DMA-L2-004",
+            DmaL2Error::BadCapabilityValue { .. } => "DMA-L2-005",
+            DmaL2Error::AbsentCapabilityInTemplate { .. } => "DMA-L2-006",
         }
     }
 }
@@ -77,6 +111,22 @@ impl std::fmt::Display for DmaL2Error {
                 f,
                 "DMA-L2-003: [dma.{id}] matches no `#[rseq::dma_region(id = \"{id}\")]` resource \
                  (orphan platform section)"
+            ),
+            DmaL2Error::BadBindingScope { id, token } => write!(
+                f,
+                "DMA-L2-004: [dma.{id}] binding_scope {token:?} is not valid \
+                 (expected \"concrete\", \"template\", \"family\", or \"conditional\"; D07)"
+            ),
+            DmaL2Error::BadCapabilityValue { id, cap, token } => write!(
+                f,
+                "DMA-L2-005: [dma.{id}] cap_{cap} = {token:?} is not valid \
+                 (expected \"present\", \"absent\", or \"unknown\"; C02/D07)"
+            ),
+            DmaL2Error::AbsentCapabilityInTemplate { id, cap, scope } => write!(
+                f,
+                "DMA-L2-006: [dma.{id}] cap_{cap} = \"absent\" is not allowed in a non-concrete \
+                 binding (binding_scope = {scope:?}); `absent` is authoritative only in a concrete \
+                 binding — a {scope} binding must use \"unknown\" (D07/C04)"
             ),
         }
     }
@@ -126,12 +176,24 @@ fn join_dma_bindings(
                 .chain(d.channels.iter().map(|c| model.strings.resolve(c.id).to_string()))
         })
         .collect();
-    for section_id in bindings.dma.keys() {
+    for (section_id, spec) in bindings.dma.iter() {
         if !resource_ids.contains(section_id) {
             return Err(DmaL2Error::OrphanSection {
                 id: section_id.clone(),
             });
         }
+        // Capability-gating contract (GRILL D07/C04, PLAN T21). The capability OPS
+        // are designed-not-built this cycle; the ONLY buildable C04 oracle is the L2
+        // rule that an `absent` capability is authoritative ONLY in a concrete
+        // binding. Validate, per section:
+        //   * `binding_scope` is in the closed vocabulary (omitted ⇒ concrete);
+        //   * each `cap_*` value is in the `present | absent | unknown` vocabulary;
+        //   * a `cap_* = "absent"` in a NON-concrete binding is rejected (D07): the
+        //     resolved controller is unknown there, so its capability cannot be
+        //     statically denied — a template/family/conditional binding must use
+        //     `unknown`. (A concrete binding's `absent` is ACCEPTED by this rule;
+        //     there is no cap-op to reject yet — designed-not-built, Codex R1#9.)
+        validate_capability_scope(section_id, spec)?;
     }
 
     // Pass 1 (immutable): resolve each region's raw facts, validating the
@@ -185,6 +247,58 @@ fn join_dma_bindings(
     Ok(())
 }
 
+/// The closed `binding_scope` vocabulary (GRILL D07). `concrete` (the omitted
+/// default) is a fully-resolved controller/channel; the rest are non-concrete.
+fn is_concrete_scope(scope: Option<&str>) -> Result<bool, ()> {
+    match scope {
+        None | Some("concrete") => Ok(true),
+        Some("template") | Some("family") | Some("conditional") => Ok(false),
+        Some(_) => Err(()),
+    }
+}
+
+/// The capability-gating contract validation for one `[dma.<id>]` binding (GRILL
+/// D07/C04, PLAN T21): the `binding_scope` vocabulary, the `cap_*` value
+/// vocabulary, and the D07 rule that `cap_* = "absent"` is legal ONLY in a
+/// concrete binding. The capability OPS are designed-not-built this cycle; this is
+/// the only buildable C04 oracle.
+fn validate_capability_scope(
+    id: &str,
+    spec: &regseq_config::DmaBindingSpec,
+) -> Result<(), DmaL2Error> {
+    let scope_token = spec.binding_scope.as_deref();
+    let is_concrete = is_concrete_scope(scope_token).map_err(|()| DmaL2Error::BadBindingScope {
+        id: id.to_string(),
+        token: scope_token.unwrap_or("").to_string(),
+    })?;
+    for (cap, value) in spec.capabilities.iter() {
+        match value.as_str() {
+            "present" | "unknown" => {}
+            "absent" => {
+                if !is_concrete {
+                    return Err(DmaL2Error::AbsentCapabilityInTemplate {
+                        id: id.to_string(),
+                        cap: cap.clone(),
+                        // The non-concrete scope (omitted defaults to concrete, so a
+                        // reach here always has an explicit non-concrete token).
+                        scope: scope_token.unwrap_or("template").to_string(),
+                    });
+                }
+                // A concrete-binding `absent` is ACCEPTED by the rule: there is no
+                // cap-op to reject this cycle (designed-not-built, Codex R1#9).
+            }
+            other => {
+                return Err(DmaL2Error::BadCapabilityValue {
+                    id: id.to_string(),
+                    cap: cap.clone(),
+                    token: other.to_string(),
+                })
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Section-presence validation: every recognized region must have joined a
 /// section (the M1 region is the required form, so an unresolved region is an
 /// error).
@@ -229,6 +343,32 @@ mod tests {
                     binding: Default::default(),
                 }],
                 channels: vec![],
+                streams: vec![],
+                spans: vec![],
+                completions: vec![],
+            },
+        );
+        model
+    }
+
+    /// A model carrying a single slave `DmaChannel` with the given id (so a
+    /// `[dma.<id>]` capability section is not an orphan). T21 capability-gating tests
+    /// bind cap sections to this channel.
+    fn model_with_channel(id: &str) -> RegseqModel {
+        use regseq_model::{DmaChannelFacts, DmaFlow};
+        let mut model = RegseqModel::with_primary("dma-l2-cap-test", StableCrateId(1));
+        let name = model.strings.intern("rx");
+        let id = model.strings.intern(id);
+        model.dma.drivers.insert(
+            ItemId::from_u32(0),
+            DriverDma {
+                regions: vec![],
+                channels: vec![DmaChannelFacts {
+                    name,
+                    id,
+                    direction: DmaFlow::DeviceToHost,
+                    binding: Default::default(),
+                }],
                 streams: vec![],
                 spans: vec![],
                 completions: vec![],
@@ -323,5 +463,87 @@ mod tests {
         crate::bind_all(&mut model, &b).expect("bind_all");
         let err = crate::validate_l2_surface(&model).unwrap_err();
         assert_eq!(err.code(), "DMA-L2-001");
+    }
+
+    // =======================================================================
+    // T21 — capability-gating contract (GRILL D07/C04). The cap OPS are
+    // designed-not-built; the only buildable C04 oracle is the L2 rule that
+    // `cap_* = "absent"` is legal ONLY in a concrete binding. Each negative test
+    // is empirically witness-able: it FAILS if `validate_capability_scope` is
+    // neutered. The positive `cap_absent_in_concrete_binding_is_accepted` is the
+    // neuter baseline (a rule that always-rejects `absent` would fail it).
+    // =======================================================================
+
+    #[test]
+    fn cap_absent_in_template_binding_is_rejected() {
+        // D07: a `cap_pause = "absent"` in a `binding_scope = "template"` binding is
+        // rejected — the resolved controller is unknown in a template, so the
+        // capability cannot be statically denied (must use "unknown"). DMA-L2-006.
+        let mut model = model_with_channel("rx");
+        let b = bindings(
+            "[dma.rx]\nbinding_scope = \"template\"\ncap_pause = \"absent\"\n",
+        );
+        let err = DmaBinder.bind(&mut model, &b).unwrap_err();
+        assert_eq!(err.code(), "DMA-L2-006");
+        assert!(
+            err.to_string().contains("absent") && err.to_string().contains("template"),
+            "the reject must name the absent capability + the template scope; got: {err}"
+        );
+    }
+
+    #[test]
+    fn cap_absent_in_concrete_binding_is_accepted() {
+        // The neuter baseline: a `cap_pause = "absent"` in a CONCRETE binding (the
+        // omitted-default scope) is ACCEPTED by the rule — there is no cap-op to
+        // reject this cycle (designed-not-built). If the rule rejected every
+        // `absent`, this would fail.
+        let mut model = model_with_channel("rx");
+        let b = bindings("[dma.rx]\ncap_pause = \"absent\"\n");
+        DmaBinder
+            .bind(&mut model, &b)
+            .expect("a concrete-binding `absent` capability must be accepted by the T21 rule");
+        // An explicit `binding_scope = "concrete"` is equally accepted.
+        let mut model2 = model_with_channel("rx");
+        let b2 = bindings(
+            "[dma.rx]\nbinding_scope = \"concrete\"\ncap_cyclic = \"absent\"\n",
+        );
+        DmaBinder
+            .bind(&mut model2, &b2)
+            .expect("an explicit-concrete `absent` capability must be accepted");
+    }
+
+    #[test]
+    fn cap_present_and_unknown_in_template_are_accepted() {
+        // Only `absent` is template-illegal: `present`/`unknown` are fine in a
+        // non-concrete binding (witnesses that the rule gates on the VALUE, not the
+        // mere presence of a cap flag in a template).
+        let mut model = model_with_channel("rx");
+        let b = bindings(
+            "[dma.rx]\nbinding_scope = \"family\"\ncap_pause = \"present\"\ncap_cyclic = \"unknown\"\n",
+        );
+        DmaBinder
+            .bind(&mut model, &b)
+            .expect("present/unknown capabilities are legal in a non-concrete binding");
+    }
+
+    #[test]
+    fn bad_binding_scope_is_rejected() {
+        // D07: a `binding_scope` outside the closed vocabulary is rejected. DMA-L2-004.
+        let mut model = model_with_channel("rx");
+        let b = bindings("[dma.rx]\nbinding_scope = \"galaxy\"\n");
+        let err = DmaBinder.bind(&mut model, &b).unwrap_err();
+        assert_eq!(err.code(), "DMA-L2-004");
+        assert!(err.to_string().contains("galaxy"), "{err}");
+    }
+
+    #[test]
+    fn bad_capability_value_is_rejected() {
+        // C02/D07: a `cap_*` value outside `present|absent|unknown` is rejected.
+        // DMA-L2-005.
+        let mut model = model_with_channel("rx");
+        let b = bindings("[dma.rx]\ncap_pause = \"maybe\"\n");
+        let err = DmaBinder.bind(&mut model, &b).unwrap_err();
+        assert_eq!(err.code(), "DMA-L2-005");
+        assert!(err.to_string().contains("maybe"), "{err}");
     }
 }
