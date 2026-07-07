@@ -1,7 +1,7 @@
 //! Phase 4 final `ItemId` assignment and side-table population.
 
 use super::{
-    atomic, clock, deferred_work, device_lifecycle, dma, framework_type, interrupt, intrinsic,
+    atomic, clock, device_lifecycle, framework_type, interrupt, intrinsic,
     pinctrl, synchronization, timed_delay, BridgeCtxt, BridgeError,
 };
 
@@ -64,33 +64,6 @@ pub(crate) fn assign_item_ids_and_populate_sidetables(
     // so they run later: `validate_author_managed_fields` at the end of
     // `run_bridge`, `validate_apply_sites` post-L2 (GRILL C03).
     pinctrl::validate_pinctrl_signatures(ctxt)?;
-    // DMA-management (dma-management construct, M1 region path): recognize
-    // coherent `DmaRegion<T>` resource fields on the same driver map. Runs after
-    // device-lifecycle (the walk root) and the sibling resource passes — order
-    // among sibling resources is irrelevant; the `alloc_coherent` preamble's
-    // position is derived downstream from `model.dma` (GRILL C07/C09). Sets the
-    // narrow `dma_present` bus-master bit (T05).
-    dma::materialise_dma_regions(ctxt)?;
-    // DMA-management completion-handler recognition (dma-management construct,
-    // M3/T09(b)): item-driven `#[rseq::dma_completion(channel = "…")]` recognition
-    // — record the binding on the handler item + into the owning driver's
-    // `DriverDma.completions` (registration-shape only, GRILL D06/C05). Runs after
-    // `materialise_dma_regions` (the driver `dma.drivers` entries exist) and after
-    // device-lifecycle (the driver map is the self-ADT join root).
-    dma::materialise_dma_completions(ctxt)?;
-    // Deferred-work-item-scheduling (deferred-work-item-scheduling construct):
-    // type-driven `Work`-field recognition on the same driver map. Runs after
-    // device-lifecycle (the walk root) and after the sibling resource passes —
-    // order among sibling resources is irrelevant; the lifecycle slotting + the
-    // per-resource slot index are derived downstream from `model.deferred_work`
-    // (GRILL D04). NO field attribute is recorded (recognition is by type).
-    deferred_work::materialise_deferred_work(ctxt)?;
-    // Deferred-work submit-callee legality: every recognized `deferred_work_submit`
-    // intrinsic must be a method on the `Work` shell (spoofing check, mirror
-    // `clock::validate_clock_signatures`). Runs after `materialise_intrinsics`
-    // recorded the markers it walks. (The call-site direct-field-path check is a
-    // post-body pass, `recognise_submit_sites`, run in `run_bridge`.)
-    deferred_work::validate_deferred_work_signatures(ctxt)?;
     Ok(())
 }
 

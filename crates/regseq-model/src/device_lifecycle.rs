@@ -59,15 +59,6 @@ pub struct DriverDescriptor {
     /// the field existed still deserialize.
     #[serde(default)]
     pub bus_type: Option<BusType>,
-    /// The DMA-Management surface-presence gating bit (bus-resource-management
-    /// construct #3, M3/T12). `set_bus_master` is gated on a PCI-capable bus
-    /// **AND** this bit (design §3). DMA-presence is properly defined by the DMA
-    /// construct (GRILL O2, not yet built), so this is a placeholder that
-    /// defaults `false` — no driver sets it today, so `set_bus_master` is not
-    /// emitted yet. Wiring it to a real DMA-surface fact is the DMA construct's
-    /// job. `#[serde(default)]` keeps pre-construct-#3 models deserializable.
-    #[serde(default)]
-    pub dma_present: bool,
 }
 
 /// The bus a device speaks, authored as `#[rseq::driver(bus = "…")]` (L1,
@@ -250,21 +241,11 @@ pub enum BarType {
 }
 
 /// Closed, append-only resource-family taxonomy. `Mmio` is the original
-/// occupant; the dma-management construct appends `DmaRegion`/`DmaChannel`.
+/// occupant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResourceKind {
     /// `Mmio<T>` register-access resource.
     Mmio,
-    /// `DmaRegion<T>` coherent DMA region resource (dma-management construct).
-    /// A device-coherent ring/buffer allocated at device lifetime; carries the
-    /// A2 addressing + closure `element_access` surface. Appended after `Mmio`,
-    /// append-only (GRILL C09/S14).
-    DmaRegion,
-    /// `DmaChannel` slave DMA channel resource (dma-management construct). A
-    /// framework-managed transport channel (request/release at device lifetime,
-    /// the 5-op transport surface). Appended after `DmaRegion`, append-only
-    /// (GRILL C09/S14).
-    DmaChannel,
 }
 
 /// A non-resource user-data field, classified per `user-data-initialization.md`
@@ -338,19 +319,11 @@ mod tests {
 
     #[test]
     fn resource_kind_variants_round_trip_and_are_distinct() {
-        // The dma-management construct appends `DmaRegion`/`DmaChannel` after the
-        // original `Mmio` occupant (append-only, GRILL C09/S14). All three
-        // round-trip serde and are pairwise distinct.
-        for kind in [
-            ResourceKind::Mmio,
-            ResourceKind::DmaRegion,
-            ResourceKind::DmaChannel,
-        ] {
+        // `Mmio` is the sole occupant after the scaffold strip; it round-trips
+        // serde.
+        for kind in [ResourceKind::Mmio] {
             round_trip(kind);
         }
-        assert_ne!(ResourceKind::Mmio, ResourceKind::DmaRegion);
-        assert_ne!(ResourceKind::Mmio, ResourceKind::DmaChannel);
-        assert_ne!(ResourceKind::DmaRegion, ResourceKind::DmaChannel);
     }
 
     #[test]
@@ -393,8 +366,6 @@ mod tests {
                     }],
                     device_class: ClassTag::Generic,
                     bus_type: Some(BusType::Pci),
-                    // Exercise the M3 gating bit through serialize/deserialize.
-                    dma_present: true,
                 },
                 handle: DriverHandle::default(),
                 ops: LifecycleOps::default(),
@@ -417,7 +388,6 @@ mod tests {
                         }],
                         device_class: ClassTag::Serial,
                         bus_type: None,
-                        dma_present: false,
                     },
                     handle: DriverHandle::default(),
                     ops: LifecycleOps::default(),

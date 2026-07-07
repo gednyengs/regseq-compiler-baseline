@@ -7,7 +7,6 @@
 
 use crate::bus_resource::BrmError;
 use crate::clock::ClockL2Error;
-use crate::dma::DmaL2Error;
 use crate::interrupt::InterruptL2Error;
 use crate::pinctrl::PinctrlL2Error;
 
@@ -22,8 +21,6 @@ pub enum L2Error {
     Clock(ClockL2Error),
     /// Pin-controller-and-GPIO-configuration surface diagnostic.
     Pinctrl(PinctrlL2Error),
-    /// DMA-management surface diagnostic.
-    Dma(DmaL2Error),
 }
 
 impl L2Error {
@@ -34,7 +31,6 @@ impl L2Error {
             L2Error::Interrupt(e) => e.code(),
             L2Error::Clock(e) => e.code(),
             L2Error::Pinctrl(e) => e.code(),
-            L2Error::Dma(e) => e.code(),
         }
     }
 }
@@ -47,7 +43,6 @@ impl std::fmt::Display for L2Error {
             L2Error::Interrupt(e) => write!(f, "{e}"),
             L2Error::Clock(e) => write!(f, "{e}"),
             L2Error::Pinctrl(e) => write!(f, "{e}"),
-            L2Error::Dma(e) => write!(f, "{e}"),
         }
     }
 }
@@ -73,12 +68,6 @@ impl From<ClockL2Error> for L2Error {
 impl From<PinctrlL2Error> for L2Error {
     fn from(e: PinctrlL2Error) -> Self {
         L2Error::Pinctrl(e)
-    }
-}
-
-impl From<DmaL2Error> for L2Error {
-    fn from(e: DmaL2Error) -> Self {
-        L2Error::Dma(e)
     }
 }
 

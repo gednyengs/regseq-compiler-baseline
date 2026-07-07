@@ -9,10 +9,9 @@
 // trace (T03); the linux_c backend lowers the SAME bound model to the
 // first-light kernel module (T04-T10).
 //
-// Device facts are transcribed from the Form-A donor
-// `tests/fixtures/pl011-full-spec/src/{driver,registers}.rs` (datasheet §3.3.8
+// Device facts are transcribed from the PL011 TRM (datasheet §3.3.8
 // bring-up sequence, hardware-faithful register map), restricted to this
-// unit's scope: no IRQ/clock/pinctrl resources, and the donor's unbounded
+// unit's scope: no IRQ/clock/pinctrl resources, and the TRM's unbounded
 // `while FR.BUSY` wait becomes a BOUNDED spin loop (`poll::until` is
 // recognized_not_lowered, ledger B-1 — out of scope).
 

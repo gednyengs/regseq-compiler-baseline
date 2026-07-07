@@ -898,27 +898,6 @@ fn emit_call(
             IntrinsicKind::Pinctrl(op) => {
                 emit_pinctrl(cx, op, *instance, body, args, destination, out)
             }
-            // DMA-management lowering (dma-management construct) is generic-c only
-            // this cycle (Linux lowering is designed-not-built, GRILL I01/Out of
-            // Scope). Route here so the dispatch stays exhaustive; no Linux DMA
-            // lowering is invented.
-            IntrinsicKind::Dma(_) => Err(EmitError::Unsupported(
-                "dma-management is recognized-not-lowered on Linux this cycle \
-                 (generic-c only — GRILL I01/Out of Scope); no Linux DMA lowering \
-                 is invented"
-                    .into(),
-            )),
-            // Deferred-work-item-scheduling lowering (deferred-work-item-scheduling
-            // construct): the Linux backend leg (`workqueue`/`work_struct`) is
-            // design-in, NOT built — v1 lowers this construct on the generic-c
-            // host oracle only (GRILL D01). Route here so the dispatch is
-            // exhaustive; a real `Work::submit` reaching the Linux backend is
-            // rejected.
-            IntrinsicKind::DeferredWork(_) => Err(EmitError::Unsupported(
-                "deferred-work-item-scheduling is not lowered on the Linux backend \
-                 (generic-c host oracle only in v1; the workqueue leg is design-in)"
-                    .to_string(),
-            )),
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {

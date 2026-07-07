@@ -265,7 +265,6 @@ mod tests {
                     match_set: Vec::new(),
                     device_class: ClassTag::Generic,
                     bus_type: Some(regseq_model::BusType::Pci),
-                    dma_present: false,
                 },
                 handle: DriverHandle {
                     resource_fields: vec![ResourceField {
@@ -398,7 +397,6 @@ mod tests {
                     match_set: Vec::new(),
                     device_class: ClassTag::Generic,
                     bus_type: bus,
-                    dma_present: false,
                 },
                 handle: DriverHandle {
                     resource_fields: vec![ResourceField {

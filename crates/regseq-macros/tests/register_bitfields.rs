@@ -4,8 +4,8 @@
 // spec fixture, the proc macro now generates `crate::regseq::*` paths
 // that no longer resolve from a generic test harness here.
 //
-// The macro itself is exercised end-to-end against the inlined facade
-// in `tests/fixtures/pl011-full-spec/src/registers.rs` (compiled as
+// The macro itself is exercised end-to-end against an inlined facade
+// in a workspace fixture (compiled as
 // part of the workspace build). This file is gated out with
 // `#![cfg(false)]` to keep it readable for a future restoration that
 // vendors a minimal facade locally if a self-contained unit test is

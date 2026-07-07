@@ -31,7 +31,6 @@ mod generic_c;
 pub mod interrupt_order;
 mod linux_c;
 pub mod match_audit;
-pub mod serial_scatter;
 mod zephyr_c;
 
 pub use capability::{ConformanceReport, SlotEntry};

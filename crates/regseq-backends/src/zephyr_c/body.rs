@@ -900,26 +900,6 @@ fn emit_call(
             IntrinsicKind::Pinctrl(op) => {
                 emit_pinctrl(cx, op, *instance, body, args, destination, out)
             }
-            // DMA-management lowering (dma-management construct) is generic-c only
-            // this cycle (Zephyr lowering is designed-not-built, GRILL I01/Out of
-            // Scope). Route here so the dispatch stays exhaustive; no Zephyr DMA
-            // lowering is invented.
-            IntrinsicKind::Dma(_) => Err(EmitError::Rejected(
-                "dma-management is recognized-not-lowered on Zephyr this cycle \
-                 (generic-c only — GRILL I01/Out of Scope); no Zephyr DMA lowering \
-                 is invented"
-                    .into(),
-            )),
-            // Deferred-work-item-scheduling lowering (deferred-work-item-scheduling
-            // construct): the Zephyr backend leg (`k_work`) is design-in, NOT
-            // built — v1 lowers this construct on the generic-c host oracle only
-            // (GRILL D01). Route here so the dispatch is exhaustive; a real
-            // `Work::submit` reaching the Zephyr backend is rejected.
-            IntrinsicKind::DeferredWork(_) => Err(EmitError::Rejected(
-                "deferred-work-item-scheduling is not lowered on the Zephyr backend \
-                 (generic-c host oracle only in v1; the k_work leg is design-in)"
-                    .into(),
-            )),
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {

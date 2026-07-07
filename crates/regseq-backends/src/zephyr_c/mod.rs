@@ -29,7 +29,6 @@ mod body;
 mod clock;
 mod naming;
 mod pinctrl;
-mod serial;
 mod sync;
 mod types;
 
@@ -376,27 +375,6 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
     let driver_ty = driver_struct_ty(model, *driver_item).ok_or_else(|| {
         EmitError::Driver("driver struct type not present in the type interner".into())
     })?;
-
-    // -- serial device-class lowering (construct #7, T10/T11 / M3): replaces
-    //    the deferred/NULL-api treatment of ClassTag::Serial ADDITIVELY — only
-    //    when the driver actually implements the serial surface (`model.serial`);
-    //    a bare/deferred serial tag falls through to the class-neutral scaffold
-    //    (the C06 audited path below). The shared driver validation above
-    //    (bus gate, DT compatible, single region, A-10 binding) has run.
-    if matches!(driver.descriptor.device_class, ClassTag::Serial) {
-        if let Some(serial_node) = model.serial.drivers.get(driver_item) {
-            return serial::emit_zephyr_serial(
-                model,
-                *driver_item,
-                driver,
-                serial_node,
-                compatible,
-                &ignored_audits,
-                &drv,
-                driver_ty,
-            );
-        }
-    }
 
     // -- callback roots + reachable closure ---------------------------------
     let callbacks = [

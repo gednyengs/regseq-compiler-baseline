@@ -18,9 +18,7 @@ mod const_interner;
 mod const_value;
 mod crate_info;
 mod def_path;
-mod deferred_work;
 mod device_lifecycle;
-mod dma;
 mod domain_attr;
 mod fn_sig;
 mod fn_sig_interner;
@@ -41,7 +39,6 @@ mod pinctrl;
 mod pinctrl_semantics;
 mod pretty;
 pub mod rvalue;
-mod serial;
 mod source;
 mod statement;
 mod string_interner;
@@ -75,24 +72,14 @@ pub use def_path::{
     def_path_data_sort_rank, render_def_path, DefPath, DefPathData, DefPathHash, DefPathSegment,
 };
 pub use clock::{ClockBinding, ClockMode, ClockResource, ClockTables, DriverClocks};
-pub use deferred_work::{
-    DeferredWorkTables, DriverDeferredWork, SubmitSite, SubmitVariant, WorkResource,
-};
 pub use device_lifecycle::{
     BarType, BusType, ClassTag, DeviceLifecycleTables, DriverDescriptor, DriverHandle,
     DriverLifecycle, LifecycleOps, MatchEntry, MmioBinding, ResourceField, ResourceKind,
     UserDataField, UserDataKind,
 };
-pub use dma::{
-    AccessEffects, CompletionBinding, DmaChannelBinding, DmaChannelFacts, DmaLayoutFacts,
-    DmaRegionBinding, DmaRegionFacts, DmaRegionSpan, DmaStreamBuffer, DmaStreamFacts, DmaTables,
-    DriverDma, ElementAccessFact, LexicalExtent, RegionCacheMaintenance, SpanAddr, StoreOrderEdge,
-    StoreOrderEndpoint,
-};
 pub use domain_attr::{
-    AtomicElement, AtomicOp, AttrData, ClockOp, ConfigOp, DeferredWorkOp, DmaFlow, DmaOp,
-    DomainAttrTables, ElementVerb, FetchOp, FieldPath, FrameworkType, IntrinsicKind, LogLevel,
-    MmioOp, PinctrlOp,
+    AtomicElement, AtomicOp, AttrData, ClockOp, ConfigOp, DomainAttrTables,
+    FetchOp, FieldPath, FrameworkType, IntrinsicKind, LogLevel, MmioOp, PinctrlOp,
 };
 pub use fn_sig::{canonical_fn_sig, FnSig};
 pub use fn_sig_interner::FnSigInterner;
@@ -133,11 +120,6 @@ pub use pinctrl::{
 pub use pinctrl_semantics::{validate_pinctrl_semantics, PinctrlSemanticError};
 pub use pretty::{PrettyPrintOptions, PrettyPrinter};
 pub use rvalue::{AggregateKind, BinOp, CastKind, PointerCoercion, Rvalue, UnOp};
-pub use serial::{
-    CauseEntry, CauseSetRepr, DriverSerial, EnumBinding, IrqSourceKind, IrqStateKind, RxErrorRepr,
-    SerialBaseOps, SerialCause, SerialInterruptOps, SerialLineConfigOps, SerialQueueControlOps,
-    SerialRxErrorKind, SerialTables, SerialTypeBindings,
-};
 pub use source::{Position, SourceFile, Span};
 pub use statement::{CopyNonOverlapping, NonDivergingIntrinsic, Statement, StatementKind};
 pub use string_interner::StringInterner;

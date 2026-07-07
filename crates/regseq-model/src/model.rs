@@ -127,12 +127,6 @@ pub struct RegseqModel {
     #[serde(default)]
     pub interrupt: crate::interrupt::InterruptTables,
 
-    /// Serial device-class sibling table (construct #7), keyed by the
-    /// `#[rseq::driver]` struct's Item. `#[serde(default)]` keeps models
-    /// serialized before the construct existed deserializable.
-    #[serde(default)]
-    pub serial: crate::serial::SerialTables,
-
     /// Synchronization (locks) sibling table, keyed by the `#[rseq::driver]`
     /// struct's Item. `#[serde(default)]` keeps models serialized before the
     /// construct existed deserializable.
@@ -155,25 +149,6 @@ pub struct RegseqModel {
     /// deserializable (I06).
     #[serde(default)]
     pub pinctrl: crate::pinctrl::PinctrlTables,
-
-    /// DMA-management sibling table (dma-management construct), keyed by the
-    /// `#[rseq::driver]` struct's Item. A DMA region/channel is a capability
-    /// layered on the device (memory it shares / a transport engine it drives),
-    /// so it gets its own top-level table rather than living on `DriverHandle`
-    /// (GRILL C09). `#[serde(default)]` keeps models serialized before the
-    /// construct existed deserializable (R15).
-    #[serde(default)]
-    pub dma: crate::dma::DmaTables,
-
-    /// Deferred-work-item-scheduling sibling table, keyed by the
-    /// `#[rseq::driver]` struct's Item. A `Work` item is a capability layered on
-    /// the device (a sleepable-context callback the driver schedules), so it gets
-    /// its own top-level table rather than living on `DriverHandle` (GRILL D03).
-    /// Unlike `clock`/`pinctrl` there is no L2 binding (0 L1 / 0 L2 properties,
-    /// GRILL D02). `#[serde(default)]` keeps models serialized before the
-    /// construct existed deserializable (I06).
-    #[serde(default)]
-    pub deferred_work: crate::deferred_work::DeferredWorkTables,
 }
 
 #[cfg(test)]
@@ -1132,12 +1107,9 @@ impl RegseqModel {
             domain_attrs: DomainAttrTables::default(),
             device_lifecycle: crate::device_lifecycle::DeviceLifecycleTables::default(),
             interrupt: crate::interrupt::InterruptTables::default(),
-            serial: crate::serial::SerialTables::default(),
             synchronization: crate::synchronization::SynchronizationTables::default(),
             clock: crate::clock::ClockTables::default(),
             pinctrl: crate::pinctrl::PinctrlTables::default(),
-            dma: crate::dma::DmaTables::default(),
-            deferred_work: crate::deferred_work::DeferredWorkTables::default(),
         }
     }
 
@@ -1433,17 +1405,6 @@ impl RegseqModel {
             self.interrupt.drivers.insert(new_id, driver);
         }
 
-        // `serial.drivers` is keyed by the same driver-struct `ItemId`. Its
-        // values carry only `InstanceRef` (content-addressed) + `TyId`/
-        // `VariantIdx`/`StringId` (stable across the F4 item sort — it permutes
-        // `items`, not the `TyInterner`, and remaps `ItemId`s *inside* `Ty`
-        // entries transparently), so re-keying by the driver `ItemId` is the
-        // only patch needed, like `interrupt`/`device_lifecycle`.
-        let old_serial = std::mem::take(&mut self.serial.drivers);
-        for (old_id, driver) in old_serial {
-            let new_id = remap[old_id.index()];
-            self.serial.drivers.insert(new_id, driver);
-        }
         // `synchronization.drivers` is keyed by the same driver-struct `ItemId`
         // (its values carry no `ItemId` references — StringId/TyId/InstanceRef/
         // BlockId/LocalId only), so re-key it by the same remap, exactly like
@@ -1472,35 +1433,6 @@ impl RegseqModel {
         for (old_id, driver) in old_pinctrls {
             let new_id = remap[old_id.index()];
             self.pinctrl.drivers.insert(new_id, driver);
-        }
-
-        // `dma.drivers` is keyed by the same driver-struct `ItemId`, so re-key
-        // it by the same remap, exactly like `clock`/`pinctrl`. The M1 region
-        // facts carry NO `ItemId` references (StringId/u64/Span only), so
-        // re-keying the map key is the only patch needed this cycle. (The M2
-        // `CompletionBinding.handler` is an `ItemId` that lives *inside* the
-        // value and is NOT visited by `for_each_item_id_mut`; when M2 lands it
-        // must be remapped here too — TODO M2.) Without this re-key a TU that
-        // runs the F4 item sort would leave `dma.drivers` keyed by stale ItemIds
-        // and the post-sort `element_access` site recognition (+ the backend's
-        // `Ty::Struct { item }` lookup) would not find the region.
-        let old_dma = std::mem::take(&mut self.dma.drivers);
-        for (old_id, driver) in old_dma {
-            let new_id = remap[old_id.index()];
-            self.dma.drivers.insert(new_id, driver);
-        }
-
-        // `deferred_work.drivers` is keyed by the same driver-struct `ItemId`
-        // (its values carry no `ItemId` references — StringId/FieldIdx/bool/u64/
-        // InstanceRef/SubmitVariant only, all stable across the F4 item sort), so
-        // re-key it by the same remap, exactly like `clock`/`pinctrl`. Without
-        // this a TU that runs the F4 item sort would leave the deferred-work map
-        // keyed by stale ItemIds and both the submit-site body pass and the
-        // backend's `Ty::Struct { item }` lookup would not find the `Work`.
-        let old_deferred_work = std::mem::take(&mut self.deferred_work.drivers);
-        for (old_id, driver) in old_deferred_work {
-            let new_id = remap[old_id.index()];
-            self.deferred_work.drivers.insert(new_id, driver);
         }
 
         #[cfg(debug_assertions)]
@@ -1702,20 +1634,6 @@ impl RegseqModel {
             }
         }
 
-        // `deferred_work.drivers` is keyed by the driver-struct `ItemId` (same
-        // discipline as `device_lifecycle`/`synchronization`); remap it the same
-        // way, dropping any removed driver's entry. This is REQUIRED (not merely
-        // mirror-of-clock): `recognise_submit_sites` is a post-DCE / post-sort
-        // body pass (like `recognise_acquire_sites`), so a Work driver whose
-        // diag-log calls are peeled here would otherwise leave the deferred-work
-        // map keyed by stale ItemIds — the F4 sort's later remap would then map
-        // those stale keys through the wrong index.
-        let old_deferred_work = std::mem::take(&mut self.deferred_work.drivers);
-        for (old_id, driver) in old_deferred_work {
-            if let Some(new_id) = remap[old_id.index()] {
-                self.deferred_work.drivers.insert(new_id, driver);
-            }
-        }
         remap
     }
 

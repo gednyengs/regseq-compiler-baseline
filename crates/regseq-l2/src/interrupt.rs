@@ -305,8 +305,8 @@ mod tests {
 
     #[test]
     fn non_canonical_polarity_is_rejected_not_coerced() {
-        // The pl011-full-spec fixture's historical `"high"` spelling: D10/R12
-        // demand rejection (the fixture migrates, the binder does not bend).
+        // A historical `"high"` spelling: D10/R12 demand rejection
+        // (fixtures migrate, the binder does not bend).
         let mut model = model_with_resource("uart_irq", InterruptForm::Single);
         let b = bindings("[interrupt.uart_irq]\ntrigger_polarity = \"high\"\n");
         let err = InterruptBinder.bind(&mut model, &b).unwrap_err();

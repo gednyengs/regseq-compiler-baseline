@@ -158,7 +158,6 @@ fn driver_into(
                 match_set,
                 device_class: ClassTag::Generic,
                 bus_type: bus,
-                dma_present: false,
             },
             handle,
             ops,
@@ -1348,7 +1347,6 @@ fn option_copy_within_the_zero_image_passes_through() {
                 match_set,
                 device_class: ClassTag::Generic,
                 bus_type: None,
-                dma_present: false,
             },
             handle: regseq_model::DriverHandle {
                 resource_fields: vec![],

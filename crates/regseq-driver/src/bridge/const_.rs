@@ -525,7 +525,7 @@ fn translate_scalar_int<'tcx>(
 
 /// Reconstruct the `Const::Aggregate` carrier for a scalar-ABI aggregate
 /// whose MIR `ConstValue` is a bare `Scalar` (e.g. a single-field newtype
-/// carrier such as `SerialErrors { bits: u8 }` or `Fv(u32)`, or a recursion
+/// carrier such as `ErrBits { bits: u8 }` or `Fv(u32)`, or a recursion
 /// of such). rustc collapses a struct/tuple whose layout is dominated by one
 /// non-ZST scalar field down to that field's scalar, so the const reaches
 /// `translate_scalar_int` with an aggregate *type* but a scalar *value*. The

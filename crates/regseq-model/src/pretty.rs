@@ -1963,44 +1963,6 @@ impl<'a> PrettyPrinter<'a> {
                     };
                     out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
                 }
-                // DMA-management author intrinsics (dma-management construct). The
-                // element-access verbs ride NAMESPACED `dma_element_*` labels (the
-                // bare `read`/`write`/`update` surface verbs are recognized by
-                // receiver type, never by NAME).
-                AttrData::Intrinsic(IntrinsicKind::Dma(op)) => {
-                    let label = match op {
-                        crate::DmaOp::ElementAccess {
-                            verb: crate::ElementVerb::Read,
-                        } => "dma_element_read",
-                        crate::DmaOp::ElementAccess {
-                            verb: crate::ElementVerb::Write,
-                        } => "dma_element_write",
-                        crate::DmaOp::ElementAccess {
-                            verb: crate::ElementVerb::Update,
-                        } => "dma_element_update",
-                        crate::DmaOp::StreamMap => "dma_stream",
-                        crate::DmaOp::StreamAcquireFromDevice => "dma_acquire_from_device",
-                        crate::DmaOp::StreamReleaseToDevice => "dma_release_to_device",
-                        crate::DmaOp::ChannelConfigure => "dma_configure",
-                        crate::DmaOp::ChannelStageTransfer => "dma_stage_transfer",
-                        crate::DmaOp::ChannelStartTransfer => "dma_start_transfer",
-                        crate::DmaOp::ChannelStop => "dma_stop",
-                        crate::DmaOp::ChannelRemainingBytes => "dma_remaining_bytes",
-                        crate::DmaOp::RegionSpan => "dma_region_span",
-                        crate::DmaOp::DeviceAddr => "dma_device_addr",
-                        crate::DmaOp::DeviceAddrOf => "dma_device_addr_of",
-                        crate::DmaOp::ElementCount => "dma_element_count",
-                    };
-                    out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
-                }
-                // Deferred-work-item-scheduling author intrinsic
-                // (deferred-work-item-scheduling construct).
-                AttrData::Intrinsic(IntrinsicKind::DeferredWork(op)) => {
-                    let label = match op {
-                        crate::DeferredWorkOp::Submit => "deferred_work_submit",
-                    };
-                    out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
-                }
                 // The framework-type marker has no DSL attribute render
                 // form in this phase; its render rule (if any) lands with
                 // the bridge/backend stages that consume it. Emit nothing.
@@ -2041,30 +2003,6 @@ impl<'a> PrettyPrinter<'a> {
                     let name = self.model.strings.resolve(*id);
                     out.push_str(&format!("#[rseq::pin_state(id = \"{name}\")]\n"));
                 }
-                // The dma-region / dma-channel resource markers are field
-                // attributes (`field_attrs`); they never appear in the item-attr
-                // stream. Emit nothing if they do.
-                AttrData::DmaRegionResource { .. } => {}
-                AttrData::DmaChannelResource { .. } => {}
-                // The completion binding (dma-management construct) is an ITEM
-                // attribute on the author-declared handler method (`item_attrs`);
-                // render the authored attribute form.
-                AttrData::DmaCompletionBinding { channel, .. } => {
-                    let name = self.model.strings.resolve(*channel);
-                    out.push_str(&format!("#[rseq::dma_completion(channel = \"{name}\")]\n"));
-                }
-                // Deferred-work handler-binding marker
-                // (deferred-work-item-scheduling construct): an ITEM attribute on
-                // the author-declared `fn(&mut self)` method (`item_attrs`);
-                // render the authored attribute form (only the bare `None` form
-                // is built; `Some` is design-in).
-                AttrData::WorkHandler { field } => match field {
-                    Some(field) => {
-                        let name = self.model.strings.resolve(*field);
-                        out.push_str(&format!("#[rseq::work_handler(field = \"{name}\")]\n"));
-                    }
-                    None => out.push_str("#[rseq::work_handler]\n"),
-                },
             }
         }
         out

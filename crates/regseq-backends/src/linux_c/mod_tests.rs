@@ -133,7 +133,6 @@ fn driver_model(
                 match_set,
                 device_class: regseq_model::ClassTag::Generic,
                 bus_type: bus,
-                dma_present: false,
             },
             handle: regseq_model::DriverHandle::default(),
             ops,
@@ -872,7 +871,6 @@ fn mmio_write_model_for(
                 match_set,
                 device_class: regseq_model::ClassTag::Generic,
                 bus_type: Some(bus),
-                dma_present: false,
             },
             handle: regseq_model::DriverHandle {
                 resource_fields: vec![regseq_model::ResourceField {
@@ -2131,7 +2129,6 @@ fn config_model(
                 match_set,
                 device_class: regseq_model::ClassTag::Generic,
                 bus_type: Some(bus),
-                dma_present: false,
             },
             handle: regseq_model::DriverHandle::default(),
             ops: regseq_model::LifecycleOps {

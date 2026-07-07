@@ -10,7 +10,6 @@ Infrastructure for Regseq static analysis passes.
   - Staging/trigger completeness verification (every path to trigger has all staging writes)
   - Shadow register inference (hw_updates + modify() usage analysis)
   - Synchronization checks SYN-001 through SYN-010
-  - DMA lifecycle verification (bind before use, error check after bind)
   - Error propagation enforcement
 
 ## Dependencies

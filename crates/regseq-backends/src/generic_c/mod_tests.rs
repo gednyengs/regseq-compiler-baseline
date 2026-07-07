@@ -91,7 +91,6 @@ fn lifecycle_trace_hooks_emitted_only_for_lifecycle_tu() {
                 match_set: Vec::new(),
                 device_class: regseq_model::ClassTag::Generic,
                 bus_type: None,
-                dma_present: false,
             },
             handle: regseq_model::DriverHandle::default(),
             ops: regseq_model::LifecycleOps::default(),
@@ -113,21 +112,10 @@ fn lifecycle_trace_hooks_emitted_only_for_lifecycle_tu() {
 }
 
 #[test]
-fn work_hooks_emitted_only_for_deferred_work_tu() {
-    // T17 byte-stability guard (deferred-work-item-scheduling construct, GRILL
-    // D07): a no-`Work` TU is recognized as having NO deferred-work resource and
-    // emits NONE of the deferred-work surface — no `WORK_HELPERS` prelude
-    // (`REGSEQ_WORK_SLOTS` / `regseq_work_t` / the `__regseq_work_slots` table /
-    // the `regseq_work_*` hooks). The emission is gated on
-    // `model_has_deferred_work_resource` (resource presence, NOT submit / intrinsic
-    // presence), so landing this construct churns no existing committed golden.
-    // The positive half (a `Work` TU DOES emit the surface) is the reset / nosubmit
-    // goldens (T15/T16); the whole-suite zero-churn confirmation is the regression.
+fn no_work_hooks_are_ever_emitted() {
+    // Scaffold zero-leak guard: no emitted TU carries any `regseq_work_*`
+    // scaffolding (the deferred-work surface is not part of this compiler).
     let m = trivial_model();
-    assert!(
-        !body_emit::model_has_deferred_work_resource(&m),
-        "a no-Work model must not be recognized as having a deferred-work resource"
-    );
     let tu = emit_generic_c(&m).unwrap();
     for token in [
         "REGSEQ_WORK_SLOTS",
@@ -138,10 +126,7 @@ fn work_hooks_emitted_only_for_deferred_work_tu() {
         "regseq_work_cancel",
         "regseq_work_drain",
     ] {
-        assert!(
-            !tu.contains(token),
-            "a no-Work TU must not emit `{token}` (byte-stability, D07)"
-        );
+        assert!(!tu.contains(token), "a TU must not emit `{token}`");
     }
 }
 
@@ -157,8 +142,7 @@ fn work_hooks_emitted_only_for_deferred_work_tu() {
 //   - M1 keystone base literal           bus_resource_keystone_maps_the_real_declared_base
 //   - M1 runtime based accessor (cc)      bus_resource_based_accessor_traces_the_real_mapped_address
 //   - M2/D02 effective-BAR override       bus_resource_map_region_records_the_effective_bar_override
-//   - M3 four-op canonical order + DMA    bus_resource_m3_preamble_emits_four_ops_in_canonical_order
-//                                         bus_resource_m3_set_master_gated_on_dma_presence
+//   - M3 four-op canonical order          bus_resource_m3_preamble_emits_four_ops_in_canonical_order
 //   - M3/M4 non-PCI degradation           bus_resource_m3_non_pci_omits_enable_and_master
 //                                         bus_resource_m4_non_pci_no_bar_acquire_degrades
 //   - M5 config-space host model          bus_resource_m5_config_read_witness_and_pci_id_caching
@@ -189,18 +173,16 @@ fn work_hooks_emitted_only_for_deferred_work_tu() {
 
 /// Build a lifecycle model with one driver carrying a single MMIO resource
 /// field whose binding is `binding` (bus-resource-management construct #3). The
-/// driver is on a PCI bus with DMA-presence absent (the keystone default).
+/// driver is on a PCI bus (the keystone default).
 fn model_with_bound_mmio_field(binding: regseq_model::MmioBinding) -> RegseqModel {
-    model_with_bound_mmio_field_cfg(binding, Some(regseq_model::BusType::Pci), false)
+    model_with_bound_mmio_field_cfg(binding, Some(regseq_model::BusType::Pci))
 }
 
-/// As [`model_with_bound_mmio_field`] but with the `bus_type` + DMA-presence
-/// gating bit explicit — exercises the M3 gating matrix (T12): `enable_device`
-/// PCI-only, `set_bus_master` PCI ∧ DMA-presence.
+/// As [`model_with_bound_mmio_field`] but with the `bus_type` explicit —
+/// exercises the M3 gating matrix (T12): `enable_device` PCI-only.
 fn model_with_bound_mmio_field_cfg(
     binding: regseq_model::MmioBinding,
     bus_type: Option<regseq_model::BusType>,
-    dma_present: bool,
 ) -> RegseqModel {
     let mut m = model();
     let driver_ty = push_struct_instance(&mut m, "Dev", struct_layout(0, 1, None, vec![]));
@@ -218,7 +200,6 @@ fn model_with_bound_mmio_field_cfg(
                 match_set: Vec::new(),
                 device_class: regseq_model::ClassTag::Generic,
                 bus_type,
-                dma_present,
             },
             handle: regseq_model::DriverHandle {
                 resource_fields: vec![regseq_model::ResourceField {
@@ -235,7 +216,7 @@ fn model_with_bound_mmio_field_cfg(
 }
 
 /// A resolved PCI MMIO binding (bar 0, base 0xf000_0000, size 0x2_0000) — the
-/// M3 gating-matrix tests vary only the bus/DMA cfg around this.
+/// M3 gating-matrix tests vary only the bus cfg around this.
 fn resolved_pci_binding() -> regseq_model::MmioBinding {
     regseq_model::MmioBinding {
         id: None,
@@ -320,12 +301,11 @@ fn bus_resource_m3_preamble_emits_four_ops_in_canonical_order() {
     // Construct #3 M3 (T11/T12/R04): a PCI driver with a resolved region emits
     // the full preamble in canonical order
     //   enable_device → claim_regions → get_resource_handle → map_region
-    // with `set_bus_master` ABSENT (DMA-presence defaults off, T12). The four
+    // with `set_bus_master` ABSENT (never synthesized). The four
     // managed ops are synthesized into the device-lifecycle preamble.
     let with = emit_generic_c(&model_with_bound_mmio_field_cfg(
         resolved_pci_binding(),
         Some(regseq_model::BusType::Pci),
-        false,
     ))
     .unwrap();
     let enable = idx_of(&with, "regseq_bus_enable_device();");
@@ -337,31 +317,10 @@ fn bus_resource_m3_preamble_emits_four_ops_in_canonical_order() {
         "canonical order enable→claim→get_handle→map violated \
          (enable={enable} claim={claim} handle={handle} map={map}); got:\n{with}"
     );
-    // set_bus_master is gated on DMA-presence (absent here) — not emitted.
+    // set_bus_master is never emitted.
     assert!(
         !with.contains("regseq_bus_set_master();"),
-        "set_bus_master must be absent when DMA-presence is off; got:\n{with}"
-    );
-}
-
-#[test]
-fn bus_resource_m3_set_master_gated_on_dma_presence() {
-    // Construct #3 M3 (T12): on a PCI bus, `set_bus_master` IS emitted once the
-    // DMA-presence gating bit is set, and it sits between `claim_regions` and
-    // `get_resource_handle` in canonical order.
-    let with = emit_generic_c(&model_with_bound_mmio_field_cfg(
-        resolved_pci_binding(),
-        Some(regseq_model::BusType::Pci),
-        true, // DMA-presence on
-    ))
-    .unwrap();
-    let claim = idx_of(&with, "regseq_bus_claim_regions(0);");
-    let master = idx_of(&with, "regseq_bus_set_master();");
-    let handle = idx_of(&with, "regseq_bus_get_handle();");
-    assert!(
-        claim < master && master < handle,
-        "set_bus_master must sit between claim and get_handle \
-         (claim={claim} master={master} handle={handle}); got:\n{with}"
+        "set_bus_master must not be emitted; got:\n{with}"
     );
 }
 
@@ -374,7 +333,6 @@ fn bus_resource_m3_non_pci_omits_enable_and_master() {
     let with = emit_generic_c(&model_with_bound_mmio_field_cfg(
         resolved_pci_binding(),
         Some(regseq_model::BusType::Amba),
-        true, // even with DMA-presence on, a non-PCI bus emits no master
     ))
     .unwrap();
     // The surviving non-PCI ops keep canonical order claim → get_handle → map
@@ -416,7 +374,6 @@ fn bus_resource_m4_non_pci_no_bar_acquire_degrades() {
             size: Some(0x1000),
         },
         Some(regseq_model::BusType::Amba),
-        false,
     ))
     .unwrap();
     // The acquire resolves + maps with `bar=-1` (no BAR), in canonical order
@@ -751,7 +708,6 @@ fn bus_resource_block_absent_without_a_resolved_binding() {
     let without = emit_generic_c(&model_with_bound_mmio_field_cfg(
         regseq_model::MmioBinding::default(),
         None, // no `bus` -> the register-access case
-        false,
     ))
     .unwrap();
     assert!(
@@ -772,7 +728,6 @@ fn bus_resource_m6_registration_selector() {
     let with = emit_generic_c(&model_with_bound_mmio_field_cfg(
         resolved_pci_binding(),
         Some(regseq_model::BusType::Pci),
-        false,
     ))
     .unwrap();
     // Anchor on the synthesized CALLS (with their `"` arg), not the helper
@@ -792,7 +747,6 @@ fn bus_resource_m6_registration_selector() {
     let unbound = emit_generic_c(&model_with_bound_mmio_field_cfg(
         regseq_model::MmioBinding::default(),
         Some(regseq_model::BusType::Amba),
-        false,
     ))
     .unwrap();
     assert!(
@@ -806,7 +760,6 @@ fn bus_resource_m6_registration_selector() {
     let nobus = emit_generic_c(&model_with_bound_mmio_field_cfg(
         resolved_pci_binding(),
         None,
-        false,
     ))
     .unwrap();
     assert!(
@@ -849,7 +802,6 @@ fn bus_resource_rejects_more_than_one_mapped_region_per_driver() {
                 match_set: Vec::new(),
                 device_class: regseq_model::ClassTag::Generic,
                 bus_type: Some(regseq_model::BusType::Pci),
-                dma_present: false,
             },
             handle: regseq_model::DriverHandle {
                 resource_fields: vec![resolved(a), resolved(b)],
