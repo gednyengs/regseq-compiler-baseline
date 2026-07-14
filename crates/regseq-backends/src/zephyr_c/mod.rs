@@ -391,6 +391,22 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
             roots.push((name, id));
         }
     }
+    let work_handlers: Vec<InstanceId> = model
+        .deferred_work
+        .drivers
+        .get(driver_item)
+        .map(|d| {
+            d.resources
+                .iter()
+                .map(|r| {
+                    r.handler
+                        .and_then(|h| resolve_instance_ref(model, h))
+                        .ok_or_else(|| EmitError::Driver("deferred-work handler does not resolve to an instance".into()))
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
     // -- device-interrupt facts (construct #6, T11): guards + the handler
     //    body joins the lowered closure (leaf symbol); the void ISR wrapper
     //    is scaffold-synthesized before the init fn --------------------------
@@ -400,7 +416,8 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         roots
             .iter()
             .map(|(_, id)| *id)
-            .chain(irq.iter().map(|i| i.handler)),
+            .chain(irq.iter().map(|i| i.handler))
+            .chain(work_handlers.iter().copied()),
     );
 
     // -- frame scan over the closure: op-shape rejections that must fire
@@ -466,6 +483,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
             reg_macros,
             base_symbol: base_symbol.clone(),
             pcie,
+            drv: drv.clone(),
         },
         width8_used: false,
         uses_log: false,
@@ -554,6 +572,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
                 reg_macros: cx.driver.reg_macros.clone(),
                 base_symbol: cx.driver.base_symbol.clone(),
                 pcie: cx.driver.pcie,
+                drv: cx.driver.drv.clone(),
             },
             width8_used: false,
             uses_log: false,
@@ -605,6 +624,10 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
 
     // -- the init function (scaffold §3) + the fused errno adapter ----------
     let find = |name: &str| roots.iter().find(|(n, _)| *n == name).map(|(_, id)| *id);
+    let work = zephyr_work_emission(&cx, &drv)?;
+    if !work.fields.is_empty() {
+        cx.extra_includes.insert("<zephyr/kernel.h>");
+    }
     let mut init_fn = emit_init_fn(
         &mut cx,
         &drv,
@@ -614,7 +637,9 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         find("on_init"),
         find("on_init_failure"),
         irq.as_ref(),
+        &work,
     )?;
+    init_fn = format!("{}{init_fn}", work.wrappers);
     // The void ISR wrapper (construct #6, C04) precedes the init fn that
     // IRQ_CONNECTs it: recover the device from the build-time-constant
     // sw_isr_table parameter, run the authored handler over the embedded
@@ -630,9 +655,17 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
     // -- the deinit function (spec-convergence-pl011 C04): authored
     //    `on_deinit` only — unauthored leaves the scaffold byte-identical
     //    (I05: the absentslot/init-fail goldens stay frozen).
-    let deinit_fn = find("on_deinit")
-        .map(|id| emit_deinit_fn(&mut cx, &drv, id, irq.as_ref()))
-        .transpose()?;
+    let deinit_fn = if find("on_deinit").is_some() || !work.fields.is_empty() {
+        Some(emit_deinit_fn(
+            &mut cx,
+            &drv,
+            find("on_deinit"),
+            irq.as_ref(),
+            &work,
+        )?)
+    } else {
+        None
+    };
 
     // -- type definitions, now that every use is known -----------------------
     let type_defs = emit_type_defs(&mut cx, driver_ty)?;
@@ -658,6 +691,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         &bodies,
         &init_fn,
         deinit_fn.as_deref(),
+        &work,
     )?;
     let binding_yaml = emit_binding_yaml(
         model,
@@ -756,6 +790,46 @@ struct PciePreamble {
     bar: u8,
 }
 
+struct ZephyrWorkEmission {
+    fields: String,
+    wrappers: String,
+    init: String,
+    cancel: String,
+}
+
+fn zephyr_work_emission(
+    cx: &body::LowerCx<'_>,
+    drv: &str,
+) -> Result<ZephyrWorkEmission, EmitError> {
+    let driver_item = match &cx.model.types[cx.driver.driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => return Err(EmitError::Driver("driver type is not a struct".into())),
+    };
+    let Some(work) = cx.model.deferred_work.drivers.get(&driver_item) else {
+        return Ok(ZephyrWorkEmission { fields: String::new(), wrappers: String::new(), init: String::new(), cancel: String::new() });
+    };
+    let mut fields = String::new();
+    let mut wrappers = String::new();
+    let mut init = String::new();
+    let mut cancel = String::new();
+    for (idx, resource) in work.resources.iter().enumerate() {
+        let handler = resource
+            .handler
+            .and_then(|h| resolve_instance_ref(cx.model, h))
+            .and_then(|id| cx.fn_symbols.get(&id))
+            .ok_or_else(|| EmitError::Driver("deferred-work handler symbol is unavailable".into()))?;
+        fields.push_str(&format!("\tstruct k_work __rseq_work_{idx};\n"));
+        wrappers.push_str(&format!(
+            "static void {drv}_work_{idx}(struct k_work *work)\n{{\n\tstruct {drv}_data *data = CONTAINER_OF(work, struct {drv}_data, __rseq_work_{idx});\n\n\t{handler}(&data->inner);\n}}\n\n"
+        ));
+        init.push_str(&format!("\tk_work_init(&data->__rseq_work_{idx}, {drv}_work_{idx});\n"));
+    }
+    for idx in (0..work.resources.len()).rev() {
+        cancel.push_str(&format!("\t{{ struct k_work_sync __sync; (void)k_work_cancel_sync(&data->__rseq_work_{idx}, &__sync); }}\n"));
+    }
+    Ok(ZephyrWorkEmission { fields, wrappers, init, cancel })
+}
+
 /// Synthesize the per-instance init function (scaffold §3): the one runtime
 /// dispatch hub — resource preamble (claim_regions = ZERO calls, the
 /// ratified elision; `DEVICE_MMIO_MAP` + the TU-static base install, A-2;
@@ -803,6 +877,7 @@ fn emit_init_fn(
     on_init: Option<InstanceId>,
     on_init_failure: Option<InstanceId>,
     irq: Option<&ZephyrIrq>,
+    work: &ZephyrWorkEmission,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
     out.push_str(&format!(
@@ -826,7 +901,8 @@ fn emit_init_fn(
         || on_init.is_some()
         || on_init_failure.is_some()
         || !atomic_init.is_empty()
-        || !sync_inits.is_empty();
+        || !sync_inits.is_empty()
+        || !work.fields.is_empty();
     if uses_data {
         out.push_str(&format!("\tstruct {drv}_data *data = dev->data;\n\n"));
     }
@@ -924,16 +1000,19 @@ fn emit_init_fn(
             "\tIRQ_CONNECT(DT_INST_IRQN(0), {priority}, rseq_isr_{drv},\n\t\t    DEVICE_DT_INST_GET(0), 0);\n\n"
         ));
     }
+    out.push_str(&work.init);
     // Seed the Atomic fields before on_init (runs regardless of on_init).
     out.push_str(&atomic_init);
     if let Some(init_id) = on_init {
         let sym = cx.fn_symbols[&init_id].clone();
-        let failure_hook = on_init_failure.map(|fid| {
+        let mut hook = on_init_failure.map(|fid| {
             format!(
                 "\t\t\t/* authored on_init -> Err: the failure hook IS the cleanup\n\t\t\t * slot, sequenced before the error return (D12); its one and\n\t\t\t * only call site */\n\t\t\t(void){}(&data->inner);\n",
                 cx.fn_symbols[&fid]
             )
-        });
+        }).unwrap_or_default();
+        hook.push_str(&work.cancel.replace('\t', "\t\t\t"));
+        let failure_hook = (!hook.is_empty()).then_some(hook);
         out.push_str(
             "\t/* authored on_init over the embedded spec driver; an authored\n\t * RegseqError crosses the negated-errno adapter HERE and only here\n\t * (I10: native status — none exists in this preamble — would\n\t * propagate directly, never wrapped) */\n",
         );
@@ -968,20 +1047,23 @@ fn emit_init_fn(
 fn emit_deinit_fn(
     cx: &mut body::LowerCx<'_>,
     drv: &str,
-    on_deinit: InstanceId,
+    on_deinit: Option<InstanceId>,
     irq: Option<&ZephyrIrq>,
+    work: &ZephyrWorkEmission,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
     out.push_str(&format!(
         "/* the teardown dispatch hub (spec-convergence-pl011 C04) */\nstatic int {drv}_deinit(const struct device *dev)\n{{\n"
     ));
     out.push_str(&format!("\tstruct {drv}_data *data = dev->data;\n\n"));
-    let sym = cx.fn_symbols[&on_deinit].clone();
-    out.push_str(
-        "\t/* authored on_deinit over the embedded spec driver; the authored\n\t * RegseqError crosses the negated-errno adapter exactly as in init\n\t * (kernel/device.c:199: the rc is returned verbatim; `initialized`\n\t * stays true on failure, clears on success) */\n",
-    );
-    let adapter = emit_result_adapter(cx, on_deinit, &format!("{sym}(&data->inner)"), None)?;
-    out.push_str(&adapter);
+    if let Some(on_deinit) = on_deinit {
+        let sym = cx.fn_symbols[&on_deinit].clone();
+        out.push_str(
+            "\t/* authored on_deinit over the embedded spec driver; the authored\n\t * RegseqError crosses the negated-errno adapter exactly as in init\n\t * (kernel/device.c:199: the rc is returned verbatim; `initialized`\n\t * stays true on failure, clears on success) */\n",
+        );
+        let adapter = emit_result_adapter(cx, on_deinit, &format!("{sym}(&data->inner)"), None)?;
+        out.push_str(&adapter);
+    }
     if irq.is_some() {
         // Interrupt teardown (construct #6, D09/R06): disable after the
         // teardown callback — then the deregister SLOT, where the static
@@ -1000,6 +1082,7 @@ fn emit_deinit_fn(
             out.push('\n');
         }
     }
+    out.push_str(&work.cancel);
     out.push_str(
         "\t/* postamble (integration §5.2): map_region's unmap mirror is a\n\t * deliberate NO-OP — no DEVICE_MMIO unmap exists on Zephyr; nothing\n\t * is invented (C04) */\n",
     );
@@ -1831,6 +1914,7 @@ fn emit_tu(
     bodies: &str,
     init_fn: &str,
     deinit_fn: Option<&str>,
+    work: &ZephyrWorkEmission,
 ) -> Result<String, EmitError> {
     let model = cx.model;
     let inner_tag = cx.names.name_of(model, driver_ty)?;
@@ -1943,6 +2027,7 @@ fn emit_tu(
     tu.push_str(&format!(
         "\tstruct {inner_tag} inner;\n\tuint32_t __rseq_state; /* retained; zero in the static image */\n"
     ));
+    tu.push_str(&work.fields);
     if pcie {
         tu.push_str(
             "\tstruct pcie_dev *pcie; /* PCIe context (scaffold §1 item 4;\n\t                        * witness eth_e1000_priv.h:93) */\n",

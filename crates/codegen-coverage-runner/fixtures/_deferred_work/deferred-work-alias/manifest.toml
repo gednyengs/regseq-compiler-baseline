@@ -1,0 +1,12 @@
+name   = "deferred-work-alias"
+kind   = "rust"
+# T14 ADT-DefId recognition probe — alias half (PLAN T14): the `Work` field is
+# declared via `type WorkAlias = Work;`. Recognition keys on the RESOLVED ADT item
+# DefId + its #[rseq::abstraction("deferred_work")] marker (GRILL D04), so the
+# aliased field still recognizes / binds / tags submit. Consumed ONLY by the
+# dedicated `dws_alias_recognition_e2e` binary (bridge + model inspection); it has
+# NO golden by design (the emit path is the reset keystone's, T15) and is never run
+# through the six-stage pipeline.
+lifecycle_scenario = "orderly"
+covers = ["DWS-5"]
+expect = "pass"

@@ -1,0 +1,15 @@
+name   = "deferred-work-reset"
+kind   = "rust"
+# The deferred-work-item-scheduling M1 vertical-slice behavioral-oracle fixture:
+# the smallest valid spec — one type-recognized `#[rseq::abstraction("deferred_work")]`
+# `Work` field, one bound `#[rseq::work_handler] fn(&mut self)` (the E1000
+# `reset_task` witness shape), and an `on_init` that `self.work.submit()`s it.
+# The backend synthesizes `init_work` (preamble) + the self-recovering lock-free
+# wrapper + `cancel_work` (postamble); the orderly scenario drains after
+# `on_init`. `expected.stdout` is the WRK trace oracle (C05):
+# `WRK init -> WRK submit -> WRK drain⇒WRK dispatch -> WRK cancel`. The golden
+# (byte-exact `golden.c` + `expected.stdout`) is blessed in M3/T15; this M1 smoke
+# only asserts a clean run + the four-phase trace ordering.
+lifecycle_scenario = "orderly"
+covers = ["DWS-1", "DWS-2", "DWS-3"]
+expect = "pass"

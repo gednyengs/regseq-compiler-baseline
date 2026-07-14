@@ -347,6 +347,26 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             roots.push((name, id));
         }
     }
+    let work_handlers: Vec<InstanceId> = model
+        .deferred_work
+        .drivers
+        .get(driver_item)
+        .map(|d| {
+            d.resources
+                .iter()
+                .map(|r| {
+                    r.handler
+                        .and_then(|h| resolve_instance_ref(model, h))
+                        .ok_or_else(|| EmitError::Driver("deferred-work handler does not resolve to an instance".into()))
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    if !work_handlers.is_empty() {
+        cx.extra_includes.insert("<linux/workqueue.h>");
+        cx.extra_includes.insert("<linux/container_of.h>");
+    }
     // -- device-interrupt facts (construct #6, T09): guards + the handler
     //    body joins the lowered closure (its symbol comes from the leaf
     //    loop; the irqreturn_t WRAPPER is scaffold-synthesized) ------------
@@ -356,7 +376,8 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         roots
             .iter()
             .map(|(_, id)| *id)
-            .chain(irq.iter().map(|i| i.handler)),
+            .chain(irq.iter().map(|i| i.handler))
+            .chain(work_handlers.iter().copied()),
     )?;
     // Symbols: `<drv>_<leaf>` with deterministic clash suffixes, callbacks
     // named first so they always get the bare leaf.
@@ -816,6 +837,47 @@ struct Scaffold {
     shutdown_sym: Option<String>,
 }
 
+struct LinuxWorkEmission {
+    fields: String,
+    wrappers: String,
+    init: String,
+    cancel: String,
+}
+
+fn linux_work_emission(
+    cx: &body::LowerCx<'_>,
+    drv: &str,
+    driver_ty: TyId,
+) -> Result<LinuxWorkEmission, EmitError> {
+    let driver_item = match &cx.model.types[driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => return Err(EmitError::Driver("driver type is not a struct".into())),
+    };
+    let Some(work) = cx.model.deferred_work.drivers.get(&driver_item) else {
+        return Ok(LinuxWorkEmission { fields: String::new(), wrappers: String::new(), init: String::new(), cancel: String::new() });
+    };
+    let mut fields = String::new();
+    let mut wrappers = String::new();
+    let mut init = String::new();
+    let mut cancel = String::new();
+    for (idx, resource) in work.resources.iter().enumerate() {
+        let handler = resource
+            .handler
+            .and_then(|h| resolve_instance_ref(cx.model, h))
+            .and_then(|id| cx.fn_symbols.get(&id))
+            .ok_or_else(|| EmitError::Driver("deferred-work handler symbol is unavailable".into()))?;
+        fields.push_str(&format!("\tstruct work_struct __rseq_work_{idx};\n"));
+        wrappers.push_str(&format!(
+            "static void {drv}_work_{idx}(struct work_struct *work)\n{{\n\tstruct {drv}_priv *priv = container_of(work, struct {drv}_priv, __rseq_work_{idx});\n\n\t{handler}(&priv->inner);\n}}\n\n"
+        ));
+        init.push_str(&format!("\tINIT_WORK(&priv->__rseq_work_{idx}, {drv}_work_{idx});\n"));
+    }
+    for idx in (0..work.resources.len()).rev() {
+        cancel.push_str(&format!("\tcancel_work_sync(&priv->__rseq_work_{idx});\n"));
+    }
+    Ok(LinuxWorkEmission { fields, wrappers, init, cancel })
+}
+
 /// Synthesize the private container, `.probe`, and `.remove` for the AMBA
 /// scaffold (`linux-scaffold-and-dispatch.md` §2–§4; canonical order
 /// create → associate → preamble → on_init).
@@ -850,13 +912,16 @@ fn emit_scaffold(
     // includes <linux/errno.h>.
     let uses_errno = true;
     let mut out = String::new();
+    let work = linux_work_emission(cx, drv, driver_ty)?;
 
     // The per-device private container (the morph, `linux-lowering-per-construct.md`
     // §C.7): kernel device back-pointer + the spec driver embedded verbatim.
     // Emitted in the driver-state bank (D04), before the lowered bodies.
     let container = format!(
-        "/* per-device private container: kernel back-pointer + the spec driver */\nstruct {drv}_priv {{\n\tstruct amba_device *adev;\n\tstruct {driver_struct} inner;\n}};\n\n"
+        "/* per-device private container: kernel back-pointer + the spec driver */\nstruct {drv}_priv {{\n\tstruct amba_device *adev;\n\tstruct {driver_struct} inner;\n{}}};\n\n",
+        work.fields
     );
+    out.push_str(&work.wrappers);
 
     // The irqreturn_t ISR wrapper (construct #6, C04): recover the driver
     // from the registered dev_id (the priv container), run the authored
@@ -968,6 +1033,7 @@ fn emit_scaffold(
             name = c_ident(&irq.dev_name),
         ));
     }
+    out.push_str(&work.init);
     // Atomicity (R10/S10): seed the Atomic fields before any callback, regardless
     // of whether on_init is authored (the fields live in the private struct, so
     // a non-zero initial must be applied even with no on_init).
@@ -990,6 +1056,7 @@ fn emit_scaffold(
                 "\t\t\t/* interrupt unwind (R16): never enabled; free the manual\n\t\t\t * request (no devm) */\n\t\t\tfree_irq(adev->irq[0], priv);\n",
             );
         }
+        hook.push_str(&work.cancel.replace('\t', "\t\t\t"));
         let failure_hook = (!hook.is_empty()).then_some(hook);
         let adapter = emit_result_adapter(
             cx,
@@ -1034,6 +1101,7 @@ fn emit_scaffold(
             "\t/* interrupt teardown (construct #6): disable -> deregister (D09) */\n\tdisable_irq(adev->irq[0]);\n\tfree_irq(adev->irq[0], priv);\n",
         );
     }
+    out.push_str(&work.cancel);
     out.push_str("\t/* postamble: devm-managed resources release automatically (A-2) */\n}\n\n");
 
     // .shutdown — the lone omit-when-absent slot, on device_driver (.drv)
@@ -1086,14 +1154,17 @@ fn emit_scaffold_pci(
     // includes <linux/errno.h>.
     let uses_errno = true;
     let mut out = String::new();
+    let work = linux_work_emission(cx, drv, driver_ty)?;
 
     // The per-device private container (the morph, §C.7): kernel device
     // back-pointer + the spec driver embedded verbatim. `pdev` is the C01
     // premise: the scaffold is the sole driver instantiation site, so every
     // `&<drv>` points at `inner` and `container_of` recovery is well-defined.
     let container = format!(
-        "/* per-device private container: kernel back-pointer + the spec driver */\nstruct {drv}_priv {{\n\tstruct pci_dev *pdev;\n\tstruct {driver_struct} inner;\n}};\n\n"
+        "/* per-device private container: kernel back-pointer + the spec driver */\nstruct {drv}_priv {{\n\tstruct pci_dev *pdev;\n\tstruct {driver_struct} inner;\n{}}};\n\n",
+        work.fields
     );
+    out.push_str(&work.wrappers);
 
     // The single resolved region's BAR (D02: per-region-shaped via
     // effective_bar; >1 region is the loud B-5 gate).
@@ -1189,18 +1260,21 @@ fn emit_scaffold_pci(
     // propagation (a hard init error, I02). Empty for a clock-less / static-only
     // driver (I07). (PL011 is AMBA; this keeps a clock-bearing PCI driver sound.)
     out.push_str(&clock::acquire_lines(model, driver_ty, "&pdev->dev")?);
+    out.push_str(&work.init);
     // Atomicity (R10/S10): seed the Atomic fields before any callback, regardless
     // of whether on_init is authored (the fields live in the private struct, so
     // a non-zero initial must be applied even with no on_init).
     out.push_str(&emit_atomic_init(cx));
     if let Some(id) = on_init {
         let sym = cx.fn_symbols[&id].clone();
-        let failure_hook = on_init_failure.map(|fid| {
+        let mut hook = on_init_failure.map(|fid| {
             format!(
                 "\t\t\t/* authored on_init -> Err: the failure hook IS the cleanup\n\t\t\t * (the kernel does not call .remove on probe failure; devres\n\t\t\t * unwinds the preamble) */\n\t\t\t(void){}(&priv->inner);\n",
                 cx.fn_symbols[&fid]
             )
-        });
+        }).unwrap_or_default();
+        hook.push_str(&work.cancel.replace('\t', "\t\t\t"));
+        let failure_hook = (!hook.is_empty()).then_some(hook);
         let adapter = emit_result_adapter(
             cx,
             id,
@@ -1239,6 +1313,7 @@ fn emit_scaffold_pci(
         }
         None => out.push_str(&orderly_arm("\t")),
     }
+    out.push_str(&work.cancel);
     out.push_str("\t/* postamble: devres-managed resources release automatically (A-2) */\n}\n\n");
 
     // .shutdown — the lone omit-when-absent slot; pci_driver carries its own

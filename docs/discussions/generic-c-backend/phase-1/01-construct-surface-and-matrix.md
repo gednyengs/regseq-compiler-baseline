@@ -626,6 +626,43 @@ separate parity row, and the rejects stay at their as-built PIN-8/PIN-9 ids.
 | PIN-8 | recognition C06 reject family | acquire-stage `PIN-ERR-*` rejection: missing-id, malformed/unknown attr, attr-on-non-pinctrl, unsupported form (`[PinCtrl;N]`/`Vec<PinCtrl>`/bare `&PinCtrl`), duplicate L1 id, malformed/duplicate/non-ZST/invalid state marker, unresolved generic `S`, author-managed field, spoofed receiver | deferred | GRILL C06/D13/D14 | **PIN-C06-RECOGNITION**: one reject fixture per check, `fires it and only it` via stage+diagnostic |
 | PIN-9 | binding C06 reject family | bind-stage `PIN-L2-*` rejection: missing inventory (required), orphan section, empty states, empty state name, no `default`, duplicate state; SHAPE errors (missing key / non-array / non-string) stay parser-`BadPinctrl` (`PIN-L2-MANY-MATCH` is structurally unreachable — enforced by construction, no fixture) | deferred | GRILL C01/C06/D07 | **PIN-C06-BINDING**: one reject fixture per check, `fires it and only it` via stage+diagnostic |
 
+---
+
+### Deferred-work-item-scheduling rows (deferred-work-item-scheduling unit, construct #8)
+
+The compiler-managed **deferred-work-item-scheduling**: a typed opaque `Work` field
+recognized BY TYPE (`#[rseq::abstraction("deferred_work")]` on the `Work` ADT item —
+NOT a field attribute, NOT the type name, D04), a handler bound via a bare
+`#[rseq::work_handler] fn(&mut self)`, and `self.work.submit()` (direct field-path
+only). The compiler force-materializes the handler, synthesizes a self-recovering
+lock-free wrapper, and emits `init_work` (preamble, before `LC call on_init`) /
+`cancel_work` (teardown, last before free) + the `submit` lowering as traceable
+generic-c `WRK …` hooks; the synthesized harness drives `init → submit →
+drain⇒dispatch → cancel` (the `regseq_work_drain()` is harness-only, never
+authored). 0 L1 / 0 L2 properties (D02), so there is no platform binding. Status is
+`deferred` by the LC/IRQ/CLK/PIN precedent: the fixtures live under
+`fixtures/_deferred_work/` (interner-isolated, outside Mode-A `discover`), so a
+`covered` status would mint `covered_without_green` drift in `ledger::build`; the
+REAL gate is the dedicated covers-aggregation test (`tests/dws_covers.rs`) plus the
+sole-binary e2es (`tests/dws_reset_e2e.rs`, `tests/dws_nosubmit_e2e.rs`,
+`tests/dws_alias_recognition_e2e.rs`, `tests/dws_reject_e2e.rs`). The historical
+generic-C contract remains exact; C0-DWS adds only the locked-addendum native
+Linux workqueue and Zephyr k_work mappings, without adding L1/L2 vocabulary or a
+fifth target. No `IrqResult::DeferWork` un-gating (the IRQ-13 guard stays unrelaxed;
+the reset golden never uses it). Rows follow the IRQ precedent — behavioral rows
+(one fixture covers several) + a single grouped C06 reject-family row.
+
+| id | construct | C lowering | status | spec ref | notes |
+| -- | --------- | ---------- | ------ | -------- | ----- |
+| DWS-1 | lifecycle framing | `WRK init <i>` in the preamble before `LC call on_init`; `WRK cancel <i>` at teardown after `on_deinit`, at the head of the managed teardown block (before the clock/pinctrl/resource postambles — last only when no other resource is declared, as in the reset fixture) — compiler-synthesized, resource-gated (emitted for every required bound `Work`, NOT submit-gated), never authored | deferred | deferred-work-item-scheduling GRILL R04/I04/I05, C07/D07/D13 | **DWS-FRAMING**: `deferred-work-reset` |
+| DWS-2 | submit lowering + self-recovering lock-free wrapper + dispatch | `self.work.submit()` → `WRK submit <i>`; the synthesized `static void rseq_work_*(void *)` wrapper recovers the driver (`&__t->inner`) and runs the handler with NO lock; the harness drain dispatches it (`WRK drain` ⇒ `WRK dispatch <i>`) — the recovered `&mut self` mutation is observable | deferred | GRILL R03/R05/I01/I02, C04/C05 | **DWS-DISPATCH**: `deferred-work-reset` — init/submit/cancel all key the SAME `__regseq_work_slots[idx]` (the `Work` ZST has no storage, T07) | 
+| DWS-3 | cancel-before-free + post-cancel no-rearm | `cancel_work` frees the registration (zeroes `fn`); a post-cancel harness submit+drain dispatches NOTHING — a cancelled `Work` cannot re-arm | deferred | GRILL I04, C05 item 4 | **DWS-NO-REARM**: `deferred-work-reset` post-cancel probe |
+| DWS-4 | resource-gated emission distinguisher | a required bound `Work` with NO `submit` still emits `init_work`/`cancel_work` + the `regseq_work_*` prelude (resource-gated, D07/D13); the harness drain + post-cancel probe are submit-gated, so the trace is `init … cancel` with no submit/drain/dispatch | deferred | GRILL D07/D13, I06 | **DWS-NOSUBMIT**: `deferred-work-nosubmit`; the no-`Work` byte-stability twin is the `work_hooks_emitted_only_for_deferred_work_tu` unit guard |
+| DWS-5 | type-driven recognition (DefId + marker) | the `Work` field is recognized by reading `#[rseq::abstraction("deferred_work")]` on the RESOLVED ADT item DefId (NOT the field-type spelling, NOT the name): a `type WorkAlias = Work;` alias still recognizes + binds + tags submit; the unmarked-name negative is in DWS-6 | deferred | GRILL R01/R07/D04, C03 | **DWS-RECOGNITION**: `deferred-work-alias` (bridge + model inspection, `tests/dws_alias_recognition_e2e.rs`) |
+| DWS-6 | frontend C06 reject family | acquire-stage rejection: handler signature, required-no-handler (`DWS-ERR-REQUIRED-WORK-NO-HANDLER`), duplicate-handler (one `Work`), bare-zero-`Work` (`DWS-ERR-BARE-WH-ZERO-WORK`), submit spoof/alias, unsupported forms (`Option<Work>` / `[Work;N]` / `Vec<Work>` / `&Work`), stray `field=` (list / name-value / non-string), multi-`Work`, and the unmarked-name recognition negative (routed to user-data) | deferred | GRILL C06/D04/D10/D11/D12 | **DWS-C06-NEGATIVES**: one reject fixture per check, `fires it and only it` via stage+diagnostic; `tests/dws_reject_e2e.rs` |
+
+---
+
 ## Output of this doc — the gap list
 
 The `unspecced` + `deferred` rows, grouped into the agenda for Doc 2

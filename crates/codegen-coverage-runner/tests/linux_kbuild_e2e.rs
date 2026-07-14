@@ -38,6 +38,30 @@ fn emit(fixture: &manifest::Fixture) -> regseq_backends::LinuxEmit {
     regseq_backends::emit_linux_c(&model).expect("emit_linux_c")
 }
 
+fn emit_deferred_work(fixture: &manifest::Fixture) -> regseq_backends::LinuxEmit {
+    let mut model = match try_bridge_fixture_path(&fixture.input) {
+        BridgeOutcome::Ok(m) => m,
+        other => panic!("bridge failed: {other:?}"),
+    };
+    let driver = model
+        .device_lifecycle
+        .drivers
+        .values_mut()
+        .next()
+        .expect("deferred-work-reset driver");
+    // The exact historical DWS fixture is Devicetree-only. Adapt the test
+    // model, not that fixture, with Linux's existing AMBA registration facts.
+    driver.descriptor.bus_type = Some(regseq_model::BusType::Amba);
+    driver
+        .descriptor
+        .match_set
+        .push(regseq_model::MatchEntry::Amba {
+            id: 0x0009_9001,
+            mask: 0x000f_ffff,
+        });
+    regseq_backends::emit_linux_c(&model).expect("emit deferred work for Linux")
+}
+
 /// Print to the REAL stderr (bypassing libtest's capture): the C03 skip
 /// notice must be visible on a green run, not swallowed.
 fn visible(line: String) {
@@ -102,4 +126,9 @@ fn generated_drivers_kbuild_against_the_campaign_tree() {
         .with_binding(manifest::OsBinding::Linux)
         .expect("the converged fixture resolves the linux binding (C05)");
     gate("e1000-initfail", &emit(&e1000fail));
+
+    // C0-DWS: the restored 0-L1/0-L2 surface uses the native workqueue API;
+    // compile it against the same campaign headers without creating a target.
+    let dws = fixture("fixtures/_deferred_work", "deferred-work-reset");
+    gate("deferred-work-reset", &emit_deferred_work(&dws));
 }

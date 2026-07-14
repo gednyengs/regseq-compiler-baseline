@@ -8,8 +8,8 @@
 //! family-specific logic lives in each construct's bridge module.
 
 use regseq_model::{
-    AtomicOp, AttrData, ClockOp, ConfigOp, DefPathData, FetchOp,
-    IntrinsicKind, ItemId, LogLevel, MmioOp, PinctrlOp, RegseqModel,
+    AtomicOp, AttrData, ClockOp, ConfigOp, DeferredWorkOp, DefPathData, FetchOp, IntrinsicKind,
+    ItemId, LogLevel, MmioOp, PinctrlOp, RegseqModel,
 };
 use rustc_span::{def_id::DefId, Symbol as RustcSymbol};
 
@@ -124,6 +124,13 @@ fn intrinsic_kind_for_name(name: &str) -> Option<IntrinsicKind> {
         // `OptionalPinCtrl::apply::<S>()` wrapper method. Keep in sync with
         // `regseq_model::IntrinsicKind::from_name`.
         "pinctrl_apply" => Some(IntrinsicKind::Pinctrl(PinctrlOp::ApplyState)),
+        // Deferred-work-item-scheduling intrinsic (deferred-work-item-scheduling
+        // construct): the `Work::submit()` wrapper method. Keep in sync with
+        // `regseq_model::IntrinsicKind::from_name`. (Codex pre-finalize
+        // BLOCKING-1: this driver-side mapping — not the model `from_name` — is
+        // what `materialise_intrinsics` keys on, so without it `Work::submit`
+        // stays untagged and never reaches `emit_deferred_work`.)
+        "deferred_work_submit" => Some(IntrinsicKind::DeferredWork(DeferredWorkOp::Submit)),
         _ => None,
     }
 }
@@ -193,6 +200,13 @@ fn fn_name_matches_kind(name: &str, kind: &IntrinsicKind) -> bool {
         // (the leaf is the short form: `apply`).
         IntrinsicKind::Pinctrl(op) => match op {
             PinctrlOp::ApplyState => name == "apply",
+        },
+        // The `Work::submit()` wrapper method (deferred-work-item-scheduling
+        // construct). The `#[rseq::intrinsic("deferred_work_submit")]` attribute
+        // is the authority; the leaf method name is a redundant gate (the leaf is
+        // the short form: `submit`).
+        IntrinsicKind::DeferredWork(op) => match op {
+            DeferredWorkOp::Submit => name == "submit",
         },
     }
 }
@@ -361,6 +375,35 @@ mod tests {
             &model,
             &dp,
             &IntrinsicKind::Atomic(AtomicOp::Load)
+        ));
+    }
+
+    #[test]
+    fn recognises_deferred_work_submit_intrinsic() {
+        // Deferred-work-item-scheduling construct: the `deferred_work_submit`
+        // tag maps to `IntrinsicKind::DeferredWork(Submit)` and the redundant
+        // fn-name gate accepts the op's short leaf name (`submit`). This is the
+        // driver-side vocabulary `materialise_intrinsics` keys on (Codex
+        // BLOCKING-1) — without it `Work::submit` never reaches lowering.
+        let kind = IntrinsicKind::DeferredWork(DeferredWorkOp::Submit);
+        assert_eq!(intrinsic_kind_for_name("deferred_work_submit"), Some(kind.clone()));
+        let mut model = model_with_item_attrs(1);
+        let submit_path = def_path(&mut model, "submit");
+        assert!(callee_name_matches_kind(&model, &submit_path, &kind));
+        record_intrinsic(&mut model, ItemId::from_u32(0), kind.clone());
+        assert_eq!(
+            model.domain_attrs.item_attrs[ItemId::from_u32(0)],
+            vec![AttrData::Intrinsic(kind)]
+        );
+        // A mismatched leaf name is rejected by the redundant gate; the reserved
+        // `submit_unique` op is not in the vocabulary.
+        assert_eq!(intrinsic_kind_for_name("deferred_work_submit_unique"), None);
+        let mut model = model_with_item_attrs(1);
+        let dp = def_path(&mut model, "submit_unique");
+        assert!(!callee_name_matches_kind(
+            &model,
+            &dp,
+            &IntrinsicKind::DeferredWork(DeferredWorkOp::Submit)
         ));
     }
 

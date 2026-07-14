@@ -1,8 +1,8 @@
 //! Phase 4 final `ItemId` assignment and side-table population.
 
 use super::{
-    atomic, clock, device_lifecycle, framework_type, interrupt, intrinsic,
-    pinctrl, synchronization, timed_delay, BridgeCtxt, BridgeError,
+    atomic, clock, deferred_work, device_lifecycle, framework_type, interrupt, intrinsic, pinctrl,
+    synchronization, timed_delay, BridgeCtxt, BridgeError,
 };
 
 /// Assigns dense `ItemId`s and populates item side tables in lock-step.
@@ -64,6 +64,19 @@ pub(crate) fn assign_item_ids_and_populate_sidetables(
     // so they run later: `validate_author_managed_fields` at the end of
     // `run_bridge`, `validate_apply_sites` post-L2 (GRILL C03).
     pinctrl::validate_pinctrl_signatures(ctxt)?;
+    // Deferred-work-item-scheduling (deferred-work-item-scheduling construct):
+    // type-driven `Work`-field recognition on the same driver map. Runs after
+    // device-lifecycle (the walk root) and after the sibling resource passes —
+    // order among sibling resources is irrelevant; the lifecycle slotting + the
+    // per-resource slot index are derived downstream from `model.deferred_work`
+    // (GRILL D04). NO field attribute is recorded (recognition is by type).
+    deferred_work::materialise_deferred_work(ctxt)?;
+    // Deferred-work submit-callee legality: every recognized `deferred_work_submit`
+    // intrinsic must be a method on the `Work` shell (spoofing check, mirror
+    // `clock::validate_clock_signatures`). Runs after `materialise_intrinsics`
+    // recorded the markers it walks. (The call-site direct-field-path check is a
+    // post-body pass, `recognise_submit_sites`, run in `run_bridge`.)
+    deferred_work::validate_deferred_work_signatures(ctxt)?;
     Ok(())
 }
 

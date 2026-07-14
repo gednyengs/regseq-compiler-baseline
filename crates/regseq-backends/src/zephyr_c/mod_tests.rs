@@ -2511,6 +2511,7 @@ fn lower_cx<'m>(m: &'m RegseqModel, driver_ty: TyId, resolved: bool) -> LowerCx<
             reg_macros: vec![("MMIODRIVER_CR".to_string(), 0x30)],
             base_symbol: "mmiodriver_mmio_base".to_string(),
             pcie: false,
+            drv: "mmiodriver".to_string(),
         },
         width8_used: false,
         uses_log: false,

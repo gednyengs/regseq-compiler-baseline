@@ -194,6 +194,9 @@ fn diag_logging_post_peel_shape_and_attrs() {
                 AttrData::PinStateMarker { .. } => {
                     panic!("spurious AttrData on log callee: PinStateMarker")
                 }
+                AttrData::WorkHandler { .. } => {
+                    panic!("spurious AttrData on log callee: WorkHandler")
+                }
             }
         }
     }

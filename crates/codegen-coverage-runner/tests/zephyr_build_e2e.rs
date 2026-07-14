@@ -29,6 +29,7 @@ use codegen_coverage_runner::zephyr_build::{
     west_build, StagedBus, StagedDriver, WestOutcome, BOARD, PCIE_BOARD, WORKSPACE_VAR,
 };
 use codegen_coverage_runner::{manifest, pipeline};
+use test_ir_fixtures::{try_bridge_fixture_path, BridgeOutcome};
 
 fn composed_corpus() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_composed")
@@ -198,5 +199,47 @@ fn zephyr_build_gate_over_the_e1000_goldens() {
             }
             Err(err) => panic!("west gate FAILED for {name}:\n{err}"),
         }
+    }
+}
+
+#[test]
+fn zephyr_build_gate_over_deferred_work() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_deferred_work");
+    let fixture = manifest::discover(&dir)
+        .expect("discover deferred-work corpus")
+        .into_iter()
+        .find(|f| f.manifest.name == "deferred-work-reset")
+        .expect("deferred-work-reset fixture discovered");
+    let model = match try_bridge_fixture_path(&fixture.input) {
+        BridgeOutcome::Ok(model) => model,
+        other => panic!("deferred-work-reset bridge failed: {other:?}"),
+    };
+    let emit = regseq_backends::emit_zephyr_c(&model).expect("emit deferred work for Zephyr");
+    let driver = StagedDriver {
+        tu: &emit.tu,
+        binding_yaml: &emit.binding_yaml,
+        driver_name: "dwreset",
+        compatible: "regseq,dwreset",
+        bus: StagedBus::Platform {
+            region: (0x0904_0000, 0x1000),
+            interrupts: None,
+        },
+    };
+
+    match west_build(&driver) {
+        Ok(WestOutcome::Skipped { notice }) => visible(format!("[deferred-work-reset] {notice}")),
+        Ok(WestOutcome::Built {
+            zephyr_version,
+            warnings,
+        }) => {
+            visible(format!(
+                "west gate PASSED: the deferred-work TU built for {BOARD} against Zephyr \
+                 {zephyr_version} (workspace: ${WORKSPACE_VAR})"
+            ));
+            if !warnings.trim().is_empty() {
+                visible(format!("--- build warnings (recorded) ---\n{warnings}"));
+            }
+        }
+        Err(err) => panic!("west gate FAILED for deferred-work-reset:\n{err}"),
     }
 }

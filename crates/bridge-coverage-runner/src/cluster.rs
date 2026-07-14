@@ -206,6 +206,7 @@ pub fn bridge_error_variant(err: &BridgeError) -> &'static str {
         BridgeError::TimedCpuDelayValidation(_) => "TimedCpuDelayValidation",
         BridgeError::AtomicValidation(_) => "AtomicValidation",
         BridgeError::SynchronizationValidation(_) => "SynchronizationValidation",
+        BridgeError::DeferredWorkValidation(_) => "DeferredWorkValidation",
     }
 }
 

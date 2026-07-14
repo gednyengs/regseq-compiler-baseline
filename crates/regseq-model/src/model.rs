@@ -149,6 +149,16 @@ pub struct RegseqModel {
     /// deserializable (I06).
     #[serde(default)]
     pub pinctrl: crate::pinctrl::PinctrlTables,
+
+    /// Deferred-work-item-scheduling sibling table, keyed by the
+    /// `#[rseq::driver]` struct's Item. A `Work` item is a capability layered on
+    /// the device (a sleepable-context callback the driver schedules), so it gets
+    /// its own top-level table rather than living on `DriverHandle` (GRILL D03).
+    /// Unlike `clock`/`pinctrl` there is no L2 binding (0 L1 / 0 L2 properties,
+    /// GRILL D02). `#[serde(default)]` keeps models serialized before the
+    /// construct existed deserializable (I06).
+    #[serde(default)]
+    pub deferred_work: crate::deferred_work::DeferredWorkTables,
 }
 
 #[cfg(test)]
@@ -1110,6 +1120,7 @@ impl RegseqModel {
             synchronization: crate::synchronization::SynchronizationTables::default(),
             clock: crate::clock::ClockTables::default(),
             pinctrl: crate::pinctrl::PinctrlTables::default(),
+            deferred_work: crate::deferred_work::DeferredWorkTables::default(),
         }
     }
 
@@ -1435,6 +1446,19 @@ impl RegseqModel {
             self.pinctrl.drivers.insert(new_id, driver);
         }
 
+        // `deferred_work.drivers` is keyed by the same driver-struct `ItemId`
+        // (its values carry no `ItemId` references — StringId/FieldIdx/bool/u64/
+        // InstanceRef/SubmitVariant only, all stable across the F4 item sort), so
+        // re-key it by the same remap, exactly like `clock`/`pinctrl`. Without
+        // this a TU that runs the F4 item sort would leave the deferred-work map
+        // keyed by stale ItemIds and both the submit-site body pass and the
+        // backend's `Ty::Struct { item }` lookup would not find the `Work`.
+        let old_deferred_work = std::mem::take(&mut self.deferred_work.drivers);
+        for (old_id, driver) in old_deferred_work {
+            let new_id = remap[old_id.index()];
+            self.deferred_work.drivers.insert(new_id, driver);
+        }
+
         #[cfg(debug_assertions)]
         for idx in 0..self.items.len().saturating_sub(1) {
             let first = ItemId::from_u32(idx as u32);
@@ -1634,6 +1658,20 @@ impl RegseqModel {
             }
         }
 
+        // `deferred_work.drivers` is keyed by the driver-struct `ItemId` (same
+        // discipline as `device_lifecycle`/`synchronization`); remap it the same
+        // way, dropping any removed driver's entry. This is REQUIRED (not merely
+        // mirror-of-clock): `recognise_submit_sites` is a post-DCE / post-sort
+        // body pass (like `recognise_acquire_sites`), so a Work driver whose
+        // diag-log calls are peeled here would otherwise leave the deferred-work
+        // map keyed by stale ItemIds — the F4 sort's later remap would then map
+        // those stale keys through the wrong index.
+        let old_deferred_work = std::mem::take(&mut self.deferred_work.drivers);
+        for (old_id, driver) in old_deferred_work {
+            if let Some(new_id) = remap[old_id.index()] {
+                self.deferred_work.drivers.insert(new_id, driver);
+            }
+        }
         remap
     }
 

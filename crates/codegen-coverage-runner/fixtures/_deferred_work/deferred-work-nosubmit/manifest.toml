@@ -1,0 +1,12 @@
+name   = "deferred-work-nosubmit"
+kind   = "rust"
+# The deferred-work-item-scheduling T-nosubmit distinguisher (PLAN T16): a
+# required, type-recognized `Work` with a bound `#[rseq::work_handler]` but NO
+# `self.work.submit()`. Proves `init_work`/`cancel_work` emission is RESOURCE-
+# gated, not submit-gated (GRILL D07/D13). `expected.stdout` is the WRK trace
+# oracle `init … cancel` with no submit/drain/dispatch (the harness drain + post-
+# cancel probe are submit-gated, so a never-submitted Work skips them). Blessed in
+# M3/T15's sibling pattern via the dedicated `dws_nosubmit_e2e` binary.
+lifecycle_scenario = "orderly"
+covers = ["DWS-4"]
+expect = "pass"

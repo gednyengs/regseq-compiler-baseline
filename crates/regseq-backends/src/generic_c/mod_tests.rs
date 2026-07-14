@@ -112,10 +112,21 @@ fn lifecycle_trace_hooks_emitted_only_for_lifecycle_tu() {
 }
 
 #[test]
-fn no_work_hooks_are_ever_emitted() {
-    // Scaffold zero-leak guard: no emitted TU carries any `regseq_work_*`
-    // scaffolding (the deferred-work surface is not part of this compiler).
+fn work_hooks_emitted_only_for_deferred_work_tu() {
+    // T17 byte-stability guard (deferred-work-item-scheduling construct, GRILL
+    // D07): a no-`Work` TU is recognized as having NO deferred-work resource and
+    // emits NONE of the deferred-work surface — no `WORK_HELPERS` prelude
+    // (`REGSEQ_WORK_SLOTS` / `regseq_work_t` / the `__regseq_work_slots` table /
+    // the `regseq_work_*` hooks). The emission is gated on
+    // `model_has_deferred_work_resource` (resource presence, NOT submit / intrinsic
+    // presence), so landing this construct churns no existing committed golden.
+    // The positive half (a `Work` TU DOES emit the surface) is the reset / nosubmit
+    // goldens (T15/T16); the whole-suite zero-churn confirmation is the regression.
     let m = trivial_model();
+    assert!(
+        !body_emit::model_has_deferred_work_resource(&m),
+        "a no-Work model must not be recognized as having a deferred-work resource"
+    );
     let tu = emit_generic_c(&m).unwrap();
     for token in [
         "REGSEQ_WORK_SLOTS",
@@ -126,7 +137,10 @@ fn no_work_hooks_are_ever_emitted() {
         "regseq_work_cancel",
         "regseq_work_drain",
     ] {
-        assert!(!tu.contains(token), "a TU must not emit `{token}`");
+        assert!(
+            !tu.contains(token),
+            "a no-Work TU must not emit `{token}` (byte-stability, D07)"
+        );
     }
 }
 

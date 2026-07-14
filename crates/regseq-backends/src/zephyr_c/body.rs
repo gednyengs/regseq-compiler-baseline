@@ -97,6 +97,8 @@ pub(crate) struct DriverFacts {
     /// licensed (C02/C03) and read the TU-static `__rseq_pcie` carrier
     /// (D12); on every other arm they keep the D.2 rejection.
     pub pcie: bool,
+    /// C-sanitized driver name (`struct <drv>_data`).
+    pub drv: String,
 }
 
 /// The `static <ret> <name>(<params>)` head shared by the forward
@@ -270,7 +272,10 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
             ..
         } = &bb.terminator.kind
         {
-            if matches!(cx.intrinsic_of(*callee), Some(IntrinsicKind::Clock(_))) {
+            if matches!(
+                cx.intrinsic_of(*callee),
+                Some(IntrinsicKind::Clock(_) | IntrinsicKind::DeferredWork(_))
+            ) {
                 if let Some(Operand::Copy(p) | Operand::Move(p)) = args.first() {
                     if p.projection.is_empty() {
                         cx.elided_locals.insert(p.local);
@@ -900,6 +905,7 @@ fn emit_call(
             IntrinsicKind::Pinctrl(op) => {
                 emit_pinctrl(cx, op, *instance, body, args, destination, out)
             }
+            IntrinsicKind::DeferredWork(_) => emit_deferred_work(cx, body, args, out),
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {
@@ -1046,6 +1052,65 @@ fn recover_clock(
         .ok_or_else(|| {
             EmitError::Unsupported("clock receiver field has no resolved ClockResource binding".into())
         })
+}
+
+fn recover_deferred_work(
+    cx: &LowerCx<'_>,
+    body: &regseq_model::Body,
+    recv: &Operand,
+) -> Result<(usize, Place), EmitError> {
+    let src = cx.resolve_receiver_src(body, recv, 0)?;
+    let mut ty = body.local_decls[src.local].ty;
+    let mut field = None;
+    for elem in src.projection.iter() {
+        match elem {
+            PlaceElem::Deref => {
+                ty = match &cx.model.types[ty] {
+                    Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                    _ => return Err(EmitError::Unsupported("deferred-work receiver deref of a non-pointer type".into())),
+                };
+            }
+            PlaceElem::Field(idx, fty) => {
+                if let Ty::Struct { item, .. } = &cx.model.types[ty] {
+                    field = Some((*item, *idx));
+                }
+                ty = *fty;
+            }
+            _ => return Err(EmitError::Unsupported("deferred-work receiver has an unsupported projection".into())),
+        }
+    }
+    let (item, field) = field.ok_or_else(|| EmitError::Unsupported("deferred-work receiver does not resolve to a driver field".into()))?;
+    let idx = cx
+        .model
+        .deferred_work
+        .drivers
+        .get(&item)
+        .and_then(|d| d.resources.iter().position(|r| r.field == field))
+        .ok_or_else(|| EmitError::Unsupported("deferred-work receiver field is not a recognized Work resource".into()))?;
+    let parent = Place {
+        local: src.local,
+        projection: src.projection[..src.projection.len() - 1]
+            .to_vec()
+            .into_boxed_slice(),
+    };
+    Ok((idx, parent))
+}
+
+fn emit_deferred_work(
+    cx: &mut LowerCx<'_>,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    out: &mut String,
+) -> Result<(), EmitError> {
+    let recv = args.first().ok_or_else(|| EmitError::Unsupported("deferred-work submit without a receiver".into()))?;
+    let (idx, driver) = recover_deferred_work(cx, body, recv)?;
+    let driver = place_lvalue(cx, body, &driver)?;
+    cx.extra_includes.insert("<zephyr/kernel.h>");
+    out.push_str(&format!(
+        "\t{{ struct {}_data *__rseq_data = CONTAINER_OF(&{}, struct {}_data, inner);\n\t  (void)k_work_submit(&__rseq_data->__rseq_work_{}); }}\n",
+        cx.driver.drv, driver, cx.driver.drv, idx
+    ));
+    Ok(())
 }
 
 /// Peripheral-clock-management author-op lowering for zephyr_c (clock construct,

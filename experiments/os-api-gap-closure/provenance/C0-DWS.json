@@ -1,0 +1,101 @@
+{
+  "schema": "gap-closure-provenance/1",
+  "stage": "C0-DWS",
+  "source_object": "1cb33bbde8fd74674aa3d42fe1fc56397f174474",
+  "source_snapshot_root": "/home/nyengele/regseq-eval-worktrees/regseq-gap-closure/docs/experiments/os-api-gap-closure/convergence/branch-snapshots/1cb33bbde8fd74674aa3d42fe1fc56397f174474",
+  "source_snapshot_sha256": "81654da75da2c035b75bf08035dbfe9cf40cf1f75b2486cb27024e25b97bf1ff",
+  "reviewed_provenance_through": "fe3b852",
+  "transplants": [
+    {
+      "source_path": "crates/regseq-model/src/deferred_work.rs and DWS hunks in domain_attr.rs, layout_validator.rs, lib.rs, model.rs, model_tests.rs, pretty.rs",
+      "destination": "same paths under crates/regseq-model",
+      "old_semantics": "the converged scaffold had no deferred-work resource table, handler marker, submit intrinsic, validation, remap, or pretty-print support",
+      "new_semantics": "the 1cb33bb typed Work resource model, pinned discriminants, validation, deterministic remap, serde default, and closed submit vocabulary are restored",
+      "behavior_delta": "exact historical DWS model semantics; no L1 or L2 property was added",
+      "tests": ["regseq-model unit and workspace tests", "dws_alias_recognition_e2e", "dws_reject_e2e"]
+    },
+    {
+      "source_path": "crates/regseq-driver/src/bridge/deferred_work/*.rs and DWS hunks in assign.rs, device_lifecycle/resolve.rs, intrinsic/recognition.rs, bridge/mod.rs",
+      "destination": "same paths under crates/regseq-driver/src/bridge",
+      "old_semantics": "Work fields and work_handler attributes were not recognized, bound, materialized, or checked; submit calls had no receiver validation",
+      "new_semantics": "the historical type-driven single-Work contract, exact diagnostic vocabulary, handler materialization/finalization, and direct-field submit recognition are restored",
+      "behavior_delta": "valid single-Work drivers bridge; every historically frozen unsupported form rejects with its DWS-ERR diagnostic",
+      "tests": ["dws_alias_recognition_e2e", "dws_reject_e2e", "bridge_diag_log_peel", "bridge_diag_log_recognition"]
+    },
+    {
+      "source_path": "crates/regseq-backends/src/generic_c/{body_emit.rs,mod.rs,mod_tests.rs,prelude.rs}",
+      "destination": "same paths under crates/regseq-backends/src/generic_c",
+      "old_semantics": "generic C had no deferred-work storage, lifecycle, submission, drain, dispatch, cancellation, or trace oracle",
+      "new_semantics": "the historical slot table, wrapper, resource-gated init/cancel, submit lowering, drain behavior, post-cancel probe, and demand-driven prelude are restored",
+      "behavior_delta": "exact 1cb33bb generic-C DWS behavior and byte-locked traces",
+      "tests": ["dws_reset_e2e", "dws_nosubmit_e2e", "dws_reset_smoke_e2e", "dws_covers"]
+    },
+    {
+      "source_path": "crates/codegen-coverage-runner/fixtures/_deferred_work/** and crates/codegen-coverage-runner/tests/dws_*.rs",
+      "destination": "same paths under crates/codegen-coverage-runner",
+      "old_semantics": "the converged scaffold carried no DWS positive, negative, golden, behavioral, alias, or coverage corpus",
+      "new_semantics": "the complete staged historical DWS corpus is restored byte-for-byte",
+      "behavior_delta": "nineteen historical fixture contracts and six historical test binaries become independently executable",
+      "tests": ["all dws_* test binaries named by verification/C0-DWS.json"]
+    },
+    {
+      "source_path": "crates/regseq-backends/src/linux_c/body.rs at 1cb33bb (historical rejection seam), the converged scaffold's linux_c/mod.rs lifecycle banks, and the locked addendum lowering disposition",
+      "destination": "crates/regseq-backends/src/linux_c/{body.rs,mod.rs} and codegen-coverage-runner native/header gates",
+      "old_semantics": "the historical branch rejected DWS at the Linux target boundary",
+      "new_semantics": "Work maps to struct work_struct, INIT_WORK, schedule_work, cancel_work_sync, and a container_of self-recovering wrapper in existing probe/remove scaffolds",
+      "behavior_delta": "required native Linux lowering is added without changing the DWS surface or creating a target",
+      "tests": ["dws_os_lowering_e2e", "linux_kbuild_e2e against RSEQ_LINUX_KDIR"]
+    },
+    {
+      "source_path": "crates/regseq-backends/src/zephyr_c/body.rs at 1cb33bb (historical rejection seam), the converged scaffold's zephyr_c/mod.rs lifecycle banks, and the locked addendum lowering disposition",
+      "destination": "crates/regseq-backends/src/zephyr_c/{body.rs,mod.rs} and codegen-coverage-runner native/header gates",
+      "old_semantics": "the historical branch rejected DWS at the Zephyr target boundary",
+      "new_semantics": "Work maps to struct k_work, k_work_init, k_work_submit, k_work_cancel_sync, and a CONTAINER_OF self-recovering wrapper in existing init/deinit scaffolds",
+      "behavior_delta": "required native Zephyr lowering is added without changing the DWS surface or creating a target",
+      "tests": ["dws_os_lowering_e2e", "zephyr_build_e2e against RSEQ_ZEPHYR_WORKSPACE"]
+    },
+    {
+      "source_path": "docs/discussions/deferred-work-item-scheduling/deferred-work-item-scheduling-surface-convergence.md and generic-C matrix DWS rows",
+      "destination": "same documentation paths",
+      "old_semantics": "the restored contract and generic-C matrix rows were absent from this scaffold",
+      "new_semantics": "the frozen historical contract and matrix evidence are present",
+      "behavior_delta": "documentation only; it explicitly preserves zero L1/L2 vocabulary and treats DWS as a construct, not a fifth target",
+      "tests": ["coverage-contract and zero-l1-zero-l2 checks"]
+    },
+    {
+      "source_path": "the preserved C40 Zephyr goldens at crates/codegen-coverage-runner/fixtures/_composed/e1000-composed/golden.zephyr.c and the sibling lifecycle goldens",
+      "destination": "crates/regseq-backends/src/zephyr_c/mod.rs emit_deinit_fn",
+      "old_semantics": "the emitter shortened the authored on_deinit adapter audit comment and caused unrelated preserved Zephyr snapshots to fail",
+      "new_semantics": "the emitter again produces the preserved four-line on_deinit adapter audit comment without changing generated control flow",
+      "behavior_delta": "audit text restoration only; C40 output stability is recovered and DWS lowering semantics are unchanged",
+      "tests": ["zephyr_e1000_e2e::zephyr_e1000_snapshot_and_l0_structure", "cargo test --workspace"]
+    }
+  ],
+  "target_accounting": {
+    "before": 4,
+    "after": 4,
+    "dws_is_target": false
+  },
+  "l1_vocabulary_added": [],
+  "snapshot_audit": {
+    "manifest_entries": 76,
+    "byte_exact_destinations": 64,
+    "adapted_destinations": 12,
+    "missing_destinations": 0,
+    "adapted_paths": [
+      "crates/bridge-coverage-runner/src/cluster.rs",
+      "crates/regseq-backends/src/generic_c/body_emit.rs",
+      "crates/regseq-backends/src/generic_c/mod_tests.rs",
+      "crates/regseq-backends/src/generic_c/prelude.rs",
+      "crates/regseq-backends/src/linux_c/body.rs",
+      "crates/regseq-backends/src/zephyr_c/body.rs",
+      "crates/regseq-driver/src/bridge/mod.rs",
+      "crates/regseq-model/src/lib.rs",
+      "crates/regseq-model/src/model.rs",
+      "crates/regseq-model/src/model_tests.rs",
+      "docs/discussions/deferred-work-item-scheduling/deferred-work-item-scheduling-surface-convergence.md",
+      "docs/discussions/generic-c-backend/phase-1/01-construct-surface-and-matrix.md"
+    ],
+    "adaptation_reason": "The non-identical paths retain the exact DWS semantics while omitting unrelated post-baseline Serial/DMA material, preserving newer scaffold behavior, adding only the locked Linux/Zephyr lowering, or recording the C0-DWS addendum. The complete 19-fixture and six-test historical DWS corpus is byte-identical."
+  }
+}
