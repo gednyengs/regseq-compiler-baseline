@@ -1,0 +1,28 @@
+{
+  "schema": "gap-closure-stage-coverage/1",
+  "stage": "C1-serial",
+  "authority": "freeze/FEATURE-COVERAGE-MAP.json PL011-S01..PL011-S21",
+  "rows": [
+    {"id":"PL011-S01","owner":"serial-port","check":"counted transmit buffer; Linux direct adapter; Zephyr poll_out/fifo_fill"},
+    {"id":"PL011-S02","owner":"serial-port","check":"transmit count is actual accepted progress; tx-progress event remains conditional"},
+    {"id":"PL011-S03","owner":"serial-port","check":"await_drain maps only when authored"},
+    {"id":"PL011-S04","owner":"serial-port","check":"counted receive plus named break/framing/parity/overrun flags"},
+    {"id":"PL011-S05","owner":"serial-port","check":"purge is a distinct conditional operation"},
+    {"id":"PL011-S06","owner":"serial-port","check":"baud_rate runtime configuration value"},
+    {"id":"PL011-S07","owner":"serial-port","check":"data/stop/parity/flow configuration values"},
+    {"id":"PL011-S08","owner":"backend","check":"break-send absent from SerialPort and legacy SerialBreak rejected"},
+    {"id":"PL011-S09","owner":"serial-port","check":"get_config capability and Zephyr config_get mapping"},
+    {"id":"PL011-S10","owner":"serial-port","check":"conditional open capability; Linux startup slot only when present"},
+    {"id":"PL011-S11","owner":"other-construct","check":"clock and pinctrl remain outside serial tables"},
+    {"id":"PL011-S12","owner":"serial-port","check":"conditional close capability; Linux shutdown slot only when present"},
+    {"id":"PL011-S13","owner":"other-construct","check":"clock-disable and pinctrl-sleep remain outside serial tables"},
+    {"id":"PL011-S14","owner":"serial-port","check":"transmit and await_drain remain separate capabilities"},
+    {"id":"PL011-S15","owner":"backend","check":"ISR acquisition/demux/deferred scheduling excluded from serial tables"},
+    {"id":"PL011-S16","owner":"backend","check":"RX interrupt masks excluded from serial tables"},
+    {"id":"PL011-S17","owner":"backend","check":"TX interrupt masks excluded from serial tables"},
+    {"id":"PL011-S18","owner":"serial-port","check":"named DTR/RTS outputs and rts_cts configuration"},
+    {"id":"PL011-S19","owner":"serial-port","check":"named CTS/DSR/DCD/RI inputs"},
+    {"id":"PL011-S20","owner":"serial-port","check":"signal_change subscription value; hardware mask remains backend"},
+    {"id":"PL011-S21","owner":"serial-port","check":"named changed_cts/changed_dsr/changed_dcd/changed_ri values"}
+  ]
+}

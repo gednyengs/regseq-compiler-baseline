@@ -207,6 +207,7 @@ pub fn bridge_error_variant(err: &BridgeError) -> &'static str {
         BridgeError::AtomicValidation(_) => "AtomicValidation",
         BridgeError::SynchronizationValidation(_) => "SynchronizationValidation",
         BridgeError::DeferredWorkValidation(_) => "DeferredWorkValidation",
+        BridgeError::SerialValidation(_) => "SerialValidation",
     }
 }
 

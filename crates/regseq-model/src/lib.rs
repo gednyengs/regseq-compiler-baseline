@@ -39,6 +39,7 @@ mod place_validator;
 mod pinctrl;
 mod pinctrl_semantics;
 mod pretty;
+mod serial;
 pub mod rvalue;
 mod source;
 mod statement;
@@ -123,6 +124,9 @@ pub use pinctrl::{
 };
 pub use pinctrl_semantics::{validate_pinctrl_semantics, PinctrlSemanticError};
 pub use pretty::{PrettyPrintOptions, PrettyPrinter};
+pub use serial::{
+    DriverSerialPort, SerialEnumBinding, SerialPortOps, SerialPortTables, SerialTypeBindings,
+};
 pub use rvalue::{AggregateKind, BinOp, CastKind, PointerCoercion, Rvalue, UnOp};
 pub use source::{Position, SourceFile, Span};
 pub use statement::{CopyNonOverlapping, NonDivergingIntrinsic, Statement, StatementKind};

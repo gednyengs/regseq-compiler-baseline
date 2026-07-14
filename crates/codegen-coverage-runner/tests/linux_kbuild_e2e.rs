@@ -62,6 +62,28 @@ fn emit_deferred_work(fixture: &manifest::Fixture) -> regseq_backends::LinuxEmit
     regseq_backends::emit_linux_c(&model).expect("emit deferred work for Linux")
 }
 
+fn emit_serial(fixture: &manifest::Fixture) -> regseq_backends::LinuxEmit {
+    let mut model = match try_bridge_fixture_path(&fixture.input) {
+        BridgeOutcome::Ok(m) => m,
+        other => panic!("serial bridge failed: {other:?}"),
+    };
+    let driver = model
+        .device_lifecycle
+        .drivers
+        .values_mut()
+        .next()
+        .expect("serial-port-all driver");
+    driver.descriptor.bus_type = Some(regseq_model::BusType::Amba);
+    driver
+        .descriptor
+        .match_set
+        .push(regseq_model::MatchEntry::Amba {
+            id: 0x0004_1011,
+            mask: 0x000f_ffff,
+        });
+    regseq_backends::emit_linux_c(&model).expect("emit locked serial port for Linux")
+}
+
 /// Print to the REAL stderr (bypassing libtest's capture): the C03 skip
 /// notice must be visible on a green run, not swallowed.
 fn visible(line: String) {
@@ -131,4 +153,9 @@ fn generated_drivers_kbuild_against_the_campaign_tree() {
     // compile it against the same campaign headers without creating a target.
     let dws = fixture("fixtures/_deferred_work", "deferred-work-reset");
     gate("deferred-work-reset", &emit_deferred_work(&dws));
+
+    // C1-serial: the single locked serial-port element lowers to real
+    // serial_core declarations and compiles against the campaign headers.
+    let serial = fixture("fixtures/_serial", "serial-port-all");
+    gate("serial-port-all", &emit_serial(&serial));
 }

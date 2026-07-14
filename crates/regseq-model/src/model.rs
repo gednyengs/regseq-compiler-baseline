@@ -159,6 +159,10 @@ pub struct RegseqModel {
     /// construct existed deserializable (I06).
     #[serde(default)]
     pub deferred_work: crate::deferred_work::DeferredWorkTables,
+
+    /// One capability-gated serial port per serial-class driver.
+    #[serde(default)]
+    pub serial_port: crate::serial::SerialPortTables,
 }
 
 #[cfg(test)]
@@ -1121,6 +1125,7 @@ impl RegseqModel {
             clock: crate::clock::ClockTables::default(),
             pinctrl: crate::pinctrl::PinctrlTables::default(),
             deferred_work: crate::deferred_work::DeferredWorkTables::default(),
+            serial_port: crate::serial::SerialPortTables::default(),
         }
     }
 
@@ -1459,6 +1464,12 @@ impl RegseqModel {
             self.deferred_work.drivers.insert(new_id, driver);
         }
 
+        let old_serial_ports = std::mem::take(&mut self.serial_port.drivers);
+        for (old_id, driver) in old_serial_ports {
+            let new_id = remap[old_id.index()];
+            self.serial_port.drivers.insert(new_id, driver);
+        }
+
         #[cfg(debug_assertions)]
         for idx in 0..self.items.len().saturating_sub(1) {
             let first = ItemId::from_u32(idx as u32);
@@ -1670,6 +1681,12 @@ impl RegseqModel {
         for (old_id, driver) in old_deferred_work {
             if let Some(new_id) = remap[old_id.index()] {
                 self.deferred_work.drivers.insert(new_id, driver);
+            }
+        }
+        let old_serial_ports = std::mem::take(&mut self.serial_port.drivers);
+        for (old_id, driver) in old_serial_ports {
+            if let Some(new_id) = remap[old_id.index()] {
+                self.serial_port.drivers.insert(new_id, driver);
             }
         }
         remap

@@ -29,6 +29,7 @@ mod body;
 mod clock;
 mod naming;
 mod pinctrl;
+mod serial;
 mod sync;
 mod types;
 
@@ -163,14 +164,11 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         }
     };
 
-    // Device class: a declared non-Generic class registers class-neutral
-    // (the SAME NULL-api scaffold as ClassTag::Generic) with the C06 audit
-    // rendering — the former A-16 reject is replaced by the D14 audited
-    // class-neutral emission (backend-zephyr-c-e1000); class API delivery
-    // itself stays the deferred Device Class construct's territory (B-9).
+    // Device class: serial is delivered by this stage through a native
+    // uart_driver_api. Other non-Generic classes remain audited class-neutral
+    // until their own locked stage lands.
     let deferred_class: Option<String> = match &driver.descriptor.device_class {
-        ClassTag::Generic => None,
-        ClassTag::Serial => Some("serial".into()),
+        ClassTag::Generic | ClassTag::Serial => None,
         ClassTag::Network => Some("network".into()),
         ClassTag::Other(s) => Some(model.strings.resolve(*s).to_string()),
     };
@@ -391,6 +389,8 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
             roots.push((name, id));
         }
     }
+    let serial_roots = serial::roots(model, *driver_item)?;
+    roots.extend(serial_roots.iter().copied());
     let work_handlers: Vec<InstanceId> = model
         .deferred_work
         .drivers
@@ -531,6 +531,8 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
     if !closure.is_empty() {
         bodies.push('\n');
     }
+
+    let serial_binding = serial::emit(&mut cx, *driver_item, &drv)?;
     for id in &closure {
         let f = body::emit_fn(&mut cx, *id).map_err(|e| with_fn_context(e, model, *id))?;
         bodies.push_str(&f);
@@ -692,6 +694,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         &init_fn,
         deinit_fn.as_deref(),
         &work,
+        &serial_binding,
     )?;
     let binding_yaml = emit_binding_yaml(
         model,
@@ -1915,6 +1918,7 @@ fn emit_tu(
     init_fn: &str,
     deinit_fn: Option<&str>,
     work: &ZephyrWorkEmission,
+    serial_binding: &serial::Emission,
 ) -> Result<String, EmitError> {
     let model = cx.model;
     let inner_tag = cx.names.name_of(model, driver_ty)?;
@@ -2028,6 +2032,7 @@ fn emit_tu(
         "\tstruct {inner_tag} inner;\n\tuint32_t __rseq_state; /* retained; zero in the static image */\n"
     ));
     tu.push_str(&work.fields);
+    tu.push_str(&serial_binding.data_fields);
     if pcie {
         tu.push_str(
             "\tstruct pcie_dev *pcie; /* PCIe context (scaffold §1 item 4;\n\t                        * witness eth_e1000_priv.h:93) */\n",
@@ -2054,6 +2059,7 @@ fn emit_tu(
     // §1 items 5-7: lowered helper/callback bodies, then the init function
     // — the one runtime dispatch hub (§3).
     tu.push_str(bodies);
+    tu.push_str(&serial_binding.text);
     tu.push_str(init_fn);
     tu.push('\n');
     if let Some(deinit) = deinit_fn {
@@ -2063,7 +2069,8 @@ fn emit_tu(
 
     // §1 item 8: the build-time instantiation block —
     // register/match/create/associate as build-time facts (§2); init level
-    // hardcoded (D13); api NULL for ClassTag::Generic ONLY (A-16). With an
+    // hardcoded (D13); api NULL for ClassTag::Generic and a native API for
+    // ClassTag::Serial. With an
     // authored on_deinit the macro swaps to DEVICE_DT_INST_DEINIT_DEFINE
     // (device.h:272→243 — DEVICE_DT_DEFINE plus the deinit_fn arg);
     // unauthored stays byte-identical (C04/I05).
@@ -2105,11 +2112,13 @@ fn emit_tu(
     }
     if deinit_fn.is_some() {
         tu.push_str(&format!(
-            "\tDEVICE_DT_INST_DEINIT_DEFINE(n, {drv}_init, {drv}_deinit, NULL,\\\n\t\t&{drv}_data_##n, &{drv}_config_##n,\\\n\t\tPOST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,\\\n\t\tNULL /* api: ClassTag::Generic only (A-16) */);\n"
+            "\tDEVICE_DT_INST_DEINIT_DEFINE(n, {drv}_init, {drv}_deinit, NULL,\\\n\t\t&{drv}_data_##n, &{drv}_config_##n,\\\n\t\tPOST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,\\\n\t\t{});\n",
+            serial_binding.api.as_str()
         ));
     } else {
         tu.push_str(&format!(
-            "\tDEVICE_DT_INST_DEFINE(n, {drv}_init, NULL,\\\n\t\t&{drv}_data_##n, &{drv}_config_##n,\\\n\t\tPOST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,\\\n\t\tNULL /* api: ClassTag::Generic only (A-16) */);\n"
+            "\tDEVICE_DT_INST_DEFINE(n, {drv}_init, NULL,\\\n\t\t&{drv}_data_##n, &{drv}_config_##n,\\\n\t\tPOST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,\\\n\t\t{});\n",
+            serial_binding.api.as_str()
         ));
     }
     tu.push_str("DT_INST_FOREACH_STATUS_OKAY(RSEQ_INIT)\n\n");

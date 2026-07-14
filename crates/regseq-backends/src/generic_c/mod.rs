@@ -309,6 +309,22 @@ fn emit_generic_c_inner(
     if !model.device_lifecycle.drivers.is_empty() {
         out.push_str(prelude::LIFECYCLE_HELPERS);
     }
+    // Locked serial-port capability manifest. Generic C executes authored
+    // bodies directly; this emitted table makes capability absence explicit
+    // without inventing an event, cancellation, or successful fallback.
+    for (driver, serial) in &model.serial_port.drivers {
+        let logical_name = model
+            .device_lifecycle
+            .drivers
+            .get(driver)
+            .map(|d| model.strings.resolve(d.descriptor.name))
+            .unwrap_or("serial");
+        out.push_str(&format!("/* RSEQ-SERIAL-PORT {logical_name}\n"));
+        for capability in serial.ops.capabilities() {
+            out.push_str(&format!(" * capability: {capability}\n"));
+        }
+        out.push_str(" * absent operations are unsupported; no terminal event is implied\n */\n");
+    }
     // Device-interrupt host line model (construct #6, C05) + synchronization
     // lock-discipline oracle (synchronization construct, S11), each emitted only
     // for a TU with the corresponding surface so a single-construct TU's `.c` is

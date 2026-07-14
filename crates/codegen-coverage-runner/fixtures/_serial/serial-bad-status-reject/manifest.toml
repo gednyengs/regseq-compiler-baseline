@@ -1,0 +1,7 @@
+name = "serial-bad-status-reject"
+kind = "rust"
+covers = []
+expect = "reject"
+[expected]
+stage = "acquire"
+diagnostic = "SERIAL-ERR-BAD-SIGNATURE"

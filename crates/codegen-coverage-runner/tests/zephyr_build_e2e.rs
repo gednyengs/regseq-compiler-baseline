@@ -243,3 +243,45 @@ fn zephyr_build_gate_over_deferred_work() {
         Err(err) => panic!("west gate FAILED for deferred-work-reset:\n{err}"),
     }
 }
+
+#[test]
+fn zephyr_build_gate_over_locked_serial_port() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_serial");
+    let fixture = manifest::discover(&dir)
+        .expect("discover serial corpus")
+        .into_iter()
+        .find(|f| f.manifest.name == "serial-port-all")
+        .expect("serial-port-all fixture discovered");
+    let model = match try_bridge_fixture_path(&fixture.input) {
+        BridgeOutcome::Ok(model) => model,
+        other => panic!("serial-port-all bridge failed: {other:?}"),
+    };
+    let emit = regseq_backends::emit_zephyr_c(&model).expect("emit locked serial port for Zephyr");
+    let driver = StagedDriver {
+        tu: &emit.tu,
+        binding_yaml: &emit.binding_yaml,
+        driver_name: "serial_port_all",
+        compatible: "regseq,serial-port-all",
+        bus: StagedBus::Platform {
+            region: (0x0904_0000, 0x1000),
+            interrupts: None,
+        },
+    };
+
+    match west_build(&driver) {
+        Ok(WestOutcome::Skipped { notice }) => visible(format!("[serial-port-all] {notice}")),
+        Ok(WestOutcome::Built {
+            zephyr_version,
+            warnings,
+        }) => {
+            visible(format!(
+                "west gate PASSED: locked serial-port TU built for {BOARD} against Zephyr \
+                 {zephyr_version} (workspace: ${WORKSPACE_VAR})"
+            ));
+            if !warnings.trim().is_empty() {
+                visible(format!("--- build warnings (recorded) ---\n{warnings}"));
+            }
+        }
+        Err(err) => panic!("west gate FAILED for serial-port-all:\n{err}"),
+    }
+}

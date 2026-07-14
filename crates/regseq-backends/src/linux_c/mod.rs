@@ -22,6 +22,7 @@ mod body;
 mod clock;
 mod naming;
 mod pinctrl;
+mod serial;
 mod sync;
 mod types;
 
@@ -181,6 +182,12 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             ))
         }
     };
+    if model.serial_port.drivers.contains_key(driver_item) && bus != ScaffoldBus::Amba {
+        return Err(EmitError::UnsupportedInUnit {
+            what: "a non-AMBA locked serial-port binding".into(),
+            unit: "the Linux serial-framework-binding for the selected bus",
+        });
+    }
     if driver.descriptor.match_set.is_empty() {
         return Err(EmitError::Driver(
             "driver has an empty match set; a kernel id table needs at least one entry".into(),
@@ -347,6 +354,8 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             roots.push((name, id));
         }
     }
+    let serial_roots = serial::roots(model, *driver_item)?;
+    roots.extend(serial_roots.iter().copied());
     let work_handlers: Vec<InstanceId> = model
         .deferred_work
         .drivers
@@ -436,6 +445,8 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             emit_scaffold_pci(&mut cx, &drv, driver_ty, &resource_names, &roots, driver)?
         }
     };
+
+    let serial_binding = serial::emit(&mut cx, *driver_item, &drv)?;
 
     // -- type definitions (D04 bank 2/3), now that every use is known -------
     let type_defs = emit_type_defs(
@@ -532,6 +543,7 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         tu.push_str(&body::delay_helpers(cx.uses_delay_busy, cx.uses_delay_sleep));
     }
     tu.push_str(&bodies);
+    tu.push_str(&serial_binding);
     tu.push_str(&scaffold.text);
     tu.push('\n');
     tu.push_str(&tail);
@@ -890,6 +902,10 @@ fn emit_scaffold(
     irq: Option<&LinuxIrq>,
 ) -> Result<Scaffold, EmitError> {
     let model = cx.model;
+    let driver_item = match &model.types[driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => return Err(EmitError::Driver("driver type is not a struct".into())),
+    };
     let driver_struct = cx.names.name_of(model, driver_ty)?;
     let find = |name: &str| roots.iter().find(|(n, _)| *n == name).map(|(_, id)| *id);
     let on_init = find("on_init");
@@ -918,8 +934,9 @@ fn emit_scaffold(
     // §C.7): kernel device back-pointer + the spec driver embedded verbatim.
     // Emitted in the driver-state bank (D04), before the lowered bodies.
     let container = format!(
-        "/* per-device private container: kernel back-pointer + the spec driver */\nstruct {drv}_priv {{\n\tstruct amba_device *adev;\n\tstruct {driver_struct} inner;\n{}}};\n\n",
-        work.fields
+        "/* per-device private container: kernel back-pointer + the spec driver */\nstruct {drv}_priv {{\n\tstruct amba_device *adev;\n\tstruct {driver_struct} inner;\n{}{}}};\n\n",
+        serial::container_field(model, driver_item),
+        work.fields,
     );
     out.push_str(&work.wrappers);
 
@@ -965,6 +982,7 @@ fn emit_scaffold(
         "\tpriv = devm_kzalloc(&adev->dev, sizeof(*priv), GFP_KERNEL);\n\tif (!priv)\n\t\treturn -ENOMEM;\n",
     );
     out.push_str("\tpriv->adev = adev;\n\tamba_set_drvdata(adev, priv);\n");
+    out.push_str(&serial::probe_init(model, driver_item, drv));
     // Synchronization init_primitives (C05/I05): initialize the declared locks
     // BEFORE the region map + IRQ register + on_init (lock-live ⊇ line-live).
     let sync_inits = sync::init_primitive_lines(model, driver_ty);

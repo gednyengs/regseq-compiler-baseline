@@ -215,7 +215,7 @@ pub fn west_build_with_workspace(
     // O4 set (backend-zephyr-c-e1000 T07, discovered fail-loud at first
     // build): CONFIG_PCIE compiles drivers/pcie/host + the DEVICE_PCIE
     // context machinery the generated scaffold consumes.
-    let prj_conf = match driver.bus {
+    let mut prj_conf = match driver.bus {
         StagedBus::Platform { .. } => {
             "CONFIG_LOG=y\nCONFIG_LOG_MODE_DEFERRED=y\nCONFIG_CBPRINTF_COMPLETE=y\nCONFIG_CBPRINTF_FULL_INTEGRAL=y\nCONFIG_DEVICE_DEINIT_SUPPORT=y\n".to_string()
         }
@@ -223,6 +223,15 @@ pub fn west_build_with_workspace(
             "CONFIG_LOG=y\nCONFIG_LOG_MODE_DEFERRED=y\nCONFIG_CBPRINTF_COMPLETE=y\nCONFIG_CBPRINTF_FULL_INTEGRAL=y\nCONFIG_DEVICE_DEINIT_SUPPORT=y\nCONFIG_PCIE=y\n".to_string()
         }
     };
+    if driver.tu.contains("DEVICE_API(uart,") {
+        // C1-serial: compile every emitted uart_driver_api slot, not only the
+        // polling prefix selected by a board default. These are build-harness
+        // facts; the portable model remains capability-gated.
+        prj_conf.push_str(
+            "CONFIG_SERIAL=y\nCONFIG_UART_INTERRUPT_DRIVEN=y\n\
+             CONFIG_UART_USE_RUNTIME_CONFIGURE=y\n",
+        );
+    }
     std::fs::write(app.join("prj.conf"), prj_conf).map_err(WestError::Io)?;
     // The DUT overlay, per bus form.
     let overlay = match driver.bus {

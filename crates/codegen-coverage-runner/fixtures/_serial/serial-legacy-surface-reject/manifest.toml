@@ -1,0 +1,7 @@
+name = "serial-legacy-surface-reject"
+kind = "rust"
+covers = []
+expect = "reject"
+[expected]
+stage = "acquire"
+diagnostic = "SERIAL-ERR-EXCLUDED-SURFACE"

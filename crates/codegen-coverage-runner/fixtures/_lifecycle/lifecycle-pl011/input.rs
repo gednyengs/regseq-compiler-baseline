@@ -6,6 +6,7 @@
 // `RegseqError`). The harness verbs are gone (RD-1): the backend synthesizes the
 // driving `main` from the model.
 include!("../../_lifecycle_surface.rs");
+include!("../../_serial_port_surface.rs");
 
 // M5 shutdown-OMIT driver: AMBA-matched (ARM PrimeCell UART), device_class serial.
 // Overrides `on_init` only — NOT `on_system_shutdown` — so the synthesized
@@ -20,6 +21,11 @@ impl Lifecycle for Pl011 {
         Ok(())
     }
 }
+
+// The locked serial element is present, but this lifecycle-only fixture authors
+// no serial capabilities. The bridge therefore preserves every port operation
+// as absent while the fixture continues to exercise only lifecycle behavior.
+impl SerialPort for Pl011 {}
 
 // No `regseq_main`: the generic-c backend synthesizes `main` (RD-4/RD-6). The
 // manifest's `lifecycle_scenario = "shutdown"` selects the shutdown scenario:

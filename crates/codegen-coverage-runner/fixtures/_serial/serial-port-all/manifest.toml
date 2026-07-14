@@ -1,0 +1,5 @@
+name = "serial-port-all"
+kind = "rust"
+lifecycle_scenario = "orderly"
+covers = ["SERIAL-PORT", "SERIAL-CAPABILITIES", "SERIAL-BEHAVIOR"]
+expect = "pass"

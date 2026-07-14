@@ -490,9 +490,13 @@ const DEVICE_CLASS_SOURCE: &str = r#"
 #![feature(register_tool)]
 #![register_tool(rseq)]
 
+pub trait SerialPort {}
+
 #[rseq::device_class(serial)]
 #[rseq::driver(name = "ser", compatible = ["acme,ser"])]
 pub struct Ser;
+
+impl SerialPort for Ser {}
 
 #[rseq::device_class(network)]
 #[rseq::driver(name = "net", compatible = ["acme,net"])]

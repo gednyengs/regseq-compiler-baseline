@@ -31,6 +31,7 @@ mod interrupt;
 pub(crate) mod intrinsic;
 mod opaque_handle;
 mod pinctrl;
+mod serial;
 mod sort;
 mod synchronization;
 pub mod synth;
@@ -686,6 +687,10 @@ pub enum BridgeError {
     /// (0 L1 / 0 L2 properties, GRILL D02), so there is no `DWS-L2-*` family.
     #[error("deferred-work-item-scheduling validation: {0}")]
     DeferredWorkValidation(DeferredWorkDiagnostic),
+
+    /// A locked serial-port frontend check failed.
+    #[error("serial-port validation: {0}")]
+    SerialValidation(SerialDiagnostic),
 
 }
 
@@ -1346,6 +1351,23 @@ pub enum DeferredWorkDiagnostic {
         field: String,
         /// The recognized-but-rejected form (e.g. `Option<Work>`).
         form: String,
+    },
+}
+
+/// Locked serial-port frontend diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum SerialDiagnostic {
+    #[error("SERIAL-ERR-MISSING-PORT: serial-class driver `{driver}` must implement `SerialPort`")]
+    MissingPort { driver: String },
+    #[error("SERIAL-ERR-WRONG-CLASS: driver `{driver}` implements `SerialPort` but is not tagged device_class(serial)")]
+    WrongDeviceClass { driver: String },
+    #[error("SERIAL-ERR-EXCLUDED-SURFACE: serial-class driver `{driver}` implements excluded historical surface `{surface}`; use the single `SerialPort` element")]
+    ExcludedSurface { driver: String, surface: String },
+    #[error("SERIAL-ERR-BAD-SIGNATURE: driver `{driver}` operation `{operation}`: {detail}")]
+    BadSignature {
+        driver: String,
+        operation: String,
+        detail: String,
     },
 }
 
@@ -2605,6 +2627,10 @@ fn construct_instances_and_resolve_cross_references(
     // and force-materialize the overriding instances BEFORE the Phase-5 body
     // drain, so those synthesized callbacks get bodies the backend can emit.
     device_lifecycle::resolve_drivers(ctxt)?;
+    // Locked device-class-serial recognition: one SerialPort trait whose
+    // authored overrides are the capability set. Run before the body drain so
+    // every supported operation body is force-materialized.
+    serial::resolve_serial_ports(ctxt)?;
     // Device-interrupt (construct #6): discover + validate + bind the
     // #[rseq::isr] handlers and force-materialize their instances before the
     // drain, exactly like the lifecycle callbacks. The pending attribute
