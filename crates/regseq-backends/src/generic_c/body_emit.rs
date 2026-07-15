@@ -2334,6 +2334,12 @@ impl BodyEmit<'_> {
             if let Some(IntrinsicKind::DeferredWork(_)) = self.model.instance_intrinsic(*inst) {
                 return self.emit_deferred_work(callee, args, destination, target);
             }
+            if matches!(
+                self.model.instance_intrinsic(*inst),
+                Some(IntrinsicKind::CommandTransportSubmit)
+            ) {
+                return self.emit_command_transport_submit(callee, args, destination, target);
+            }
             // (Device-lifecycle is no longer call-intercepted: the harness verbs
             // were removed, RD-1; the synthesized `main` drives the lifecycle —
             // see `emit_lifecycle_synthesis`.)
@@ -2428,6 +2434,59 @@ impl BodyEmit<'_> {
                 Ok(format!("{assign} goto bb_{};", t.as_u32()))
             }
         }
+    }
+
+    /// Lower the locked non-blocking submit operation to the host admission
+    /// oracle and construct only `Accepted` or `Rejected(native_reason)`.
+    fn emit_command_transport_submit(
+        &self,
+        callee: &CallCallee,
+        args: &[Operand],
+        destination: &Place,
+        target: Option<regseq_model::BlockId>,
+    ) -> Result<String, EmitError> {
+        let target = target.ok_or(EmitError::Unsupported(
+            "diverging command-transport submit",
+        ))?;
+        if args.len() != 2 {
+            return Err(EmitError::Unsupported(
+                "command-transport submit without endpoint and payload",
+            ));
+        }
+        let params = super::callee_param_tys(self.model, self.body, callee);
+        let endpoint = self.operand_expr(&args[0], params.first().copied())?;
+        let payload = self.operand_expr(&args[1], params.get(1).copied())?;
+        let dst = self.place_lvalue(destination)?;
+        let dst_ty = self.place_ty(destination);
+        let shape = enum_emit::enum_shape(self.model, dst_ty).ok_or(
+            EmitError::Unsupported("command-transport outcome is not an enum"),
+        )?;
+        let EnumShape::Multiple {
+            encoding: TagEncoding::Direct,
+            variants,
+            ..
+        } = shape
+        else {
+            return Err(EmitError::Unsupported(
+                "command-transport outcome is not a direct two-variant enum",
+            ));
+        };
+        if variants.len() != 2 || variants[1].fields.len() != 1 {
+            return Err(EmitError::Unsupported(
+                "command-transport outcome layout does not match Accepted/Rejected(isize)",
+            ));
+        }
+        let accepted = self.emit_set_discriminant(&dst, shape, 0)?.unwrap_or_default();
+        let rejected = self.emit_set_discriminant(&dst, shape, 1)?.unwrap_or_default();
+        let reason_ty = variants[1].fields[0].ty;
+        let reason_cty = types::c_type(self.model, self.names, reason_ty);
+        let tmp = self.fresh_temp_name("_dct_reason");
+        Ok(format!(
+            "{{ intptr_t {tmp} = regseq_command_transport_submit((uintptr_t)({endpoint}), (uintptr_t)({payload})); \
+             memset(&{dst}, 0, sizeof({dst})); if ({tmp} >= 0) {{ {accepted} }} else {{ {rejected} \
+             {dst}.u._v1._0 = ({reason_cty}){tmp}; }} }} goto bb_{};",
+            target.as_u32()
+        ))
     }
 
     /// Timed-CPU-delay-and-sleep lowering (TCD construct): lower a
@@ -6059,6 +6118,19 @@ pub(crate) fn model_has_config_intrinsic(model: &RegseqModel) -> bool {
         attrs
             .iter()
             .any(|a| matches!(a, regseq_model::AttrData::Intrinsic(IntrinsicKind::Config(_))))
+    })
+}
+
+/// Demand gate for the locked command-transport host oracle. The intrinsic is
+/// the complete L1 IR; there is intentionally no transport resource table.
+pub(crate) fn model_has_command_transport_submit(model: &RegseqModel) -> bool {
+    model.domain_attrs.item_attrs.iter().any(|attrs| {
+        attrs.iter().any(|attr| {
+            matches!(
+                attr,
+                AttrData::Intrinsic(IntrinsicKind::CommandTransportSubmit)
+            )
+        })
     })
 }
 

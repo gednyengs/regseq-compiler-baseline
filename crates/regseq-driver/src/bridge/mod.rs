@@ -37,6 +37,7 @@ mod sort;
 mod synchronization;
 pub mod synth;
 mod timed_delay;
+mod transport;
 pub mod ty;
 
 pub use const_::ConstMemoryStaticHandle;
@@ -697,6 +698,9 @@ pub enum BridgeError {
     #[error("DMA-management validation: {0}")]
     DmaValidation(DmaDiagnostic),
 
+    /// The locked device-command-transport admission surface is malformed.
+    #[error("device-command-transport validation: {0}")]
+    TransportValidation(TransportDiagnostic),
 }
 
 /// Per-construct atomic-memory-access-and-ordering (atomicity) frontend
@@ -1393,6 +1397,15 @@ pub enum DmaDiagnostic {
         operation: String,
         detail: String,
     },
+}
+
+/// Locked device-command-transport frontend diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum TransportDiagnostic {
+    #[error("DCT-ERR-BAD-SIGNATURE: command transport submit: {detail}")]
+    BadSignature { detail: String },
+    #[error("DCT-ERR-DISCARDED-OUTCOME: command transport submit admission must be consumed as Accepted or Rejected(native_reason)")]
+    DiscardedOutcome,
 }
 
 /// Per-construct timed-cpu-delay-and-sleep (TCD) frontend diagnostics (GRILL
@@ -2765,6 +2778,10 @@ fn construct_instances_and_resolve_cross_references(
     // last — after every body is materialized, so it walks the recognized atomic
     // calls.
     atomic::validate_atomic_ops(&ctxt.model)?;
+    // DCT admission is synchronous and must be observed at the call site.
+    // This pass records no completion/correlation state; it only rejects a
+    // thrown-away Accepted/Rejected value.
+    transport::validate_submit_results(&ctxt.model)?;
     // Synchronization op / acquire-site recognition: walk the materialized
     // bodies and record each `lock()` acquire + its paired guard release into
     // the `SynchronizationTables` sibling table. Runs here — after the bodies

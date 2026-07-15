@@ -2,7 +2,7 @@
 
 use super::{
     atomic, clock, deferred_work, device_lifecycle, framework_type, interrupt, intrinsic, pinctrl,
-    synchronization, timed_delay, BridgeCtxt, BridgeError,
+    synchronization, timed_delay, transport, BridgeCtxt, BridgeError,
 };
 
 /// Assigns dense `ItemId`s and populates item side tables in lock-step.
@@ -16,6 +16,7 @@ pub(crate) fn assign_item_ids_and_populate_sidetables(
     // every recognized busy_wait/sleep facade (TCD-ERR-02). Runs after
     // `materialise_intrinsics` records the markers it walks.
     timed_delay::validate_delay_signatures(ctxt)?;
+    transport::validate_submit_signatures(ctxt)?;
     // Atomic-memory-access-and-ordering (atomicity construct): record the
     // `AttrData::Atomic` field marker for every `Atomic<T>` struct field
     // (element type + optional initial value), rejecting an unsupported element

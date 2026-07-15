@@ -295,6 +295,7 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         uses_pr: false,
         uses_delay_busy: false,
         uses_delay_sleep: false,
+        uses_command_transport: false,
         elided_locals: std::collections::BTreeSet::new(),
     };
 
@@ -537,6 +538,11 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     }
     tu.push_str(&type_defs);
     tu.push('\n');
+    if cx.uses_command_transport {
+        tu.push_str(&format!(
+            "/* L2 resolves and owns this non-blocking mailbox binding. */\nstruct {drv}_command_transport_endpoint {{\n\tstruct mbox_chan *channel;\n\tconst struct mbox_client *client;\n}};\n\n"
+        ));
+    }
     tu.push_str(&scaffold.container);
     // Timed-cpu-delay-and-sleep lowering helpers (TCD construct, M2/T08),
     // injected before the bodies that call them, gated on the demand flags the

@@ -131,6 +131,7 @@ fn intrinsic_kind_for_name(name: &str) -> Option<IntrinsicKind> {
         // what `materialise_intrinsics` keys on, so without it `Work::submit`
         // stays untagged and never reaches `emit_deferred_work`.)
         "deferred_work_submit" => Some(IntrinsicKind::DeferredWork(DeferredWorkOp::Submit)),
+        "command_transport_submit" => Some(IntrinsicKind::CommandTransportSubmit),
         _ => None,
     }
 }
@@ -208,6 +209,7 @@ fn fn_name_matches_kind(name: &str, kind: &IntrinsicKind) -> bool {
         IntrinsicKind::DeferredWork(op) => match op {
             DeferredWorkOp::Submit => name == "submit",
         },
+        IntrinsicKind::CommandTransportSubmit => name == "submit",
     }
 }
 

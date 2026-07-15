@@ -977,6 +977,7 @@ fn seam_cx_and_body(m: &RegseqModel, dst_ty: TyId) -> (super::body::LowerCx<'_>,
         uses_pr: false,
         uses_delay_busy: false,
         uses_delay_sleep: false,
+        uses_command_transport: false,
         elided_locals: std::collections::BTreeSet::new(),
     };
     let body = Body::default();

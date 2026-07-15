@@ -324,6 +324,9 @@ fn emit_generic_c_inner(
     if !model.device_lifecycle.drivers.is_empty() {
         out.push_str(prelude::LIFECYCLE_HELPERS);
     }
+    if body_emit::model_has_command_transport_submit(model) {
+        out.push_str(prelude::COMMAND_TRANSPORT_HELPERS);
+    }
     // Locked serial-port capability manifest. Generic C executes authored
     // bodies directly; this emitted table makes capability absence explicit
     // without inventing an event, cancellation, or successful fallback.

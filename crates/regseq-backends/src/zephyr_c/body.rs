@@ -906,6 +906,9 @@ fn emit_call(
                 emit_pinctrl(cx, op, *instance, body, args, destination, out)
             }
             IntrinsicKind::DeferredWork(_) => emit_deferred_work(cx, body, args, out),
+            IntrinsicKind::CommandTransportSubmit => {
+                emit_command_transport_submit(cx, body, args, destination, out)
+            }
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {
@@ -940,6 +943,41 @@ fn emit_call(
         let lv = place_lvalue(cx, body, destination)?;
         out.push_str(&format!("\t{lv} = {call};\n"));
     }
+    Ok(())
+}
+
+/// Lower the locked command-transport operation to immediate Zephyr mailbox
+/// admission.  Both operands remain opaque words owned by L2: the endpoint is
+/// a pre-resolved `mbox_dt_spec`, and the payload points at the native message.
+fn emit_command_transport_submit(
+    cx: &mut LowerCx<'_>,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    destination: &Place,
+    out: &mut String,
+) -> Result<(), EmitError> {
+    if args.len() != 2 {
+        return Err(EmitError::Unsupported(
+            "command_transport_submit requires endpoint and payload operands".into(),
+        ));
+    }
+    cx.extra_includes.insert("<string.h>");
+    cx.extra_includes.insert("<errno.h>");
+    cx.extra_includes.insert("<zephyr/drivers/mbox.h>");
+
+    let endpoint = operand_expr(cx, body, &args[0])?;
+    let payload = operand_expr(cx, body, &args[1])?;
+    let dst = place_lvalue(cx, body, destination)?;
+    let dst_ty = place_ty(cx.model, body, destination)?;
+
+    out.push_str(&format!(
+        "\t{{ const struct mbox_dt_spec *__endpoint = (const struct mbox_dt_spec *)(uintptr_t)({endpoint});\n\t  int __reason = __endpoint && __endpoint->dev\n\t\t? mbox_send(__endpoint->dev, __endpoint->channel_id, (const struct mbox_msg *)(uintptr_t)({payload}))\n\t\t: -EINVAL;\n\t  if (__reason == 0) {{\n"
+    ));
+    out.push_str(&format!("\t\tmemset(&{dst}, 0, sizeof({dst}));\n"));
+    emit_enum_tag_write(cx, dst_ty, &dst, VariantIdx::from_u32(0), out)?;
+    out.push_str("\t  } else {\n");
+    cx_emit_cas_result(cx, &dst, dst_ty, 1, "__reason", out)?;
+    out.push_str("\t  } }\n");
     Ok(())
 }
 

@@ -1,0 +1,13 @@
+{
+  "schema": "gap-closure-stage-coverage/1",
+  "stage": "C3-DCT",
+  "authority": "freeze/GAP-LEDGER.json G-device-command-transport-01..06 plus locked addendum/epochs/epoch-2/device-command-transport.md",
+  "rows": [
+    {"id":"G-device-command-transport-01","owner":"device-command-transport","check":"exactly one non-blocking submit operation survives, with a pre-resolved endpoint, opaque payload word, and synchronous Accepted or Rejected(native_reason) admission"},
+    {"id":"G-device-command-transport-02","owner":"joint-transport-register-access","check":"submit performs admission only; descriptor publication protocols, producer indices, and doorbells remain absent and owned by L2/device state/register access"},
+    {"id":"G-device-command-transport-03","owner":"joint-transport-device-schema","check":"no completion harvesting, device-written marker, payload-read ordering, terminal status, or correlation identity is represented or emitted"},
+    {"id":"G-device-command-transport-04","owner":"l2-device-state","check":"queues, rings, cursors, wrap invariants, reload, and re-arm remain absent from the transport IR and native lowering"},
+    {"id":"G-device-command-transport-05","owner":"joint-dma-payload-lifetime","check":"payload storage, mappings, host shadow state, packet handles, segment counts, and descriptor lifetime remain in L2/DMA/device-class owners"},
+    {"id":"G-device-command-transport-06","owner":"compiler-lowering","check":"frontend signature/result-use enforcement, generic-C behavior, Linux non-blocking mailbox admission, Zephyr mailbox admission, real headers, and forbidden historical-symbol scans prove the locked boundary"}
+  ]
+}

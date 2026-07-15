@@ -238,6 +238,11 @@ pub fn west_build_with_workspace(
         // configuration.
         prj_conf.push_str("CONFIG_DMA=y\n");
     }
+    if driver.tu.contains("<zephyr/drivers/mbox.h>") {
+        // C3-DCT: compile and link the immediate mailbox admission API used by
+        // the generated submit operation.
+        prj_conf.push_str("CONFIG_MBOX=y\n");
+    }
     std::fs::write(app.join("prj.conf"), prj_conf).map_err(WestError::Io)?;
     // The DUT overlay, per bus form.
     let overlay = match driver.bus {

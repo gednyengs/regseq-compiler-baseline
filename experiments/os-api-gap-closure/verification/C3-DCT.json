@@ -1,0 +1,76 @@
+{
+  "schema": "gap-closure-verification-plan/1",
+  "stage": "C3-DCT",
+  "commands": [
+    {
+      "argv": ["python3", "-c", "import json; p=json.load(open('/home/nyengele/regseq-eval-worktrees/regseq-gap-closure/docs/experiments/os-api-gap-closure/wf/runtime/gates/H12-DCT-P1-GREEN.json')); assert p['schema']=='gap-closure-gate/1' and p['gate_id']=='H12-DCT-P1-GREEN' and p['digest']=='edebf47c82a4560b0ee4e2e48ec7a687da35483b30b7f551ee1b715eb245b4c9' and p['ok'] is True"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "--workspace"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "regseq-model", "command_transport_submit", "--", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "transport_locked_fixtures", "locked_transport_positive_frontend", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "transport_locked_fixtures", "locked_transport_negative_frontend", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "transport_locked_fixtures", "locked_transport_generic_c_admission_has_no_terminal_event", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "transport_os_lowering_e2e", "transport_linux_is_nonblocking_native_admission", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "transport_os_lowering_e2e", "transport_zephyr_is_native_admission_only", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-c", "test -n \"${RSEQ_LINUX_KDIR:-}\" && cargo test -p codegen-coverage-runner --test transport_real_headers_e2e transport_linux_admission_builds_against_real_headers -- --exact --nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-c", "test -n \"${RSEQ_ZEPHYR_WORKSPACE:-}\" && cargo test -p codegen-coverage-runner --test transport_real_headers_e2e transport_zephyr_admission_builds_against_real_headers -- --exact --nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "transport_covers", "locked_transport_stage_accounts_for_all_frozen_gap_rows", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-c", "! grep -nE 'WorkQueue|CommandSlot|reserve_slot|publish_slots|ProducerIndex|CorrelationRecord|CompletionTopology|transport_e1000_queue' crates/regseq-model/src/domain_attr.rs crates/regseq-driver/src/bridge/transport.rs crates/regseq-backends/src/generic_c/body_emit.rs crates/regseq-backends/src/generic_c/prelude.rs crates/regseq-backends/src/linux_c/body.rs crates/regseq-backends/src/zephyr_c/body.rs"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["python3", "-c", "import json; p=json.load(open('experiments/os-api-gap-closure/provenance/C3-DCT.json')); assert p['schema']=='gap-closure-provenance/1' and p['stage']=='C3-DCT' and p['fixture_first_record']['status']=='established-before-historical-matching' and p['transplants']==[]; assert {x['asset_id'] for x in p['oracle_only']}=={'DCT-FIXTURES','DCT-NEGATIVES-TESTS'}; assert {x['asset_id'] for x in p['rejected_assets']}=={'DCT-MODEL-BRIDGE','DCT-GC','DCT-GLUE-DOC'}; c=json.load(open('experiments/os-api-gap-closure/coverage/C3-DCT.json')); assert [r['id'] for r in c['rows']]==[f'G-device-command-transport-{i:02}' for i in range(1,7)]"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["python3", "-c", "import json; p=json.load(open('experiments/os-api-gap-closure/verification/C3-DCT.json')); assert set(p)=={'schema','stage','commands'}; assert p['schema']=='gap-closure-verification-plan/1' and p['stage']=='C3-DCT'; allowed={'cargo','uv','python3','bash','make','cmake','ninja'}; assert p['commands'] and all(set(c)=={'argv','cwd','expected_outputs'} and isinstance(c['argv'],list) and c['argv'] and c['argv'][0] in allowed and isinstance(c['cwd'],str) and isinstance(c['expected_outputs'],list) for c in p['commands'])"],
+      "cwd": ".",
+      "expected_outputs": []
+    }
+  ]
+}

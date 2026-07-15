@@ -102,6 +102,27 @@ __attribute__((unused)) static void regseq_mmio_write(uint32_t off, uint32_t wid
 }
 "#;
 
+/// Host oracle for the locked device-command-transport submit operation.
+/// It returns synchronously, retains neither operand, and emits admission only.
+/// Endpoint zero deterministically exercises native rejection (`-16`/busy);
+/// every other endpoint is accepted. No completion/correlation helper exists.
+pub const COMMAND_TRANSPORT_HELPERS: &str = r#"
+/* ---------------------------------------------------------------------------
+ * Locked device-command-transport admission oracle. Endpoint and payload are
+ * opaque L2 words and are not retained beyond this call. */
+__attribute__((unused)) static intptr_t regseq_command_transport_submit(
+        uintptr_t endpoint, uintptr_t payload) {
+    if (endpoint == 0u) {
+        printf("DCT admission rejected reason=-16 endpoint=0 payload=%llu\n",
+               (unsigned long long)payload);
+        return -16;
+    }
+    printf("DCT admission accepted endpoint=%llu payload=%llu\n",
+           (unsigned long long)endpoint, (unsigned long long)payload);
+    return 0;
+}
+"#;
+
 /// Device-lifecycle trace-hook block (device-lifecycle construct, GRILL C01).
 ///
 /// Unlike the always-on register-access block above, this is emitted ONLY for a

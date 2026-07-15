@@ -271,6 +271,12 @@ pub enum IntrinsicKind {
     /// until `submit_unique` is built. Appended at discriminant 9, preserving
     /// the discriminants above (GRILL D04/D16/C03).
     DeferredWork(DeferredWorkOp) = 9,
+    /// Device-command-transport's single locked L1 operation. Its operands
+    /// remain ordinary L2-provided endpoint and payload values, and its result
+    /// is synchronous admission only. No completion, correlation,
+    /// cancellation, queue, ring, DMA, or payload-storage state is modeled.
+    /// Appended at discriminant 10.
+    CommandTransportSubmit = 10,
 }
 
 /// Config-space operation carried by [`IntrinsicKind::Config`]
@@ -527,6 +533,7 @@ impl IntrinsicKind {
             // and `init_work`/`cancel_work` are compiler-managed, not
             // author-called intrinsics.
             "deferred_work_submit" => Some(IntrinsicKind::DeferredWork(DeferredWorkOp::Submit)),
+            "command_transport_submit" => Some(IntrinsicKind::CommandTransportSubmit),
             _ => None,
         }
     }
@@ -1530,6 +1537,24 @@ mod tests {
     }
 
     #[test]
+    fn command_transport_submit_from_name_round_trip_and_discriminant() {
+        assert_eq!(
+            IntrinsicKind::from_name(symbol("command_transport_submit")),
+            Some(IntrinsicKind::CommandTransportSubmit)
+        );
+        assert_json_round_trip(IntrinsicKind::CommandTransportSubmit);
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::CommandTransportSubmit),
+            10
+        );
+        assert_eq!(
+            IntrinsicKind::from_name(symbol("command-transport-submit")),
+            None
+        );
+        assert_eq!(IntrinsicKind::from_name(symbol("transport_complete")), None);
+    }
+
+    #[test]
     fn attr_data_work_handler_discriminant_and_round_trip() {
         // The `WorkHandler` item-attr variant appends at AttrData discriminant 9
         // (next-free after `PinStateMarker = 8`) without shifting any prior
@@ -1607,6 +1632,7 @@ mod tests {
             IntrinsicKind::Clock(ClockOp::Enable),
             IntrinsicKind::Pinctrl(PinctrlOp::ApplyState),
             IntrinsicKind::DeferredWork(DeferredWorkOp::Submit),
+            IntrinsicKind::CommandTransportSubmit,
         ];
         let intrinsic_tags: std::collections::BTreeSet<u8> =
             intrinsic_variants.iter().map(intrinsic_kind_tag).collect();
