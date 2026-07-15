@@ -3,7 +3,8 @@
 //! Kbuild fragment, under the ratified F-1 independent-lowering contract
 //! (`docs/discussions/linux-backend/linux-open-questions.md` §F.1):
 //! `generic_c` is the authoritative *reference* lowering and frozen oracle;
-//! this module owns its own emission shape and shares no code with it.
+//! this module owns its OS-facing emission shape. Only model-structural core
+//! shim classification is backend-shared.
 //!
 //! Emission ordering is Linux-native (GRILL D04): includes →
 //! register/bitfield consts → driver state → lowered bodies → lifecycle
@@ -659,6 +660,14 @@ fn reachable_closure(
             continue;
         }
         seen.push(id);
+        if let Some(dependency) = crate::core_shims::classify(model, id)
+            .map_err(|message| EmitError::Unsupported(message.into()))?
+            .and_then(crate::core_shims::BackendShim::dependency)
+        {
+            if !seen.contains(&dependency) {
+                queue.push(dependency);
+            }
+        }
         let InstanceKind::Function(data) = &model.instances[id].kind else {
             continue;
         };

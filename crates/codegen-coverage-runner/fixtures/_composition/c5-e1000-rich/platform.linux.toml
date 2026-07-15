@@ -1,0 +1,11 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "qemu-pc"
+arch = "x86_64"
+
+[mmio.regs]
+bar = 0
+base = 0xf0000000
+size = 0x20000

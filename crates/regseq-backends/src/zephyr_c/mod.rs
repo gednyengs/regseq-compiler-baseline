@@ -3,7 +3,8 @@
 //! devicetree binding yaml, under the ratified F-1 independent-lowering
 //! contract: `generic_c` is the authoritative *reference* lowering and
 //! frozen oracle, `linux_c` is a structural sibling — this module owns its
-//! own emission shape and shares no code with either.
+//! OS-facing emission shape. Only model-structural core shim classification
+//! is backend-shared.
 //!
 //! Emission ordering is the ratified TU skeleton
 //! (`docs/discussions/zephyr-backend/zephyr-scaffold-and-dispatch.md` §1):
@@ -446,7 +447,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
             .map(|(_, id)| *id)
             .chain(irq.iter().map(|i| i.handler))
             .chain(work_handlers.iter().copied()),
-    );
+    )?;
 
     // -- frame scan over the closure: op-shape rejections that must fire
     //    regardless of how far the body banks have grown (D12 frame) --------
@@ -591,7 +592,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
                 "callback `on_surprise_remove` does not resolve to an instance".into(),
             )
         })?;
-        let absent_closure = reachable_closure(model, std::iter::once(id));
+        let absent_closure = reachable_closure(model, std::iter::once(id))?;
         // Any construct the delivered path rejects still yields the D.2
         // EmitError — the scan first, then full lowering (never scan-only).
         scan_closure_ops(model, &absent_closure, pcie)?;
@@ -1687,7 +1688,7 @@ fn resolve_instance_ref(model: &RegseqModel, target: InstanceRef) -> Option<Inst
 fn reachable_closure(
     model: &RegseqModel,
     roots: impl Iterator<Item = InstanceId>,
-) -> Vec<InstanceId> {
+) -> Result<Vec<InstanceId>, EmitError> {
     let mut seen: Vec<InstanceId> = Vec::new();
     let mut queue: Vec<InstanceId> = roots.collect();
     while let Some(id) = queue.pop() {
@@ -1695,6 +1696,14 @@ fn reachable_closure(
             continue;
         }
         seen.push(id);
+        if let Some(dependency) = crate::core_shims::classify(model, id)
+            .map_err(|message| EmitError::Unsupported(message.into()))?
+            .and_then(crate::core_shims::BackendShim::dependency)
+        {
+            if !seen.contains(&dependency) {
+                queue.push(dependency);
+            }
+        }
         let InstanceKind::Function(data) = &model.instances[id].kind else {
             continue;
         };
@@ -1720,7 +1729,7 @@ fn reachable_closure(
             }
         }
     }
-    seen
+    Ok(seen)
 }
 
 /// The intrinsic kind anchoring `instance`, if any.

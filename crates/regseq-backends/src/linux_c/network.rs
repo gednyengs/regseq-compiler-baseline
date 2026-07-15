@@ -173,18 +173,18 @@ static void {drv}_net_get_stats64(struct net_device *dev,
 	stats->tx_dropped = dev->stats.tx_dropped;
 }}
 
-static int {drv}_net_change_mtu(struct net_device *dev, int mtu)
+static int __maybe_unused {drv}_net_change_mtu(struct net_device *dev, int mtu)
 {{
 	WRITE_ONCE(dev->mtu, mtu);
 	return 0;
 }}
 
-static int {drv}_net_set_mac_address(struct net_device *dev, void *address)
+static int __maybe_unused {drv}_net_set_mac_address(struct net_device *dev, void *address)
 {{
 	return eth_mac_addr(dev, address);
 }}
 
-static void {drv}_net_set_rx_mode(struct net_device *dev)
+static void __maybe_unused {drv}_net_set_rx_mode(struct net_device *dev)
 {{
 	(void)dev; /* filter programming remains provider-specific L2 state */
 }}

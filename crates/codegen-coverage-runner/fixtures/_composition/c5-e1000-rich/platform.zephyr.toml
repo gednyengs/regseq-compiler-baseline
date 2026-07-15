@@ -1,0 +1,11 @@
+version = "1"
+
+[platform]
+os = "zephyr"
+board = "qemu_x86"
+arch = "x86"
+
+[mmio.regs]
+bar = 0
+base = 0xf0000000
+size = 0x20000

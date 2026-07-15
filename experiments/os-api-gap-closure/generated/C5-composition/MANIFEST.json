@@ -1,0 +1,42 @@
+{
+  "addendum_lock_sha256": "52996affe191766dbbae4cd7a1eaa782a829d541f5ea9572af213d10f619c41a",
+  "authority_sha256": "708f08fcf18f934041d98e23f9811103fca59bea58418680c5395d2201e3bf17",
+  "outputs": [
+    {
+      "device": "pl011",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/pl011.linux.c",
+      "sha256": "2564a445e26d6f7b887c72f00ed346b3a5e5f20e44d916fcc537ba1f4914ad59",
+      "target": "linux"
+    },
+    {
+      "device": "pl011",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/pl011.zephyr.c",
+      "sha256": "16f3108c041dc12d14c77e8d55b9d344e29d64cedaedbd79008b208ae477f513",
+      "target": "zephyr"
+    },
+    {
+      "device": "e1000",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/e1000.linux.c",
+      "sha256": "6fa0f885d47b3a7d978d802184d022a5be1bc825e03bd4a66130ee9493c1692e",
+      "target": "linux"
+    },
+    {
+      "device": "e1000",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/e1000.zephyr.c",
+      "sha256": "6f090f01917f70a0980471088cb8df036e32b747af26b6f60b5baa8542331c7f",
+      "target": "zephyr"
+    }
+  ],
+  "schema": "gap-closure-generated-manifest/1",
+  "sources": [
+    {
+      "path": "crates/codegen-coverage-runner/fixtures/_composition/c5-pl011-rich/input.rs",
+      "sha256": "55a1ddb1098168b37c95cad7929208aacb76a6167be59e1500549b92534046e7"
+    },
+    {
+      "path": "crates/codegen-coverage-runner/fixtures/_composition/c5-e1000-rich/input.rs",
+      "sha256": "b84d2564d4d994ef4d446db1136a3275b3979ae5a5fcf2ef8bdee65b0463452b"
+    }
+  ],
+  "stage": "C5-composition"
+}

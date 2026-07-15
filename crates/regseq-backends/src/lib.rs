@@ -27,6 +27,7 @@
 //! the capability table (whose domain stays lifecycle slots only).
 
 pub mod capability;
+mod core_shims;
 mod generic_c;
 pub mod interrupt_order;
 mod linux_c;

@@ -15,11 +15,12 @@ use std::collections::BTreeMap;
 
 use regseq_model::{
     AggregateKind, AtomicElement, AtomicOp, AttrData, BinOp, CallCallee, CastKind, ClockBinding,
-    ClockMode, ClockOp, Const, DefPathData, EnumShape, FetchOp, FieldIdx, FieldPath, FnAbi,
-    FunctionInstanceFlavor, InstanceId, InstanceKind, IntrinsicKind, ItemId, ItemKind, LayoutKind,
-    Linkage, LocalId, Operand, Place, PlaceElem, RegseqModel, Rvalue, Safety, StatementKind,
-    TerminatorKind, Ty, TyId, UintKind, UnOp, VariantIdx,
+    ClockMode, ClockOp, Const, EnumShape, FetchOp, FieldIdx, FieldPath, InstanceId, InstanceKind,
+    IntrinsicKind, ItemId, LayoutKind, LocalId, Operand, Place, PlaceElem, RegseqModel, Rvalue,
+    StatementKind, TerminatorKind, Ty, TyId, UintKind, UnOp, VariantIdx,
 };
+
+use crate::core_shims::{self, BackendShim};
 
 use super::types::{self, TypeNames};
 use super::EmitError;
@@ -72,74 +73,11 @@ impl<'m> LowerCx<'m> {
     }
 }
 
-#[derive(Clone, Copy)]
-enum BackendShim {
-    U64Default,
-}
-
-fn named_segment(
+fn backend_owned_shim(
     model: &RegseqModel,
-    segment: &regseq_model::DefPathSegment,
-    expected: &str,
-    value_namespace: bool,
-) -> bool {
-    if segment.disambiguator != 0 {
-        return false;
-    }
-    match &segment.data {
-        DefPathData::ValueNs(name) if value_namespace => {
-            model.strings.resolve(*name) == expected
-        }
-        DefPathData::TypeNs(name) if !value_namespace => {
-            model.strings.resolve(*name) == expected
-        }
-        _ => false,
-    }
-}
-
-fn exact_core_item(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
-    let path = &model.items[item].def_path;
-    if path.crate_id == model.primary_crate || path.crate_id.index() >= model.crates.len() {
-        return false;
-    }
-    let crate_info = &model.crates[path.crate_id];
-    model.strings.resolve(crate_info.name) == "core"
-        && crate_info.stable_crate_id == model.item_def_paths[item].stable_crate_id
-        && crate_info.stable_crate_id.0 != 0
-}
-
-fn u64_default_path(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
-    let segments = &model.items[item].def_path.segments;
-    matches!(segments.as_slice(), [module, .., impl_scope, method]
-        if named_segment(model, module, "default", false)
-            && matches!(&impl_scope.data, DefPathData::Impl)
-            && named_segment(model, method, "default", true))
-}
-
-fn backend_owned_shim(model: &RegseqModel, id: InstanceId) -> Option<BackendShim> {
-    let instance = &model.instances[id];
-    let Some(data) = instance.kind.as_function() else {
-        return None;
-    };
-    if data.body.is_some()
-        || data.flavor != FunctionInstanceFlavor::Item
-        || model.items[instance.item].kind != ItemKind::Function
-        || model.items[instance.item].linkage != Linkage::Default
-        || !exact_core_item(model, instance.item)
-    {
-        return None;
-    }
-    let sig = model.sigs.resolve(data.fn_sig);
-    if u64_default_path(model, instance.item)
-        && sig.inputs.is_empty()
-        && matches!(&model.types[sig.output], Ty::Uint(UintKind::U64))
-        && sig.abi == FnAbi::Rust
-        && !sig.c_variadic
-        && sig.safety == Safety::Safe
-    {
-        return Some(BackendShim::U64Default);
-    }
-    None
+    id: InstanceId,
+) -> Result<Option<BackendShim>, EmitError> {
+    core_shims::classify(model, id).map_err(|message| EmitError::Unsupported(message.into()))
 }
 
 /// The `static <ret> <name>(<params>)` head shared by the forward
@@ -156,14 +94,37 @@ pub(crate) fn fn_head(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
     let sig = cx.model.sigs.resolve(data.fn_sig);
     let c_name = cx.fn_symbols[&instance].clone();
     let Some(body) = &data.body else {
-        if backend_owned_shim(cx.model, instance).is_some() {
-            let ret = types::c_type(cx.model, &mut cx.names, sig.output)?;
+        if let Some(shim) = backend_owned_shim(cx.model, instance)? {
+            let ret = if types::is_zst(cx.model, sig.output) {
+                "void".to_string()
+            } else {
+                types::c_type(cx.model, &mut cx.names, sig.output)?
+            };
+            let mut params = Vec::new();
+            for (index, ty) in sig.inputs.iter().enumerate() {
+                if types::is_zst(cx.model, *ty) {
+                    continue;
+                }
+                let name = shim
+                    .param_name(index)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("arg_{index}"));
+                params.push(format!(
+                    "{} {name}",
+                    types::c_type(cx.model, &mut cx.names, *ty)?
+                ));
+            }
+            let params = if params.is_empty() {
+                "void".to_string()
+            } else {
+                params.join(", ")
+            };
             let unused = if cx.unused_fn_instances.contains(&instance) {
                 " __maybe_unused"
             } else {
                 ""
             };
-            return Ok(format!("static{unused} {ret} {c_name}(void)"));
+            return Ok(format!("static{unused} {ret} {c_name}({params})"));
         }
         return Err(EmitError::Unsupported(format!(
             "foreign (bodyless) function `{}`",
@@ -268,8 +229,14 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
     let InstanceKind::Function(data) = &inst.kind else {
         unreachable!("fn_head certified the function shape");
     };
-    if let Some(BackendShim::U64Default) = backend_owned_shim(cx.model, instance) {
-        return Ok(format!("{head}\n{{\n\treturn 0;\n}}\n"));
+    if let Some(shim) = backend_owned_shim(cx.model, instance)? {
+        let body = match shim {
+            BackendShim::NullMut | BackendShim::U64Default => "\treturn 0;\n".to_string(),
+            BackendShim::PartialEqNe { eq } => {
+                format!("\treturn !{}(lhs, rhs);\n", cx.fn_symbols[&eq])
+            }
+        };
+        return Ok(format!("{head}\n{{\n{body}}}\n"));
     }
     let body = data.body.as_ref().expect("fn_head certified a body");
     let sig = cx.model.sigs.resolve(data.fn_sig);
@@ -480,7 +447,7 @@ fn emit_assign(
     let lv = place_lvalue(cx, body, place)?;
     match rvalue {
         Rvalue::Use(op) => {
-            let expr = operand_expr(cx, body, op)?;
+            let expr = operand_expr_typed(cx, body, op, Some(dest_ty))?;
             out.push_str(&format!("\t{lv} = {expr};\n"));
             Ok(())
         }
@@ -686,7 +653,7 @@ fn emit_aggregate(
                     continue;
                 }
                 let fname = super::naming::c_ident(cx.model.strings.resolve(field.name));
-                let expr = operand_expr(cx, body, op)?;
+                let expr = operand_expr_typed(cx, body, op, Some(field.ty))?;
                 out.push_str(&format!("\t{lv}.{fname} = {expr};\n"));
             }
             Ok(())
@@ -712,7 +679,7 @@ fn emit_aggregate(
                 if types::is_zst(cx.model, field.ty) {
                     continue;
                 }
-                let expr = operand_expr(cx, body, op)?;
+                let expr = operand_expr_typed(cx, body, op, Some(field.ty))?;
                 let fty = types::c_type(cx.model, &mut cx.names, field.ty)?;
                 out.push_str(&format!(
                     "\t{{ {fty} __v = {expr}; memcpy(&{lv}._raw[{}], &__v, sizeof(__v)); }}\n",
@@ -2109,57 +2076,85 @@ fn const_expr(
     id: regseq_model::ConstId,
     consumer: Option<TyId>,
 ) -> Result<String, EmitError> {
+    let value = cx.model.consts[id].clone();
     // A struct-typed byte image renders as a compound literal against the
     // consumer type's layout (the const-propagated FieldValue shape).
-    if let (Const::Bytes(bytes), Some(cty)) = (&cx.model.consts[id], consumer) {
+    if let (Const::Bytes(bytes), Some(cty)) = (&value, consumer) {
         if let Some(layout) = types::layout_of(cx.model, cty) {
-            if let LayoutKind::Struct { fields } = &layout.kind {
-                let cname = types::c_type(cx.model, &mut cx.names, cty)?;
-                let mut members = Vec::new();
-                for f in fields {
-                    if types::is_zst(cx.model, f.ty) {
-                        continue;
+            match &layout.kind {
+                LayoutKind::Struct { fields } => {
+                    let cname = types::c_type(cx.model, &mut cx.names, cty)?;
+                    let mut members = Vec::new();
+                    for f in fields {
+                        if types::is_zst(cx.model, f.ty) {
+                            continue;
+                        }
+                        let size = types::layout_of(cx.model, f.ty)
+                            .map(|l| l.size)
+                            .unwrap_or_else(|| scalar_size(cx.model, f.ty));
+                        let mut v: u64 = 0;
+                        for i in 0..size {
+                            match bytes.get((f.offset + i) as usize) {
+                                Some(regseq_model::Byte::Value(b)) => {
+                                    v |= (*b as u64) << (8 * i)
+                                }
+                                _ => {
+                                    return Err(EmitError::Unsupported(
+                                        "byte-image constant with non-value bytes".into(),
+                                    ))
+                                }
+                            }
+                        }
+                        members.push(format!(
+                            ".{} = {v:#x}",
+                            super::naming::c_ident(cx.model.strings.resolve(f.name))
+                        ));
                     }
-                    let size = types::layout_of(cx.model, f.ty)
-                        .map(|l| l.size)
-                        .unwrap_or_else(|| scalar_size(cx.model, f.ty));
-                    let mut v: u64 = 0;
-                    for i in 0..size {
-                        match bytes.get((f.offset + i) as usize) {
-                            Some(regseq_model::Byte::Value(b)) => v |= (*b as u64) << (8 * i),
-                            _ => {
+                    return Ok(format!("({cname}){{ {} }}", members.join(", ")));
+                }
+                LayoutKind::Enum { .. } => {
+                    let cname = types::c_type(cx.model, &mut cx.names, cty)?;
+                    let mut members = Vec::new();
+                    for (offset, byte) in bytes.iter().enumerate() {
+                        match byte {
+                            regseq_model::Byte::Value(value) if *value != 0 => {
+                                members.push(format!("._raw[{offset}] = {value:#x}"));
+                            }
+                            regseq_model::Byte::Value(_) | regseq_model::Byte::Uninit => {}
+                            regseq_model::Byte::Reloc(_) => {
                                 return Err(EmitError::Unsupported(
-                                    "byte-image constant with non-value bytes".into(),
+                                    "enum byte-image constant with a relocation".into(),
                                 ))
                             }
                         }
                     }
-                    members.push(format!(
-                        ".{} = {v:#x}",
-                        super::naming::c_ident(cx.model.strings.resolve(f.name))
-                    ));
+                    return Ok(if members.is_empty() {
+                        format!("({cname}){{0}}")
+                    } else {
+                        format!("({cname}){{ {} }}", members.join(", "))
+                    });
                 }
-                return Ok(format!("({cname}){{ {} }}", members.join(", ")));
+                _ => {}
             }
         }
     }
-    match &cx.model.consts[id] {
-        Const::Bool(b) => Ok(if *b { "true" } else { "false" }.into()),
+    match value {
+        Const::Bool(b) => Ok(if b { "true" } else { "false" }.into()),
         Const::Uint(kind, bits) => {
-            if *bits > u64::MAX as u128 {
+            if bits > u64::MAX as u128 {
                 return Err(EmitError::Unsupported(
                     "128-bit constant (first-light subset)".into(),
                 ));
             }
             let suffix = match kind {
-                regseq_model::UintKind::U64 | regseq_model::UintKind::Usize => "ull",
+                UintKind::U64 | UintKind::Usize => "ull",
                 _ => "u",
             };
-            Ok(format!("{:#x}{suffix}", *bits as u64))
+            Ok(format!("{:#x}{suffix}", bits as u64))
         }
         Const::Int(_, bits) => {
             // Sign-extended storage; render through the signed reinterpretation.
-            let v = *bits as i128;
+            let v = bits as i128;
             if v > i64::MAX as i128 || v < i64::MIN as i128 {
                 return Err(EmitError::Unsupported(
                     "128-bit constant (first-light subset)".into(),
@@ -2167,10 +2162,195 @@ fn const_expr(
             }
             Ok(format!("{}", v as i64))
         }
+        Const::Char(value) => Ok(format!("{value:#x}u")),
+        Const::ZST => Ok("0".into()),
+        Const::NullPtr(_) => {
+            let ty = consumer.ok_or_else(|| {
+                EmitError::Unsupported("null pointer constant without a consumer type".into())
+            })?;
+            Ok(format!("(({})0)", types::c_type(cx.model, &mut cx.names, ty)?))
+        }
+        Const::Aggregate(children) => aggregate_const_expr(cx, &children, consumer),
+        Const::EnumValue {
+            variant_idx,
+            payload,
+        } => enum_const_expr(cx, consumer, variant_idx, &payload),
         other => Err(EmitError::Unsupported(format!(
             "constant {other:?} (first-light subset)"
         ))),
     }
+}
+
+/// Render an enum const through the same opaque, layout-faithful carrier used
+/// by runtime aggregate construction. A GNU statement expression lets the
+/// value remain usable in assignments and call arguments while payload bytes
+/// are copied at their resolved offsets.
+fn enum_const_expr(
+    cx: &mut LowerCx<'_>,
+    consumer: Option<TyId>,
+    variant: VariantIdx,
+    payload: &[regseq_model::ConstId],
+) -> Result<String, EmitError> {
+    let ty = consumer.ok_or_else(|| {
+        EmitError::Unsupported("enum constant without a consumer type".into())
+    })?;
+    let fields = match &types::layout_of(cx.model, ty)
+        .ok_or_else(|| EmitError::Unsupported("enum constant without layout".into()))?
+        .kind
+    {
+        LayoutKind::Enum {
+            shape: EnumShape::Multiple { variants, .. },
+        } => variants
+            .get(variant.as_u32() as usize)
+            .ok_or_else(|| EmitError::Unsupported("enum constant variant out of range".into()))?
+            .fields
+            .clone(),
+        _ => {
+            return Err(EmitError::Unsupported(
+                "enum constant with unsupported layout".into(),
+            ))
+        }
+    };
+    if payload.len() != fields.len() {
+        return Err(EmitError::Unsupported(
+            "enum constant payload count does not match field count".into(),
+        ));
+    }
+    let cname = types::c_type(cx.model, &mut cx.names, ty)?;
+    if payload.is_empty() {
+        let tag = match &types::layout_of(cx.model, ty).expect("layout checked above").kind {
+            LayoutKind::Enum {
+                shape: EnumShape::Multiple { variants, .. },
+            } => variants[variant.as_u32() as usize].tag_value,
+            _ => unreachable!("layout checked above"),
+        };
+        match tag {
+            None => return Ok(format!("({cname}){{0}}")),
+            Some(tag) if tag <= u8::MAX as u128 => {
+                let (offset, size) = types::enum_tag_cell(cx.model, ty)?;
+                if size == 1 {
+                    return Ok(format!("({cname}){{ ._raw[{offset}] = {tag:#x} }}"));
+                }
+            }
+            Some(_) => {}
+        }
+    }
+    let mut statements = String::new();
+    emit_enum_tag_write(cx, ty, "__c", variant, &mut statements)?;
+    for (child, field) in payload.iter().zip(fields) {
+        if types::is_zst(cx.model, field.ty) {
+            continue;
+        }
+        let fty = types::c_type(cx.model, &mut cx.names, field.ty)?;
+        let expr = const_expr(cx, *child, Some(field.ty))?;
+        statements.push_str(&format!(
+            "\t{{ {fty} __v = {expr}; memcpy(&__c._raw[{}], &__v, sizeof(__v)); }}\n",
+            field.offset
+        ));
+    }
+    Ok(format!("({{ {cname} __c = {{0}}; {statements}__c; }})"))
+}
+
+/// Render the layout-driven aggregate const forms used by authored rich
+/// bodies. This mirrors generic_c's typed-valtree pairing: every child is
+/// lowered against its consumer field type, and ZST fields are omitted.
+fn aggregate_const_expr(
+    cx: &mut LowerCx<'_>,
+    children: &[regseq_model::ConstId],
+    consumer: Option<TyId>,
+) -> Result<String, EmitError> {
+    let ty = consumer.ok_or_else(|| {
+        EmitError::Unsupported("aggregate constant without a consumer type".into())
+    })?;
+    if let Ty::Ref(pointee, _) = cx.model.types[ty].clone() {
+        if children.len() != 2 {
+            return Err(EmitError::Unsupported(
+                "reference-carrier aggregate with unexpected child count".into(),
+            ));
+        }
+        let target = match &cx.model.consts[children[0]] {
+            Const::Reloc(target) => *target,
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "reference-carrier aggregate without a leading relocation".into(),
+                ))
+            }
+        };
+        if !matches!(
+            &cx.model.consts[children[1]],
+            Const::Uint(UintKind::Usize, _)
+        ) {
+            return Err(EmitError::Unsupported(
+                "reference-carrier aggregate metadata is not a usize".into(),
+            ));
+        }
+        if matches!(cx.model.types[pointee], Ty::Str | Ty::Slice(_) | Ty::Dynamic { .. }) {
+            return Err(EmitError::Unsupported(
+                "unsized reference-carrier aggregate (first-light subset)".into(),
+            ));
+        }
+        let instance = (0..cx.model.instances.len())
+            .map(|index| InstanceId::from_u32(index as u32))
+            .find(|id| cx.model.instance_ref_of(*id) == target)
+            .ok_or_else(|| {
+                EmitError::Unsupported(
+                    "reference-carrier relocation does not resolve to an instance".into(),
+                )
+            })?;
+        let init = match &cx.model.instances[instance].kind {
+            // Promoted constants are carried by bridge-owned byte-storage
+            // statics. Reconstruct that initializer at the reference's
+            // pointee type; the static's storage type is intentionally not
+            // the semantic pointee type.
+            InstanceKind::Static {
+                init: Some(init), ..
+            } => *init,
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "reference-carrier relocation is not an initialized static".into(),
+                ))
+            }
+        };
+        let init = const_expr(cx, init, Some(pointee))?;
+        return Ok(format!("&({init})"));
+    }
+    if !matches!(&cx.model.types[ty], Ty::Struct { .. } | Ty::Tuple { .. }) {
+        return Err(EmitError::Unsupported(format!(
+            "aggregate constant for consumer {:?} (first-light subset)",
+            cx.model.types[ty]
+        )));
+    }
+    let fields = match &types::layout_of(cx.model, ty)
+        .ok_or_else(|| EmitError::Unsupported("aggregate constant without layout".into()))?
+        .kind
+    {
+        LayoutKind::Struct { fields } => fields.clone(),
+        _ => {
+            return Err(EmitError::Unsupported(
+                "aggregate constant with non-struct layout".into(),
+            ))
+        }
+    };
+    if children.len() != fields.len() {
+        return Err(EmitError::Unsupported(
+            "aggregate constant child count does not match field count".into(),
+        ));
+    }
+    let cname = types::c_type(cx.model, &mut cx.names, ty)?;
+    let mut members = Vec::new();
+    for (child, field) in children.iter().zip(fields) {
+        if types::is_zst(cx.model, field.ty) {
+            continue;
+        }
+        let expr = const_expr(cx, *child, Some(field.ty))?;
+        let name = super::naming::c_ident(cx.model.strings.resolve(field.name));
+        members.push(format!(".{name} = {expr}"));
+    }
+    Ok(if members.is_empty() {
+        format!("({cname}){{0}}")
+    } else {
+        format!("({cname}){{ {} }}", members.join(", "))
+    })
 }
 
 /// Render a place as a C lvalue, walking the projection chain.
