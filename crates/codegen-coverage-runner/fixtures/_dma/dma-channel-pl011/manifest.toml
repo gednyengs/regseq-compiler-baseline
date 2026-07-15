@@ -1,0 +1,5 @@
+name = "dma-channel-pl011"
+kind = "rust"
+lifecycle_scenario = "orderly"
+covers = ["DMA-CHANNEL", "DMA-PREPARE-SUBMIT-ACTIVATE", "DMA-OPTIONAL-STATUS", "DMA-ACTIVE-RELEASE-REJECTED", "DMA-TERMINATE-NO-CALLBACK", "DMA-SYNCHRONIZE-BEFORE-RELEASE"]
+expect = "pass"

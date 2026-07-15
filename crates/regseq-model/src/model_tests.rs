@@ -186,6 +186,7 @@ fn root_struct_exposes_spec_field_set() {
         pinctrl,
         deferred_work,
         serial_port,
+        dma,
     } = m;
 
     assert_eq!(primary_crate, CrateId::ZERO);
@@ -213,6 +214,7 @@ fn root_struct_exposes_spec_field_set() {
     assert_eq!(pinctrl, crate::PinctrlTables::default());
     assert_eq!(deferred_work, crate::DeferredWorkTables::default());
     assert_eq!(serial_port, crate::SerialPortTables::default());
+    assert_eq!(dma, crate::DmaTables::default());
 }
 
 // ------------------------------------------------------------------

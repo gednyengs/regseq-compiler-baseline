@@ -2130,6 +2130,40 @@ fn fn_instance(
     })
 }
 
+#[test]
+fn referenced_non_foreign_bodyless_function_fails_before_c_emission() {
+    let mut m = model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::Rust, false);
+    let missing = fn_instance(&mut m, "missing", sig, None);
+    let caller = build_body(
+        0,
+        vec![unit],
+        vec![
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(missing),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(1)),
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+        ],
+    );
+    fn_instance(&mut m, "caller", sig, Some(caller));
+
+    let err = emit_generic_c(&m).unwrap_err();
+    assert!(
+        format!("{err:?}").contains("referenced non-foreign bodyless function"),
+        "unexpected bodyless-callee error: {err:?}",
+    );
+}
+
 /// Push a `Function` monomorphization for an *existing* `item` with explicit
 /// `generic_args` and `emission_name`, returning its `InstanceId`. Models the
 /// bridge minting one `emission_name` (the per-item, generic-agnostic
@@ -2566,6 +2600,7 @@ fn divergent_call_emits_unreachable() {
     let never_ty = never(&mut m);
     let dsig = fnsig(&mut m, vec![], never_ty, FnAbi::Rust, false);
     let diverge = fn_instance(&mut m, "diverge", dsig, None);
+    m.items[m.instances[diverge].item].linkage = Linkage::Foreign;
 
     let csig = fnsig(&mut m, vec![], u32t, FnAbi::Rust, false);
     let body = build_body(
@@ -7108,6 +7143,7 @@ fn const_memory_static_via_call_argument_is_re_typed_and_cast() {
     // The callee `consume(&[u32; 4])`.
     let consume_sig = fnsig(&mut m, vec![ref_arr], unit, FnAbi::Rust, false);
     let consume = fn_instance(&mut m, "consume", consume_sig, None);
+    m.items[m.instances[consume].item].linkage = Linkage::Foreign;
     // The CMS the carrier points at.
     let mut bytes = le32(1);
     bytes.extend(le32(2));

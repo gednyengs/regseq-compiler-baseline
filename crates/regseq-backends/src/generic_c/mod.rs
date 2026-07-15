@@ -27,8 +27,9 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use regseq_model::{
-    CAbiLowering, CAbiShape, FnAbi, FnSig, FnSigId, InlineHint, InstanceId, InstanceKind,
-    InstanceRef, Linkage, Mutability, PlatformIdentity, Provenance, RegseqModel, Ty, TyId,
+    CAbiLowering, CAbiShape, DefPathData, FnAbi, FnSig, FnSigId, FunctionInstanceFlavor,
+    GenericArg, InlineHint, InstanceId, InstanceKind, InstanceRef, ItemKind, Linkage, Mutability,
+    PlatformIdentity, Provenance, RegseqModel, Safety, Ty, TyId,
 };
 
 pub mod prelude;
@@ -257,6 +258,7 @@ fn emit_generic_c_inner(
     let names = build_name_table(model, &discovered);
     let syms = build_instance_symbols(model);
     let topo = topo_sort(model, &discovered)?;
+    let backend_shim_dependencies = validate_referenced_bodyless_functions(model)?;
     // Task d2.2 Change F: recover each `ConstMemoryStatic`'s consumer pointee
     // storage type, so banks 4 / 5 declare it as the type the consumer reads
     // (sound + naturally aligned) instead of the bridge's `Array(u8, len)`.
@@ -270,8 +272,21 @@ fn emit_generic_c_inner(
     let helper_use = RefCell::new(prelude::HelperUsage::default());
     let bank2 = bank2_type_forward_decls(model, &names, &discovered);
     let bank3 = bank3_type_definitions(model, &names, &topo);
-    let bank4 = bank4_declarations(model, &names, &syms, &cms_storage)?;
-    let bank5 = bank5_definitions(model, &names, &syms, &cms_storage, &helper_use)?;
+    let bank4 = bank4_declarations(
+        model,
+        &names,
+        &syms,
+        &cms_storage,
+        &backend_shim_dependencies,
+    )?;
+    let bank5 = bank5_definitions(
+        model,
+        &names,
+        &syms,
+        &cms_storage,
+        &backend_shim_dependencies,
+        &helper_use,
+    )?;
 
     // regseq-backends-28: the hand-emitted RegseqError -> errno boundary adapter,
     // built with the same `NameTable` as the banks (so it spells the `Result` /
@@ -324,6 +339,35 @@ fn emit_generic_c_inner(
             out.push_str(&format!(" * capability: {capability}\n"));
         }
         out.push_str(" * absent operations are unsupported; no terminal event is implied\n */\n");
+    }
+    // Locked DMA behavior manifest. Authored operations remain ordinary
+    // generic-C bodies; this records the two independent ownership planes and
+    // makes every missing address/status/control/callback capability explicit.
+    for (driver, dma) in &model.dma.drivers {
+        let logical_name = model
+            .device_lifecycle
+            .drivers
+            .get(driver)
+            .map(|d| model.strings.resolve(d.descriptor.name))
+            .unwrap_or("dma");
+        out.push_str(&format!("/* RSEQ-DMA {logical_name}\n"));
+        if let Some(buffer) = &dma.buffer {
+            out.push_str(" * element: DmaBuffer (independent allocate-to-free lifetime)\n");
+            for capability in buffer.ops.capabilities() {
+                out.push_str(&format!(" * buffer capability: {capability}\n"));
+            }
+            out.push_str(" * absent buffer operations are unsupported; no address or allocation is fabricated\n");
+        }
+        if let Some(channel) = &dma.channel {
+            out.push_str(" * element: AsyncTransferChannel (exclusive acquire-to-release lifetime)\n");
+            for capability in channel.ops.capabilities() {
+                out.push_str(&format!(" * channel capability: {capability}\n"));
+            }
+            out.push_str(" * prepare, submit, and activate are distinct; terminate emits no completion\n");
+            out.push_str(" * synchronize precedes release when asynchronous termination is present\n");
+            out.push_str(" * absent channel operations are unsupported; no status or completion is fabricated\n");
+        }
+        out.push_str(" */\n");
     }
     // Device-interrupt host line model (construct #6, C05) + synchronization
     // lock-discipline oracle (synchronization construct, S11), each emitted only
@@ -1622,11 +1666,230 @@ fn is_zst(model: &RegseqModel, ty: TyId) -> bool {
     .is_none()
 }
 
+/// A bodyless `core` helper whose implementation is owned by Generic C.
+/// Classification deliberately uses model identity and structure rather than
+/// the sanitized C symbol, which is only an emission detail.
+#[derive(Clone, Copy)]
+enum BackendShim {
+    NullMut,
+    PartialEqNe { eq: InstanceId },
+}
+
+impl BackendShim {
+    fn param_name(self, index: usize) -> Option<&'static str> {
+        match (self, index) {
+            (Self::PartialEqNe { .. }, 0) => Some("lhs"),
+            (Self::PartialEqNe { .. }, 1) => Some("rhs"),
+            _ => None,
+        }
+    }
+}
+
+fn named_segment(
+    model: &RegseqModel,
+    segment: &regseq_model::DefPathSegment,
+    expected: &str,
+    value_namespace: bool,
+) -> bool {
+    if segment.disambiguator != 0 {
+        return false;
+    }
+    match &segment.data {
+        DefPathData::ValueNs(name) if value_namespace => {
+            model.strings.resolve(*name) == expected
+        }
+        DefPathData::TypeNs(name) if !value_namespace => {
+            model.strings.resolve(*name) == expected
+        }
+        _ => false,
+    }
+}
+
+fn exact_core_item(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
+    let path = &model.items[item].def_path;
+    if path.crate_id == model.primary_crate || path.crate_id.index() >= model.crates.len() {
+        return false;
+    }
+    let crate_info = &model.crates[path.crate_id];
+    model.strings.resolve(crate_info.name) == "core"
+        && crate_info.stable_crate_id == model.item_def_paths[item].stable_crate_id
+        && crate_info.stable_crate_id.0 != 0
+}
+
+fn null_mut_path(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
+    let segments = &model.items[item].def_path.segments;
+    matches!(segments.as_slice(), [module, function]
+        if named_segment(model, module, "ptr", false)
+            && named_segment(model, function, "null_mut", true))
+}
+
+fn partial_eq_ne_path(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
+    let segments = &model.items[item].def_path.segments;
+    matches!(segments.as_slice(), [module, trait_item, method]
+        if named_segment(model, module, "cmp", false)
+            && named_segment(model, trait_item, "PartialEq", false)
+            && named_segment(model, method, "ne", true))
+}
+
+fn concrete_eq_path(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
+    let segments = &model.items[item].def_path.segments;
+    matches!(segments.as_slice(), [.., impl_scope, method]
+        if matches!(&impl_scope.data, DefPathData::Impl)
+            && named_segment(model, method, "eq", true))
+}
+
+fn valid_null_mut_signature(
+    model: &RegseqModel,
+    instance: &regseq_model::Instance,
+    sig: &FnSig,
+) -> bool {
+    let Ty::Ptr(pointee, Mutability::Mut) = &model.types[sig.output] else {
+        return false;
+    };
+    sig.inputs.is_empty()
+        && sig.abi == FnAbi::Rust
+        && !sig.c_variadic
+        && sig.safety == Safety::Safe
+        && matches!(instance.generic_args.as_slice(), [GenericArg::Type(arg)] if arg == pointee)
+}
+
+fn valid_partial_eq_ne_signature(model: &RegseqModel, sig: &FnSig) -> bool {
+    let [lhs, rhs] = sig.inputs.as_slice() else {
+        return false;
+    };
+    matches!(&model.types[*lhs], Ty::Ref(_, Provenance::SharedBorrow))
+        && &model.types[*lhs] == &model.types[*rhs]
+        && matches!(&model.types[sig.output], Ty::Bool)
+        && sig.abi == FnAbi::Rust
+        && !sig.c_variadic
+        && sig.safety == Safety::Safe
+}
+
+/// Classify the exact bodyless core shims Generic C owns. `PartialEq::ne`
+/// resolves its implementation to one unique bodyful concrete `eq` with the
+/// identical interned monomorphized signature; ambiguity is an emission error.
+fn backend_owned_shim(
+    model: &RegseqModel,
+    id: InstanceId,
+) -> Result<Option<BackendShim>, EmitError> {
+    let instance = &model.instances[id];
+    let Some(data) = instance.kind.as_function() else {
+        return Ok(None);
+    };
+    if data.body.is_some()
+        || data.flavor != FunctionInstanceFlavor::Item
+        || model.items[instance.item].kind != ItemKind::Function
+        || model.items[instance.item].linkage != Linkage::Default
+        || !exact_core_item(model, instance.item)
+    {
+        return Ok(None);
+    }
+    let sig = model.sigs.resolve(data.fn_sig);
+    if null_mut_path(model, instance.item) && valid_null_mut_signature(model, instance, sig) {
+        return Ok(Some(BackendShim::NullMut));
+    }
+    if !partial_eq_ne_path(model, instance.item) || !valid_partial_eq_ne_signature(model, sig) {
+        return Ok(None);
+    }
+
+    let mut matches = model
+        .instances
+        .iter()
+        .enumerate()
+        .filter_map(|(index, candidate)| {
+            let candidate_id = InstanceId::from_u32(index as u32);
+            let candidate_data = candidate.kind.as_function()?;
+            (candidate_data.body.is_some()
+                && candidate_data.flavor == FunctionInstanceFlavor::Item
+                && candidate_data.fn_sig == data.fn_sig
+                && model.items[candidate.item].kind == ItemKind::Function
+                && model.items[candidate.item].def_path.crate_id == model.primary_crate
+                && concrete_eq_path(model, candidate.item))
+            .then_some(candidate_id)
+        });
+    let Some(eq) = matches.next() else {
+        return Err(EmitError::Unsupported(
+            "backend-owned core::cmp::PartialEq::ne has no bodyful concrete eq with the matching monomorphized signature",
+        ));
+    };
+    if matches.next().is_some() {
+        return Err(EmitError::Unsupported(
+            "backend-owned core::cmp::PartialEq::ne has ambiguous bodyful concrete eq matches",
+        ));
+    }
+    Ok(Some(BackendShim::PartialEqNe { eq }))
+}
+
+fn validate_referenced_bodyless_functions(
+    model: &RegseqModel,
+) -> Result<HashSet<InstanceId>, EmitError> {
+    let mut referenced = HashSet::new();
+    let mut backend_shim_dependencies = HashSet::new();
+    for instance in model.instances.iter() {
+        let Some(body) = instance.kind.as_function().and_then(|data| data.body()) else {
+            continue;
+        };
+        for block in body.basic_blocks.iter() {
+            if let regseq_model::TerminatorKind::Call {
+                callee: regseq_model::CallCallee::Direct(callee),
+                ..
+            } = &block.terminator.kind
+            {
+                referenced.insert(*callee);
+            }
+        }
+    }
+
+    for id in referenced {
+        let instance = &model.instances[id];
+        let Some(data) = instance.kind.as_function() else {
+            continue;
+        };
+        if data.body.is_some()
+            || model.items[instance.item].linkage == Linkage::Foreign
+            || model.instance_intrinsic(id).is_some()
+        {
+            continue;
+        }
+        if let Some(shim) = backend_owned_shim(model, id)? {
+            if let BackendShim::PartialEqNe { eq } = shim {
+                // The shim is TU-local, so its concrete dependency must be too:
+                // a plain C11 `inline` definition can otherwise leave an
+                // unresolved external reference when the compiler does not
+                // inline this call.
+                backend_shim_dependencies.insert(eq);
+            }
+            continue;
+        }
+        return Err(EmitError::Unsupported(
+            "referenced non-foreign bodyless function is not a recognized Generic-C backend shim",
+        ));
+    }
+    Ok(backend_shim_dependencies)
+}
+
+fn emit_backend_shim_body(syms: &InstanceSymbols, shim: BackendShim) -> String {
+    match shim {
+        BackendShim::NullMut => " {\n    return 0;\n}\n".to_string(),
+        BackendShim::PartialEqNe { eq } => {
+            format!(" {{\n    return !{}(lhs, rhs);\n}}\n", syms.symbol(eq))
+        }
+    }
+}
+
 /// The section 17 inline / weak / link-section qualifier prefix for a
 /// function instance (everything but `extern` and `_Noreturn`). Shared by
 /// the bank-4 prototype and the bank-5 definition so the two stay
 /// consistent.
-fn fn_qualifiers(model: &RegseqModel, item: regseq_model::ItemId) -> String {
+fn fn_qualifiers(
+    model: &RegseqModel,
+    item: regseq_model::ItemId,
+    backend_shim: Option<BackendShim>,
+    backend_shim_dependency: bool,
+) -> String {
+    if backend_shim.is_some() || backend_shim_dependency {
+        return "static inline ".to_string();
+    }
     let item = &model.items[item];
     let mut q = String::new();
     match item.inline_hint {
@@ -1660,6 +1923,8 @@ fn fn_signature(
     id: InstanceId,
     instance: &regseq_model::Instance,
     named: bool,
+    backend_shim: Option<BackendShim>,
+    backend_shim_dependency: bool,
 ) -> String {
     let data = instance
         .kind
@@ -1680,9 +1945,13 @@ fn fn_signature(
             // `Substituted` position takes a distinct `<local>__abi` formal name
             // (the body local of the original type is declared + marshalled by
             // the prologue), so the formal and the body local cannot collide.
-            data.body()
-                .map(|body| abi_param_name(model, body, fn_sig, lowering, i))
-                .unwrap_or_default()
+            match backend_shim.and_then(|shim| shim.param_name(i)) {
+                Some(name) => name.to_string(),
+                None => data
+                    .body()
+                    .map(|body| abi_param_name(model, body, fn_sig, lowering, i))
+                    .unwrap_or_default(),
+            }
         } else {
             String::new()
         };
@@ -1712,7 +1981,12 @@ fn fn_signature(
         types::declare(model, names, out_ty, &declarator)
     };
 
-    let quals = fn_qualifiers(model, instance.item);
+    let quals = fn_qualifiers(
+        model,
+        instance.item,
+        backend_shim,
+        backend_shim_dependency,
+    );
     let noreturn = if matches!(model.types[fn_sig.output], Ty::Never) {
         "_Noreturn "
     } else {
@@ -2358,6 +2632,7 @@ fn bank4_declarations(
     names: &NameTable,
     syms: &InstanceSymbols,
     cms_storage: &HashMap<InstanceId, StorageTy>,
+    backend_shim_dependencies: &HashSet<InstanceId>,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
     let mut wrote_header = false;
@@ -2380,12 +2655,22 @@ fn bank4_declarations(
                 if is_diag_log_instance(model, instance.item) {
                     continue;
                 }
+                let backend_shim = backend_owned_shim(model, id)?;
                 header(&mut out, &mut wrote_header);
                 let foreign = model.items[instance.item].linkage == Linkage::Foreign;
                 let prefix = if foreign { "extern " } else { "" };
                 out.push_str(&format!(
                     "{prefix}{};\n",
-                    fn_signature(model, names, syms, id, instance, false)
+                    fn_signature(
+                        model,
+                        names,
+                        syms,
+                        id,
+                        instance,
+                        false,
+                        backend_shim,
+                        backend_shim_dependencies.contains(&id),
+                    )
                 ));
             }
             InstanceKind::Static { ty, .. } => {
@@ -2434,6 +2719,7 @@ fn bank5_definitions(
     names: &NameTable,
     syms: &InstanceSymbols,
     cms_storage: &HashMap<InstanceId, StorageTy>,
+    backend_shim_dependencies: &HashSet<InstanceId>,
     helper_use: &RefCell<prelude::HelperUsage>,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
@@ -2458,12 +2744,30 @@ fn bank5_definitions(
                 if foreign || is_diag_log_instance(model, instance.item) {
                     continue;
                 }
-                let Some(body) = data.body() else {
+                let backend_shim = backend_owned_shim(model, id)?;
+                if data.body().is_none() && backend_shim.is_none() {
                     continue;
-                };
+                }
                 header(&mut out, &mut wrote_header);
-                let sig = fn_signature(model, names, syms, id, instance, true);
-                let block = body_emit::emit_body(model, names, syms, id, instance, body, helper_use)?;
+                let sig = fn_signature(
+                    model,
+                    names,
+                    syms,
+                    id,
+                    instance,
+                    true,
+                    backend_shim,
+                    backend_shim_dependencies.contains(&id),
+                );
+                let block = match (data.body(), backend_shim) {
+                    (Some(body), None) => {
+                        body_emit::emit_body(model, names, syms, id, instance, body, helper_use)?
+                    }
+                    (None, Some(shim)) => emit_backend_shim_body(syms, shim),
+                    _ => unreachable!(
+                        "backend shims are bodyless and ordinary definitions are bodyful"
+                    ),
+                };
                 out.push_str(&format!("{sig}{block}"));
             }
             InstanceKind::Static {

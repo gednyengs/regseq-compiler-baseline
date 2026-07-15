@@ -22,6 +22,7 @@ pub mod body;
 pub mod const_;
 pub mod def_path;
 mod device_lifecycle;
+mod dma;
 pub mod diag_log;
 mod discovery;
 pub mod fnsig;
@@ -691,6 +692,10 @@ pub enum BridgeError {
     /// A locked serial-port frontend check failed.
     #[error("serial-port validation: {0}")]
     SerialValidation(SerialDiagnostic),
+
+    /// A locked DMA ownership/lifetime frontend check failed.
+    #[error("DMA-management validation: {0}")]
+    DmaValidation(DmaDiagnostic),
 
 }
 
@@ -1364,6 +1369,25 @@ pub enum SerialDiagnostic {
     #[error("SERIAL-ERR-EXCLUDED-SURFACE: serial-class driver `{driver}` implements excluded historical surface `{surface}`; use the single `SerialPort` element")]
     ExcludedSurface { driver: String, surface: String },
     #[error("SERIAL-ERR-BAD-SIGNATURE: driver `{driver}` operation `{operation}`: {detail}")]
+    BadSignature {
+        driver: String,
+        operation: String,
+        detail: String,
+    },
+}
+
+/// Locked DMA buffer/channel frontend diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum DmaDiagnostic {
+    #[error("DMA-ERR-EXCLUDED-SURFACE: driver `{driver}` implements excluded historical surface `{surface}`; the locked L1 elements are `DmaBuffer` and `AsyncTransferChannel`")]
+    ExcludedSurface { driver: String, surface: String },
+    #[error("DMA-ERR-INCOMPLETE-BUFFER: driver `{driver}` is missing required DmaBuffer ownership operations: {missing}")]
+    IncompleteBuffer { driver: String, missing: String },
+    #[error("DMA-ERR-INCOMPLETE-CHANNEL: driver `{driver}` is missing required AsyncTransferChannel lifecycle operations: {missing}")]
+    IncompleteChannel { driver: String, missing: String },
+    #[error("DMA-ERR-TERMINATE-NEEDS-SYNCHRONIZE: driver `{driver}` exposes asynchronous terminate without the synchronize barrier required before callback or buffer resources are released")]
+    TerminateNeedsSynchronize { driver: String },
+    #[error("DMA-ERR-BAD-SIGNATURE: driver `{driver}` operation `{operation}`: {detail}")]
     BadSignature {
         driver: String,
         operation: String,
@@ -2631,6 +2655,9 @@ fn construct_instances_and_resolve_cross_references(
     // authored overrides are the capability set. Run before the body drain so
     // every supported operation body is force-materialized.
     serial::resolve_serial_ports(ctxt)?;
+    // Locked DMA recognition is independent of device class. A driver may own
+    // a buffer, an async channel, both, or neither.
+    dma::resolve_dma(ctxt)?;
     // Device-interrupt (construct #6): discover + validate + bind the
     // #[rseq::isr] handlers and force-materialize their instances before the
     // drain, exactly like the lifecycle callbacks. The pending attribute

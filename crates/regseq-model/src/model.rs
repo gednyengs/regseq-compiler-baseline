@@ -163,6 +163,10 @@ pub struct RegseqModel {
     /// One capability-gated serial port per serial-class driver.
     #[serde(default)]
     pub serial_port: crate::serial::SerialPortTables,
+
+    /// Independent owned DMA buffer and asynchronous-channel elements.
+    #[serde(default)]
+    pub dma: crate::dma::DmaTables,
 }
 
 #[cfg(test)]
@@ -1126,6 +1130,7 @@ impl RegseqModel {
             pinctrl: crate::pinctrl::PinctrlTables::default(),
             deferred_work: crate::deferred_work::DeferredWorkTables::default(),
             serial_port: crate::serial::SerialPortTables::default(),
+            dma: crate::dma::DmaTables::default(),
         }
     }
 
@@ -1469,6 +1474,11 @@ impl RegseqModel {
             let new_id = remap[old_id.index()];
             self.serial_port.drivers.insert(new_id, driver);
         }
+        let old_dma = std::mem::take(&mut self.dma.drivers);
+        for (old_id, driver) in old_dma {
+            let new_id = remap[old_id.index()];
+            self.dma.drivers.insert(new_id, driver);
+        }
 
         #[cfg(debug_assertions)]
         for idx in 0..self.items.len().saturating_sub(1) {
@@ -1687,6 +1697,12 @@ impl RegseqModel {
         for (old_id, driver) in old_serial_ports {
             if let Some(new_id) = remap[old_id.index()] {
                 self.serial_port.drivers.insert(new_id, driver);
+            }
+        }
+        let old_dma = std::mem::take(&mut self.dma.drivers);
+        for (old_id, driver) in old_dma {
+            if let Some(new_id) = remap[old_id.index()] {
+                self.dma.drivers.insert(new_id, driver);
             }
         }
         remap

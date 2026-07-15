@@ -20,6 +20,7 @@ mod crate_info;
 mod def_path;
 mod deferred_work;
 mod device_lifecycle;
+mod dma;
 mod domain_attr;
 mod fn_sig;
 mod fn_sig_interner;
@@ -81,6 +82,9 @@ pub use device_lifecycle::{
     BarType, BusType, ClassTag, DeviceLifecycleTables, DriverDescriptor, DriverHandle,
     DriverLifecycle, LifecycleOps, MatchEntry, MmioBinding, ResourceField, ResourceKind,
     UserDataField, UserDataKind,
+};
+pub use dma::{
+    AsyncTransferChannel, DmaBufferOps, DmaChannelOps, DmaTables, DriverDma, OwnedDmaBuffer,
 };
 pub use domain_attr::{
     AtomicElement, AtomicOp, AttrData, ClockOp, ConfigOp, DeferredWorkOp, DomainAttrTables, FetchOp,

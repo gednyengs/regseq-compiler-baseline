@@ -232,6 +232,12 @@ pub fn west_build_with_workspace(
              CONFIG_UART_USE_RUNTIME_CONFIGURE=y\n",
         );
     }
+    if driver.tu.contains("<zephyr/drivers/dma.h>") {
+        // C2-DMA: force the generated channel helpers through the enabled
+        // public DMA surface instead of compiling only a disabled-header
+        // configuration.
+        prj_conf.push_str("CONFIG_DMA=y\n");
+    }
     std::fs::write(app.join("prj.conf"), prj_conf).map_err(WestError::Io)?;
     // The DUT overlay, per bus form.
     let overlay = match driver.bus {

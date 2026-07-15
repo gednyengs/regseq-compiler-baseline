@@ -1,0 +1,171 @@
+{
+  "schema": "gap-closure-verification-plan/1",
+  "stage": "C2-DMA",
+  "commands": [
+    {
+      "argv": ["python3", "-c", "import json; p=json.load(open('/home/nyengele/regseq-eval-worktrees/regseq-gap-closure/docs/experiments/os-api-gap-closure/wf/runtime/gates/H12-DCT-P1-GREEN.json')); assert p['schema']=='gap-closure-gate/1' and p['gate_id']=='H12-DCT-P1-GREEN' and p['digest']=='edebf47c82a4560b0ee4e2e48ec7a687da35483b30b7f551ee1b715eb245b4c9' and p['ok'] is True"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dma_locked_fixtures", "locked_dma_positive_frontend_and_generic_c_behavior", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "regseq-backends", "generic_c::tests::referenced_non_foreign_bodyless_function_fails_before_c_emission", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "linux_irq_pl011_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "lifecycle_pl011_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "serial_port_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "serial_reject_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "serial_os_lowering_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "serial_covers"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "regseq-driver", "--test", "bridge_device_lifecycle_recognition"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "zephyr_e1000_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dws_alias_recognition_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dws_reset_smoke_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dws_nosubmit_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dws_reject_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dws_reset_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dws_os_lowering_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dws_covers"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-c", "test -n \"${RSEQ_LINUX_KDIR:-}\" && cargo test -p codegen-coverage-runner --test linux_kbuild_e2e -- --nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-c", "test -n \"${RSEQ_ZEPHYR_WORKSPACE:-}\" && cargo test -p codegen-coverage-runner --test zephyr_build_e2e -- --nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "--workspace"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "regseq-model", "dma_", "--", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dma_locked_fixtures", "locked_dma_negative_frontend_corpus", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dma_locked_fixtures", "dma_two_owned_lifetimes_and_absences_are_recorded", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dma_os_lowering_e2e", "dma_linux_buffer_and_channel_use_native_owned_lifetimes", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dma_os_lowering_e2e", "dma_zephyr_preserves_buffer_absence_and_lowers_channel", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dma_os_lowering_e2e", "dma_forbidden_old_surface_is_absent_from_new_implementation", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-c", "test -n \"${RSEQ_LINUX_KDIR:-}\" && cargo test -p codegen-coverage-runner --test dma_real_headers_e2e dma_linux_locked_output_builds_against_real_headers -- --exact --nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-c", "test -n \"${RSEQ_ZEPHYR_WORKSPACE:-}\" && cargo test -p codegen-coverage-runner --test dma_real_headers_e2e dma_zephyr_locked_channel_builds_against_real_headers -- --exact --nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dma_covers", "locked_dma_stage_accounts_for_all_frozen_dma_gap_rows", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-c", "! grep -rnE 'DmaStreamBuffer|element_access|stage_transfer|dma_mmio_store_order' crates/regseq-model/src/dma.rs crates/regseq-backends/src/linux_c/dma.rs crates/regseq-backends/src/zephyr_c/dma.rs && ! grep -rnE '(^|[^[:alnum:]_])Dma(Region|Channel)([^[:alnum:]_]|$)' crates/regseq-model/src/dma.rs && grep -q 'EXCLUDED_TRAITS.*DmaRegion' crates/regseq-driver/src/bridge/dma.rs"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["python3", "-c", "import json; p=json.load(open('experiments/os-api-gap-closure/provenance/C2-DMA.json')); assert p['schema']=='gap-closure-provenance/1' and p['stage']=='C2-DMA'; assert p['fixture_first_record']['status']=='established-before-historical-matching'; assert {x['asset_id'] for x in p['transplants']}=={'DMA-HIST-CORE','DMA-HIST-GC','DMA-HIST-TESTS','DMA-HEAD-LINUX','DMA-HEAD-LINUX-BUILD','DMA-HEAD-BUILD'}; c=json.load(open('experiments/os-api-gap-closure/coverage/C2-DMA.json')); assert [r['id'] for r in c['rows']]==[f'G-dma-management-{i:02}' for i in range(1,16)]"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["python3", "-c", "import json; p=json.load(open('experiments/os-api-gap-closure/verification/C2-DMA.json')); assert set(p)=={'schema','stage','commands'}; assert p['schema']=='gap-closure-verification-plan/1' and p['stage']=='C2-DMA'; allowed={'cargo','uv','python3','bash','make','cmake','ninja'}; assert p['commands'] and all(set(c)=={'argv','cwd','expected_outputs'} and isinstance(c['argv'],list) and c['argv'] and c['argv'][0] in allowed and isinstance(c['cwd'],str) and isinstance(c['expected_outputs'],list) for c in p['commands'])"],
+      "cwd": ".",
+      "expected_outputs": []
+    }
+  ]
+}

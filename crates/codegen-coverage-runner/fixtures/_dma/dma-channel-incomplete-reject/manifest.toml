@@ -1,0 +1,7 @@
+name = "dma-channel-incomplete-reject"
+kind = "rust"
+covers = []
+expect = "reject"
+[expected]
+stage = "acquire"
+diagnostic = "DMA-ERR-TERMINATE-NEEDS-SYNCHRONIZE"

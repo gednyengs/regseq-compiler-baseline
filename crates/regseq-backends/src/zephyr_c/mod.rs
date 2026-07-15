@@ -27,6 +27,7 @@
 
 mod body;
 mod clock;
+mod dma;
 mod naming;
 mod pinctrl;
 mod serial;
@@ -146,6 +147,19 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
     if drivers.next().is_some() {
         return Err(EmitError::Driver(
             "more than one recognized driver in the model; one Zephyr driver TU per driver".into(),
+        ));
+    }
+    // Locked capability absence: Zephyr exposes caller-buffer alignment but
+    // no owned DMA-buffer allocator. Reject before bus-specific scaffolding so
+    // this semantic absence cannot be masked by an unrelated scaffold error.
+    if model
+        .dma
+        .drivers
+        .get(driver_item)
+        .is_some_and(|dma| dma.buffer.is_some())
+    {
+        return Err(EmitError::Rejected(
+            "DmaBuffer owned allocation is unsupported on Zephyr: the locked headers expose caller-buffer alignment but no owned-buffer allocator".into(),
         ));
     }
 
@@ -533,11 +547,13 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
     }
 
     let serial_binding = serial::emit(&mut cx, *driver_item, &drv)?;
+    let dma_binding = dma::emit(&mut cx, *driver_item, &drv)?;
     for id in &closure {
         let f = body::emit_fn(&mut cx, *id).map_err(|e| with_fn_context(e, model, *id))?;
         bodies.push_str(&f);
         bodies.push('\n');
     }
+    bodies.push_str(&dma_binding);
 
     // -- the ratified OS-absent slot (amendments 4/7; D06/D10): the absent
     //    callback's body runs the COMPLETE body-lowering pipeline — its own

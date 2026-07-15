@@ -20,6 +20,7 @@
 
 mod body;
 mod clock;
+mod dma;
 mod naming;
 mod pinctrl;
 mod serial;
@@ -447,6 +448,7 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     };
 
     let serial_binding = serial::emit(&mut cx, *driver_item, &drv)?;
+    let dma_binding = dma::emit(&mut cx, *driver_item, &drv);
 
     // -- type definitions (D04 bank 2/3), now that every use is known -------
     let type_defs = emit_type_defs(
@@ -544,6 +546,7 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     }
     tu.push_str(&bodies);
     tu.push_str(&serial_binding);
+    tu.push_str(&dma_binding);
     tu.push_str(&scaffold.text);
     tu.push('\n');
     tu.push_str(&tail);
