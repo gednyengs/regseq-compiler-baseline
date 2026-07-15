@@ -167,6 +167,10 @@ pub struct RegseqModel {
     /// Independent owned DMA buffer and asynchronous-channel elements.
     #[serde(default)]
     pub dma: crate::dma::DmaTables,
+
+    /// One full, capability-gated network interface per network-class driver.
+    #[serde(default)]
+    pub network_interface: crate::network::NetworkInterfaceTables,
 }
 
 #[cfg(test)]
@@ -1131,6 +1135,7 @@ impl RegseqModel {
             deferred_work: crate::deferred_work::DeferredWorkTables::default(),
             serial_port: crate::serial::SerialPortTables::default(),
             dma: crate::dma::DmaTables::default(),
+            network_interface: crate::network::NetworkInterfaceTables::default(),
         }
     }
 
@@ -1479,6 +1484,11 @@ impl RegseqModel {
             let new_id = remap[old_id.index()];
             self.dma.drivers.insert(new_id, driver);
         }
+        let old_network = std::mem::take(&mut self.network_interface.drivers);
+        for (old_id, driver) in old_network {
+            let new_id = remap[old_id.index()];
+            self.network_interface.drivers.insert(new_id, driver);
+        }
 
         #[cfg(debug_assertions)]
         for idx in 0..self.items.len().saturating_sub(1) {
@@ -1703,6 +1713,12 @@ impl RegseqModel {
         for (old_id, driver) in old_dma {
             if let Some(new_id) = remap[old_id.index()] {
                 self.dma.drivers.insert(new_id, driver);
+            }
+        }
+        let old_network = std::mem::take(&mut self.network_interface.drivers);
+        for (old_id, driver) in old_network {
+            if let Some(new_id) = remap[old_id.index()] {
+                self.network_interface.drivers.insert(new_id, driver);
             }
         }
         remap

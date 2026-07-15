@@ -81,8 +81,11 @@ impl Regs {
 }
 
 // ---------------------------------------------------------------------------
-// The KEYSTONE driver: a PCI-matched (Intel NIC) device with a bus-managed MMIO
-// region. The L1 `#[rseq::mmio(id = "regs", bar = 0)]` joins to the platform
+// The KEYSTONE driver: a class-neutral PCI device with a bus-managed MMIO
+// region. Its E1000 identity supplies a realistic bus/MMIO example, but this
+// fixture deliberately declares no network-interface surface or device-class
+// tag: BRM validation is independent of NIM. The L1
+// `#[rseq::mmio(id = "regs", bar = 0)]` joins to the platform
 // file's `[mmio.regs]` (base = 0xf000_0000, size = 0x2_0000) → a RESOLVED bus
 // binding. The device-lifecycle preamble therefore emits the construct-#3
 // acquisition (enable_device → claim_regions → get_handle → `map_region`), and
@@ -94,7 +97,6 @@ impl Regs {
 // `bus_type` — the fact that gates the PCI-only acquisition ops (enable_device,
 // set_master). `pci = [{…}]` is the orthogonal device-lifecycle match table (the
 // registration `match=pci:0x8086:0x100e`). A real PCI driver carries both.
-#[rseq::device_class(network)]
 #[rseq::driver(name = "e1000", bus = "pci", pci = [{ vendor = 0x8086, device = 0x100e }])]
 pub struct E1000 {
     #[rseq::mmio(id = "regs", bar = 0)]

@@ -1,0 +1,8 @@
+name = "network-bad-signature-reject"
+kind = "rust"
+covers = ["NIM-NEGATIVE-SIGNATURE"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "NIM-ERR-BAD-SIGNATURE"

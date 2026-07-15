@@ -9,11 +9,11 @@
 
 use super::*;
 use regseq_model::{
-    AutoTrait, CrateId, DefPath, Endian, EnumShape, FieldLayout, FnAbi, FnSig, GenericArgs,
-    Instance, InstanceKind, IntKind, Item, ItemKind, Layout, LayoutKind, Linkage, Mutability,
-    Provenance, Safety, ScalarLayouts, SizeAlign, SourceFileId, Span, StableCrateId, TagEncoding,
-    TagScalar, TargetInfo, Ty, TyId, UintKind, VariantIdx, VariantLayout, VariantRange,
-    WrappingRange,
+    AutoTrait, CrateId, CrateInfo, DefPath, DefPathData, Endian, EnumShape, FieldLayout, FnAbi,
+    FnSig, GenericArgs, Instance, InstanceKind, IntKind, Item, ItemKind, Layout, LayoutKind,
+    Linkage, Mutability, Provenance, Safety, ScalarLayouts, SizeAlign, SourceFileId, Span,
+    StableCrateId, TagEncoding, TagScalar, TargetInfo, Ty, TyId, UintKind, VariantIdx,
+    VariantLayout, VariantRange, WrappingRange,
 };
 
 // ---------------------------------------------------------------------------
@@ -2162,6 +2162,85 @@ fn referenced_non_foreign_bodyless_function_fails_before_c_emission() {
         format!("{err:?}").contains("referenced non-foreign bodyless function"),
         "unexpected bodyless-callee error: {err:?}",
     );
+}
+
+#[test]
+fn exact_bodyless_core_u64_default_is_a_backend_owned_zero_shim() {
+    let mut m = model();
+    let core_name = m.strings.intern("core");
+    let core_crate = m.crates.push(CrateInfo {
+        name: core_name,
+        stable_crate_id: StableCrateId(2),
+    });
+    let default_name = m.strings.intern("default");
+    let rendered = m.strings.intern("core::default::{impl#7}::default");
+    let default_item = m.items.push(Item {
+        def_path: DefPath {
+            crate_id: core_crate,
+            segments: vec![
+                regseq_model::DefPathSegment {
+                    data: DefPathData::TypeNs(default_name),
+                    disambiguator: 0,
+                },
+                regseq_model::DefPathSegment {
+                    data: DefPathData::Impl,
+                    disambiguator: 7,
+                },
+                regseq_model::DefPathSegment {
+                    data: DefPathData::ValueNs(default_name),
+                    disambiguator: 0,
+                },
+            ],
+            rendered,
+        },
+        kind: ItemKind::Function,
+        span: span(),
+        linkage: Linkage::Default,
+        link_section: None,
+        inline_hint: regseq_model::InlineHint::None,
+        is_unsafe: false,
+        is_phantom_data: false,
+        is_unsafe_cell: false,
+        is_manually_drop: false,
+        opaque_handle_eligible: false,
+        is_result: false,
+    });
+    m.item_def_paths.push(regseq_model::DefPathHash {
+        stable_crate_id: StableCrateId(2),
+        local_hash: 1,
+    });
+    let u64_ty = m.types.intern(Ty::Uint(UintKind::U64));
+    let sig = fnsig(&mut m, vec![], u64_ty, FnAbi::Rust, false);
+    let emission_name = m.strings.intern("core_default_impl_7_default");
+    let default_instance = m.instances.push(Instance {
+        item: default_item,
+        generic_args: GenericArgs::new(),
+        emission_name,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body: None,
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+
+    let shim = backend_owned_shim(&m, default_instance)
+        .expect("classify exact core u64 Default::default")
+        .expect("u64 Default::default is backend-owned");
+    assert!(matches!(shim, BackendShim::U64Default));
+    assert_eq!(
+        emit_backend_shim_body(&build_instance_symbols(&m), shim),
+        " {\n    return 0;\n}\n"
+    );
+
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let u32_sig = fnsig(&mut m, vec![], u32_ty, FnAbi::Rust, false);
+    let InstanceKind::Function(data) = &mut m.instances[default_instance].kind else {
+        unreachable!()
+    };
+    data.fn_sig = u32_sig;
+    assert!(backend_owned_shim(&m, default_instance).unwrap().is_none());
 }
 
 /// Push a `Function` monomorphization for an *existing* `item` with explicit

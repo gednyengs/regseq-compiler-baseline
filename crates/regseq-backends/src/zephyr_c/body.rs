@@ -26,9 +26,10 @@ use std::collections::BTreeMap;
 
 use regseq_model::{
     AggregateKind, AtomicElement, AtomicOp, AttrData, BinOp, CallCallee, CastKind, ClockBinding,
-    ClockMode, ClockOp, Const, EnumShape, FetchOp, FieldIdx, FieldPath, InstanceId, InstanceKind,
-    IntrinsicKind, ItemId, LayoutKind, LocalId, Operand, Place, PlaceElem, RegseqModel, Rvalue,
-    StatementKind, TerminatorKind, Ty, TyId, UnOp, VariantIdx,
+    ClockMode, ClockOp, Const, DefPathData, EnumShape, FetchOp, FieldIdx, FieldPath, FnAbi,
+    FunctionInstanceFlavor, InstanceId, InstanceKind, IntrinsicKind, ItemId, ItemKind, LayoutKind,
+    Linkage, LocalId, Operand, Place, PlaceElem, RegseqModel, Rvalue, Safety, StatementKind,
+    TerminatorKind, Ty, TyId, UintKind, UnOp, VariantIdx,
 };
 
 use super::types::{self, TypeNames};
@@ -80,6 +81,76 @@ impl<'m> LowerCx<'m> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum BackendShim {
+    U64Default,
+}
+
+fn named_segment(
+    model: &RegseqModel,
+    segment: &regseq_model::DefPathSegment,
+    expected: &str,
+    value_namespace: bool,
+) -> bool {
+    if segment.disambiguator != 0 {
+        return false;
+    }
+    match &segment.data {
+        DefPathData::ValueNs(name) if value_namespace => {
+            model.strings.resolve(*name) == expected
+        }
+        DefPathData::TypeNs(name) if !value_namespace => {
+            model.strings.resolve(*name) == expected
+        }
+        _ => false,
+    }
+}
+
+fn exact_core_item(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
+    let path = &model.items[item].def_path;
+    if path.crate_id == model.primary_crate || path.crate_id.index() >= model.crates.len() {
+        return false;
+    }
+    let crate_info = &model.crates[path.crate_id];
+    model.strings.resolve(crate_info.name) == "core"
+        && crate_info.stable_crate_id == model.item_def_paths[item].stable_crate_id
+        && crate_info.stable_crate_id.0 != 0
+}
+
+fn u64_default_path(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
+    let segments = &model.items[item].def_path.segments;
+    matches!(segments.as_slice(), [module, .., impl_scope, method]
+        if named_segment(model, module, "default", false)
+            && matches!(&impl_scope.data, DefPathData::Impl)
+            && named_segment(model, method, "default", true))
+}
+
+fn backend_owned_shim(model: &RegseqModel, id: InstanceId) -> Option<BackendShim> {
+    let instance = &model.instances[id];
+    let Some(data) = instance.kind.as_function() else {
+        return None;
+    };
+    if data.body.is_some()
+        || data.flavor != FunctionInstanceFlavor::Item
+        || model.items[instance.item].kind != ItemKind::Function
+        || model.items[instance.item].linkage != Linkage::Default
+        || !exact_core_item(model, instance.item)
+    {
+        return None;
+    }
+    let sig = model.sigs.resolve(data.fn_sig);
+    if u64_default_path(model, instance.item)
+        && sig.inputs.is_empty()
+        && matches!(&model.types[sig.output], Ty::Uint(UintKind::U64))
+        && sig.abi == FnAbi::Rust
+        && !sig.c_variadic
+        && sig.safety == Safety::Safe
+    {
+        return Some(BackendShim::U64Default);
+    }
+    None
+}
+
 /// The driver facts the mmio lowering needs, supplied by the TU fold.
 pub(crate) struct DriverFacts {
     /// The driver struct type (the lowered `self` pointee).
@@ -112,14 +183,18 @@ pub(crate) fn fn_head(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
             cx.model.strings.resolve(inst.emission_name)
         )));
     };
+    let sig = cx.model.sigs.resolve(data.fn_sig);
+    let c_name = cx.fn_symbols[&instance].clone();
     let Some(body) = &data.body else {
+        if backend_owned_shim(cx.model, instance).is_some() {
+            let ret = types::c_type(cx.model, &mut cx.names, sig.output)?;
+            return Ok(format!("static {ret} {c_name}(void)"));
+        }
         return Err(EmitError::Unsupported(format!(
             "foreign (bodyless) function `{}`",
             cx.model.strings.resolve(inst.emission_name)
         )));
     };
-    let sig = cx.model.sigs.resolve(data.fn_sig);
-    let c_name = cx.fn_symbols[&instance].clone();
 
     // Signature: ZST returns lower to void; ZST params are dropped.
     let ret = if types::is_zst(cx.model, sig.output) {
@@ -213,6 +288,9 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
     let InstanceKind::Function(data) = &inst.kind else {
         unreachable!("fn_head certified the function shape");
     };
+    if let Some(BackendShim::U64Default) = backend_owned_shim(cx.model, instance) {
+        return Ok(format!("{head}\n{{\n\treturn 0;\n}}\n"));
+    }
     let body = data.body.as_ref().expect("fn_head certified a body");
     let sig = cx.model.sigs.resolve(data.fn_sig);
 

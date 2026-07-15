@@ -210,6 +210,7 @@ pub fn bridge_error_variant(err: &BridgeError) -> &'static str {
         BridgeError::SerialValidation(_) => "SerialValidation",
         BridgeError::DmaValidation(_) => "DmaValidation",
         BridgeError::TransportValidation(_) => "TransportValidation",
+        BridgeError::NetworkValidation(_) => "NetworkValidation",
     }
 }
 

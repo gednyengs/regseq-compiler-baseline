@@ -34,6 +34,7 @@ mod item;
 mod layout;
 mod layout_validator;
 mod model;
+mod network;
 pub mod operand;
 mod place;
 mod place_validator;
@@ -117,6 +118,9 @@ pub use layout::{
     VariantRange, WrappingRange, UNIT_LAYOUT,
 };
 pub use model::{invariant_descriptor, InvariantId, InvariantViolation, RegseqModel};
+pub use network::{
+    DriverNetworkInterface, NetworkInterfaceOps, NetworkInterfaceTables,
+};
 pub use operand::{LiteralValue, Operand};
 pub use place::{Place, PlaceElem};
 pub use place_validator::{

@@ -1,0 +1,8 @@
+name = "network-open-stop-reject"
+kind = "rust"
+covers = ["NIM-NEGATIVE-OLD-SURFACE"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "NIM-ERR-EXCLUDED-SURFACE"

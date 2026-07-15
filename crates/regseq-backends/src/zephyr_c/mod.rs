@@ -29,6 +29,7 @@ mod body;
 mod clock;
 mod dma;
 mod naming;
+mod network;
 mod pinctrl;
 mod serial;
 mod sync;
@@ -149,6 +150,16 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
             "more than one recognized driver in the model; one Zephyr driver TU per driver".into(),
         ));
     }
+    if model
+        .network_interface
+        .drivers
+        .get(driver_item)
+        .is_some_and(|interface| interface.ops.set_published.is_some())
+    {
+        return Err(EmitError::Rejected(
+            "network-interface runtime publication is unsupported on Zephyr: net_if instances are link-time-created; no successful set_published lowering is synthesized".into(),
+        ));
+    }
     // Locked capability absence: Zephyr exposes caller-buffer alignment but
     // no owned DMA-buffer allocator. Reject before bus-specific scaffolding so
     // this semantic absence cannot be masked by an unrelated scaffold error.
@@ -183,6 +194,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
     // until their own locked stage lands.
     let deferred_class: Option<String> = match &driver.descriptor.device_class {
         ClassTag::Generic | ClassTag::Serial => None,
+        ClassTag::Network if model.network_interface.drivers.contains_key(driver_item) => None,
         ClassTag::Network => Some("network".into()),
         ClassTag::Other(s) => Some(model.strings.resolve(*s).to_string()),
     };
@@ -405,6 +417,8 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
     }
     let serial_roots = serial::roots(model, *driver_item)?;
     roots.extend(serial_roots.iter().copied());
+    let network_roots = network::roots(model, *driver_item)?;
+    roots.extend(network_roots.iter().copied());
     let work_handlers: Vec<InstanceId> = model
         .deferred_work
         .drivers
@@ -548,12 +562,14 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
 
     let serial_binding = serial::emit(&mut cx, *driver_item, &drv)?;
     let dma_binding = dma::emit(&mut cx, *driver_item, &drv)?;
+    let network_binding = network::emit(&mut cx, *driver_item, &drv)?;
     for id in &closure {
         let f = body::emit_fn(&mut cx, *id).map_err(|e| with_fn_context(e, model, *id))?;
         bodies.push_str(&f);
         bodies.push('\n');
     }
     bodies.push_str(&dma_binding);
+    bodies.push_str(&network_binding);
 
     // -- the ratified OS-absent slot (amendments 4/7; D06/D10): the absent
     //    callback's body runs the COMPLETE body-lowering pipeline — its own

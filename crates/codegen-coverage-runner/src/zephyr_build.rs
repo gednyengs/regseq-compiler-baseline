@@ -238,6 +238,16 @@ pub fn west_build_with_workspace(
         // configuration.
         prj_conf.push_str("CONFIG_DMA=y\n");
     }
+    if driver.tu.contains("<zephyr/net/net_if.h>") {
+        // C4-NIM: compile the link-time net_if/admin/packet/property helpers
+        // against the enabled public networking surface. The qemu_cortex_a53
+        // gate has no entropy provider, while Zephyr net_if IPv6 reachability
+        // timing links sys_rand_get; use Zephyr's test-only timer RNG here.
+        prj_conf.push_str(
+            "CONFIG_NETWORKING=y\nCONFIG_NET_L2_DUMMY=y\n\
+             CONFIG_TEST_RANDOM_GENERATOR=y\nCONFIG_TIMER_RANDOM_GENERATOR=y\n",
+        );
+    }
     if driver.tu.contains("<zephyr/drivers/mbox.h>") {
         // C3-DCT: compile and link the immediate mailbox admission API used by
         // the generated submit operation.

@@ -1,0 +1,96 @@
+{
+  "schema": "gap-closure-verification-plan/1",
+  "stage": "C4-NIM",
+  "commands": [
+    {
+      "argv": ["python3", "-c", "import json; p=json.load(open('/home/nyengele/regseq-eval-worktrees/regseq-gap-closure/docs/experiments/os-api-gap-closure/wf/runtime/gates/H12-DCT-P1-GREEN.json')); assert p['schema']=='gap-closure-gate/1' and p['gate_id']=='H12-DCT-P1-GREEN' and p['digest']=='edebf47c82a4560b0ee4e2e48ec7a687da35483b30b7f551ee1b715eb245b4c9' and p['ok'] is True"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "manifest", "discover_lints_committed_reject_fixtures", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "--workspace"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dma_locked_fixtures", "locked_dma_positive_frontend_and_generic_c_behavior", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "bus_bind_reject_e2e", "--", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "regseq-model", "network::tests::network_full_surface_roundtrip_preserves_absences", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "regseq-backends", "generic_c::tests::exact_bodyless_core_u64_default_is_a_backend_owned_zero_shim", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "network_locked_fixtures", "locked_network_positive_frontend_has_full_surface_and_composed_owners", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "network_locked_fixtures", "locked_network_generic_c_executes_packet_and_composed_dma_dct_behavior", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "network_locked_fixtures", "locked_network_negative_frontend_corpus_is_exact", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "network_locked_fixtures", "network_capability_absence_is_data_not_success", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "network_os_lowering_e2e", "--", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-c", "test -n \"${RSEQ_LINUX_KDIR:-}\" && cargo test -p codegen-coverage-runner --test network_real_headers_e2e network_linux_full_surface_builds_against_real_headers -- --exact --nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-c", "test -n \"${RSEQ_ZEPHYR_WORKSPACE:-}\" && cargo test -p codegen-coverage-runner --test network_real_headers_e2e network_zephyr_full_surface_builds_against_real_headers -- --exact --nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "network_covers", "locked_network_stage_accounts_for_all_frozen_gap_rows", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-c", "! grep -nE 'DescriptorRing|ProducerIndex|ConsumerIndex|PollBudget|Napi|DmaMapping|IrqBinding|WorkQueue' crates/regseq-model/src/network.rs"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["python3", "-c", "import json; p=json.load(open('experiments/os-api-gap-closure/provenance/C4-NIM.json')); assert p['schema']=='gap-closure-provenance/1' and p['stage']=='C4-NIM' and p['fixture_first_record']['status']=='established-before-historical-matching'; t={x['asset_id']:x for x in p['transplants']}; assert set(t)=={'NIM-CORE','NIM-LINUX'} and all(t[x]['source_object']=='25425d0b08e017320e9e1290ceeee6db45d8de76' for x in t); o={x['asset_id']:x for x in p['oracle_only']}; assert set(o)=={'NIM-FIXTURE-TEST','NIM-STREAMING'} and o['NIM-FIXTURE-TEST']['source_object']=='25425d0b08e017320e9e1290ceeee6db45d8de76' and o['NIM-STREAMING']['source_object']=='5bc027391db7087ff818d9238165bb0c5babddc3'; assert p['rejected_assets']==[dict(asset_id='NIM-CORESIDENCY',source_object='c2e7199ebf94b6a17f4fbc6c20c09244202f7d72',source_path='historical co-residency/wholesale branch state',disposition='Rejected: no merge, cherry-pick, whole-file restore, historical coverage claim, or unrelated serial/DMA edit.')]; c=json.load(open('experiments/os-api-gap-closure/coverage/C4-NIM.json')); assert [r['id'] for r in c['rows']]==[f'G-network-interface-management-{i:02}' for i in range(1,21)]"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["python3", "-c", "import json; p=json.load(open('experiments/os-api-gap-closure/verification/C4-NIM.json')); assert set(p)=={'schema','stage','commands'}; assert p['schema']=='gap-closure-verification-plan/1' and p['stage']=='C4-NIM'; allowed={'cargo','uv','python3','bash','make','cmake','ninja'}; assert p['commands'] and all(set(c)=={'argv','cwd','expected_outputs'} and isinstance(c['argv'],list) and c['argv'] and c['argv'][0] in allowed and isinstance(c['cwd'],str) and isinstance(c['expected_outputs'],list) for c in p['commands'])"],
+      "cwd": ".",
+      "expected_outputs": []
+    }
+  ]
+}

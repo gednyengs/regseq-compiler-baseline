@@ -29,7 +29,7 @@ use std::collections::{HashMap, HashSet};
 use regseq_model::{
     CAbiLowering, CAbiShape, DefPathData, FnAbi, FnSig, FnSigId, FunctionInstanceFlavor,
     GenericArg, InlineHint, InstanceId, InstanceKind, InstanceRef, ItemKind, Linkage, Mutability,
-    PlatformIdentity, Provenance, RegseqModel, Safety, Ty, TyId,
+    PlatformIdentity, Provenance, RegseqModel, Safety, Ty, TyId, UintKind,
 };
 
 pub mod prelude;
@@ -371,6 +371,26 @@ fn emit_generic_c_inner(
             out.push_str(" * absent channel operations are unsupported; no status or completion is fabricated\n");
         }
         out.push_str(" */\n");
+    }
+    // Locked network-interface manifest. Packet values stay opaque and the
+    // sibling table intentionally contains no descriptor/index/DMA/IRQ/work
+    // state. Missing optional operations remain unsupported.
+    for (driver, interface) in &model.network_interface.drivers {
+        let logical_name = model
+            .device_lifecycle
+            .drivers
+            .get(driver)
+            .map(|d| model.strings.resolve(d.descriptor.name))
+            .unwrap_or("network");
+        out.push_str(&format!("/* RSEQ-NETWORK-INTERFACE {logical_name}\n"));
+        for capability in interface.ops.capabilities() {
+            out.push_str(&format!(" * RSEQ-NIM-CAPABILITY {capability}\n"));
+        }
+        out.push_str(" * packet ownership transfers only on Accepted; BusyOrQueueFull retains caller ownership\n");
+        out.push_str(" * admin intent, carrier, and derived operational readiness are distinct\n");
+        out.push_str(" * RSEQ-NIM-BOUNDARY packet-layout/rings/indices/DMA/IRQ/work-remain-L2\n");
+        out.push_str(" * RSEQ-NIM-ABSENCE no-fabricated-packet-completion\n");
+        out.push_str(" * absent publication/receive/observer capabilities remain unsupported; no event is fabricated\n */\n");
     }
     // Device-interrupt host line model (construct #6, C05) + synchronization
     // lock-discipline oracle (synchronization construct, S11), each emitted only
@@ -1675,6 +1695,7 @@ fn is_zst(model: &RegseqModel, ty: TyId) -> bool {
 #[derive(Clone, Copy)]
 enum BackendShim {
     NullMut,
+    U64Default,
     PartialEqNe { eq: InstanceId },
 }
 
@@ -1734,6 +1755,14 @@ fn partial_eq_ne_path(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
             && named_segment(model, method, "ne", true))
 }
 
+fn u64_default_path(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
+    let segments = &model.items[item].def_path.segments;
+    matches!(segments.as_slice(), [module, .., impl_scope, method]
+        if named_segment(model, module, "default", false)
+            && matches!(&impl_scope.data, DefPathData::Impl)
+            && named_segment(model, method, "default", true))
+}
+
 fn concrete_eq_path(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
     let segments = &model.items[item].def_path.segments;
     matches!(segments.as_slice(), [.., impl_scope, method]
@@ -1768,9 +1797,19 @@ fn valid_partial_eq_ne_signature(model: &RegseqModel, sig: &FnSig) -> bool {
         && sig.safety == Safety::Safe
 }
 
-/// Classify the exact bodyless core shims Generic C owns. `PartialEq::ne`
-/// resolves its implementation to one unique bodyful concrete `eq` with the
-/// identical interned monomorphized signature; ambiguity is an emission error.
+fn valid_u64_default_signature(model: &RegseqModel, sig: &FnSig) -> bool {
+    sig.inputs.is_empty()
+        && matches!(&model.types[sig.output], Ty::Uint(UintKind::U64))
+        && sig.abi == FnAbi::Rust
+        && !sig.c_variadic
+        && sig.safety == Safety::Safe
+}
+
+/// Classify the exact bodyless core shims Generic C owns. The scalar default
+/// case is restricted to the upstream `u64` implementation used by derived
+/// counter defaults. `PartialEq::ne` resolves its implementation to one unique
+/// bodyful concrete `eq` with the identical interned monomorphized signature;
+/// ambiguity is an emission error.
 fn backend_owned_shim(
     model: &RegseqModel,
     id: InstanceId,
@@ -1790,6 +1829,9 @@ fn backend_owned_shim(
     let sig = model.sigs.resolve(data.fn_sig);
     if null_mut_path(model, instance.item) && valid_null_mut_signature(model, instance, sig) {
         return Ok(Some(BackendShim::NullMut));
+    }
+    if u64_default_path(model, instance.item) && valid_u64_default_signature(model, sig) {
+        return Ok(Some(BackendShim::U64Default));
     }
     if !partial_eq_ne_path(model, instance.item) || !valid_partial_eq_ne_signature(model, sig) {
         return Ok(None);
@@ -1828,7 +1870,8 @@ fn validate_referenced_bodyless_functions(
 ) -> Result<HashSet<InstanceId>, EmitError> {
     let mut referenced = HashSet::new();
     let mut backend_shim_dependencies = HashSet::new();
-    for instance in model.instances.iter() {
+    for (index, instance) in model.instances.iter().enumerate() {
+        let caller = InstanceId::from_u32(index as u32);
         let Some(body) = instance.kind.as_function().and_then(|data| data.body()) else {
             continue;
         };
@@ -1839,6 +1882,9 @@ fn validate_referenced_bodyless_functions(
             } = &block.terminator.kind
             {
                 referenced.insert(*callee);
+                if backend_owned_shim(model, *callee)?.is_some() {
+                    backend_shim_dependencies.insert(caller);
+                }
             }
         }
     }
@@ -1856,10 +1902,9 @@ fn validate_referenced_bodyless_functions(
         }
         if let Some(shim) = backend_owned_shim(model, id)? {
             if let BackendShim::PartialEqNe { eq } = shim {
-                // The shim is TU-local, so its concrete dependency must be too:
-                // a plain C11 `inline` definition can otherwise leave an
-                // unresolved external reference when the compiler does not
-                // inline this call.
+                // Backend-shim participants are TU-local: a plain C11 `inline`
+                // definition can otherwise leave an unresolved external reference
+                // when the compiler does not inline this call.
                 backend_shim_dependencies.insert(eq);
             }
             continue;
@@ -1874,6 +1919,7 @@ fn validate_referenced_bodyless_functions(
 fn emit_backend_shim_body(syms: &InstanceSymbols, shim: BackendShim) -> String {
     match shim {
         BackendShim::NullMut => " {\n    return 0;\n}\n".to_string(),
+        BackendShim::U64Default => " {\n    return 0;\n}\n".to_string(),
         BackendShim::PartialEqNe { eq } => {
             format!(" {{\n    return !{}(lhs, rhs);\n}}\n", syms.symbol(eq))
         }

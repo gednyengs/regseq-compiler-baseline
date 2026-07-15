@@ -1,0 +1,8 @@
+name = "network-incomplete-reject"
+kind = "rust"
+covers = ["NIM-NEGATIVE-INCOMPLETE"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "NIM-ERR-INCOMPLETE-INTERFACE"

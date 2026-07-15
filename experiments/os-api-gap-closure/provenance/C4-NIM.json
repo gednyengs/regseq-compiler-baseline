@@ -1,0 +1,70 @@
+{
+  "schema": "gap-closure-provenance/1",
+  "stage": "C4-NIM",
+  "authority": "addendum/network-interface-management.md, convergence/network-interface-management-DIFF.*, reuse/TRANSPLANT-PLAN.md",
+  "fixture_first_record": {
+    "status": "established-before-historical-matching",
+    "fixtures": [
+      "crates/codegen-coverage-runner/fixtures/_network/network-full",
+      "crates/codegen-coverage-runner/fixtures/_network/network-open-stop-reject",
+      "crates/codegen-coverage-runner/fixtures/_network/network-incomplete-reject",
+      "crates/codegen-coverage-runner/fixtures/_network/network-bad-signature-reject"
+    ],
+    "behavior": "The locked full-surface fixture and both rejection inputs were authored before opening the staged historical NIM fixture. It composes public DMA buffer and DCT admission IR with interrupt-owned dispatch and deferred-work-owned packet service."
+  },
+  "source_snapshots": [
+    {
+      "commit": "5bc027391db7087ff818d9238165bb0c5babddc3",
+      "root": "/home/nyengele/regseq-eval-worktrees/regseq-gap-closure/docs/experiments/os-api-gap-closure/convergence/branch-snapshots/5bc027391db7087ff818d9238165bb0c5babddc3",
+      "sha256": "4ca891202b53adb2da78ff27357973c6383a82d5a245b95bf89ed487cca86746"
+    }
+  ],
+  "transplants": [
+    {
+      "asset_id": "NIM-CORE",
+      "source_object": "25425d0b08e017320e9e1290ceeee6db45d8de76",
+      "source_path": "crates/regseq-model/src/network.rs; crates/regseq-driver/src/bridge/network.rs; crates/regseq-{model,driver}/src/{lib.rs,model.rs,model_tests.rs,bridge/mod.rs}#network hunks",
+      "source_scope": "Driver-keyed table, ordered serialization, and trait-override recognition idioms only; no old two-operation schema or diagnostic was copied.",
+      "destination": "crates/regseq-model/src/network.rs; crates/regseq-model/src/{lib.rs,model.rs,model_tests.rs}; crates/regseq-driver/src/bridge/{network.rs,mod.rs}",
+      "old_semantics": "The historical model recognized only Network::open and Network::stop and had no packet, carrier, property, counter, publication, or observer plane.",
+      "new_semantics": "One driver-keyed NetworkInterface element records the full frozen admin, opaque packet, state, property, counter, and optional observer operation set as InstanceRefs.",
+      "behavior_delta": "Drivers engaged by implementing NetworkInterface must override the required locked core; a network class tag alone does not engage NIM admission, while the old open/stop trait and incomplete engaged implementations reject. Optional operations remain None instead of succeeding implicitly. Whole-driver completeness is deferred to the C50/E3 composition gate, where the rich E1000 model must contain its network_interface entry with every required operation resolved and each optional capability implemented or explicitly absent.",
+      "reuse_mode": "adapted structural idioms; locked model and recognizer re-authored",
+      "tests": ["network_locked_fixtures", "dma_locked_fixtures::locked_dma_positive_frontend_and_generic_c_behavior", "regseq-model::network_full_surface_roundtrip_preserves_absences"]
+    },
+    {
+      "asset_id": "NIM-LINUX",
+      "source_object": "25425d0b08e017320e9e1290ceeee6db45d8de76",
+      "source_path": "crates/regseq-backends/src/linux_c/network.rs; crates/regseq-backends/src/linux_c/mod.rs#network hunk",
+      "source_scope": "PCI net_device allocation/registration, netdev_ops, ISR-wrapper, and private-container idioms; the historical open/stop-only scope and shared-line-only policy were excluded.",
+      "destination": "crates/regseq-backends/src/linux_c/{network.rs,mod.rs}",
+      "old_semantics": "Linux emitted netdev publication and open/stop only; ndo_start_xmit, RX, carrier, counters, MTU/MAC/filter hooks, packet ownership, DMA mapping, descriptors, and indices were explicitly out of scope.",
+      "new_semantics": "Linux emits the complete frozen NIM binding plus backend-private descriptor/index/DMA packet ownership state while existing IRQ and deferred-work tables retain dispatch and drain ownership.",
+      "behavior_delta": "Busy retains the skb, accepted packets are mapped and reclaimed, initialization precedes registration, and orderly removal drains work then masks/frees IRQ before unregistering and freeing packet state; no terminal packet event is invented.",
+      "reuse_mode": "adapted native Linux scaffold idioms; full binding and lifecycle composition re-authored",
+      "tests": ["network_os_lowering_e2e::network_linux_lowers_packet_descriptor_index_and_lifecycle_ownership", "network_real_headers_e2e::network_linux_full_surface_builds_against_real_headers"]
+    }
+  ],
+  "oracle_only": [
+    {
+      "asset_id": "NIM-FIXTURE-TEST",
+      "source_object": "25425d0b08e017320e9e1290ceeee6db45d8de76",
+      "source_path": "crates/codegen-coverage-runner/fixtures/_network/net-e1000/**; crates/codegen-coverage-runner/tests/linux_network_net_e1000_e2e.rs",
+      "disposition": "Opened only after the locked fixtures and tests existed; the historical input, golden, conformance file, and test structure were not copied and serve only as the open/stop comparison oracle."
+    },
+    {
+      "asset_id": "NIM-STREAMING",
+      "source_object": "5bc027391db7087ff818d9238165bb0c5babddc3",
+      "source_path": "crates/codegen-coverage-runner/fixtures/_dma/dma_streaming",
+      "disposition": "Not transplanted; packet mapping and descriptor state are backend-private, and the public frozen DMA buffer plus DCT admission tables are consumed unchanged."
+    }
+  ],
+  "rejected_assets": [
+    {
+      "asset_id": "NIM-CORESIDENCY",
+      "source_object": "c2e7199ebf94b6a17f4fbc6c20c09244202f7d72",
+      "source_path": "historical co-residency/wholesale branch state",
+      "disposition": "Rejected: no merge, cherry-pick, whole-file restore, historical coverage claim, or unrelated serial/DMA edit."
+    }
+  ]
+}

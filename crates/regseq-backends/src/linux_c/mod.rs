@@ -22,6 +22,7 @@ mod body;
 mod clock;
 mod dma;
 mod naming;
+mod network;
 mod pinctrl;
 mod serial;
 mod sync;
@@ -189,6 +190,12 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             unit: "the Linux serial-framework-binding for the selected bus",
         });
     }
+    if model.network_interface.drivers.contains_key(driver_item) && bus != ScaffoldBus::Pci {
+        return Err(EmitError::UnsupportedInUnit {
+            what: "a non-PCI locked network-interface binding".into(),
+            unit: "the Linux network binding for the selected bus",
+        });
+    }
     if driver.descriptor.match_set.is_empty() {
         return Err(EmitError::Driver(
             "driver has an empty match set; a kernel id table needs at least one entry".into(),
@@ -297,6 +304,7 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         uses_delay_sleep: false,
         uses_command_transport: false,
         elided_locals: std::collections::BTreeSet::new(),
+        unused_fn_instances: std::collections::BTreeSet::new(),
     };
 
     // -- synchronization (locks, T07/C02): the lock FIELDS substitute their
@@ -358,6 +366,10 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     }
     let serial_roots = serial::roots(model, *driver_item)?;
     roots.extend(serial_roots.iter().copied());
+    let network_roots = network::roots(model, *driver_item)?;
+    cx.unused_fn_instances
+        .extend(network_roots.iter().map(|(_, id)| *id));
+    roots.extend(network_roots.iter().copied());
     let work_handlers: Vec<InstanceId> = model
         .deferred_work
         .drivers
@@ -444,12 +456,21 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             irq.as_ref(),
         )?,
         ScaffoldBus::Pci => {
-            emit_scaffold_pci(&mut cx, &drv, driver_ty, &resource_names, &roots, driver)?
+            emit_scaffold_pci(
+                &mut cx,
+                &drv,
+                driver_ty,
+                &resource_names,
+                &roots,
+                driver,
+                irq.as_ref(),
+            )?
         }
     };
 
     let serial_binding = serial::emit(&mut cx, *driver_item, &drv)?;
     let dma_binding = dma::emit(&mut cx, *driver_item, &drv);
+    let network_binding = network::emit(&mut cx, *driver_item, &drv);
 
     // -- type definitions (D04 bank 2/3), now that every use is known -------
     let type_defs = emit_type_defs(
@@ -553,6 +574,7 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     tu.push_str(&bodies);
     tu.push_str(&serial_binding);
     tu.push_str(&dma_binding);
+    tu.push_str(&network_binding);
     tu.push_str(&scaffold.text);
     tu.push('\n');
     tu.push_str(&tail);
@@ -722,19 +744,13 @@ fn linux_irq_facts(
     model: &RegseqModel,
     driver_item: &regseq_model::ItemId,
     drv: &str,
-    bus: ScaffoldBus,
+    _bus: ScaffoldBus,
 ) -> Result<Option<LinuxIrq>, EmitError> {
     let Some(interrupts) = model.interrupt.drivers.get(driver_item) else {
         return Ok(None);
     };
     if interrupts.resources.is_empty() {
         return Ok(None);
-    }
-    if bus == ScaffoldBus::Pci {
-        return Err(EmitError::UnsupportedInUnit {
-            what: "the PCI interrupt scaffold (`pdev->irq` line identity)".to_string(),
-            unit: "the unit that lands an e1000 irq fixture",
-        });
     }
     if interrupts.resources.len() > 1 {
         return Err(EmitError::Unsupported(
@@ -1166,8 +1182,13 @@ fn emit_scaffold_pci(
     resource_names: &[String],
     roots: &[(&'static str, InstanceId)],
     driver: &regseq_model::DriverLifecycle,
+    irq: Option<&LinuxIrq>,
 ) -> Result<Scaffold, EmitError> {
     let model = cx.model;
+    let driver_item = match &model.types[driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => return Err(EmitError::Driver("driver type is not a struct".into())),
+    };
     let driver_struct = cx.names.name_of(model, driver_ty)?;
     let dev_name = model.strings.resolve(driver.descriptor.name).to_string();
     let find = |name: &str| roots.iter().find(|(n, _)| *n == name).map(|(_, id)| *id);
@@ -1188,10 +1209,29 @@ fn emit_scaffold_pci(
     // premise: the scaffold is the sole driver instantiation site, so every
     // `&<drv>` points at `inner` and `container_of` recovery is well-defined.
     let container = format!(
-        "/* per-device private container: kernel back-pointer + the spec driver */\nstruct {drv}_priv {{\n\tstruct pci_dev *pdev;\n\tstruct {driver_struct} inner;\n{}}};\n\n",
-        work.fields
+        "/* per-device private container: kernel back-pointer + the spec driver */\nstruct {drv}_priv {{\n\tstruct pci_dev *pdev;\n\tstruct {driver_struct} inner;\n{}{}{}}};\n\n",
+        network::container_fields(model, driver_item, drv),
+        serial::container_field(model, driver_item),
+        work.fields,
     );
     out.push_str(&work.wrappers);
+
+    if let Some(irq) = irq {
+        cx.extra_includes.insert("<linux/interrupt.h>");
+        let wrapper = irq.wrapper_sym(drv);
+        let handler_sym = cx.fn_symbols[&irq.handler].clone();
+        let ret_c = types::c_type(cx.model, &mut cx.names, irq.ret_ty)?;
+        let tag_read = match irq.tag_size {
+            1 => format!("\tu8 __tag = __r._raw[{}];\n", irq.tag_offset),
+            2 => format!("\tu16 __tag; memcpy(&__tag, &__r._raw[{}], 2);\n", irq.tag_offset),
+            4 => format!("\tu32 __tag; memcpy(&__tag, &__r._raw[{}], 4);\n", irq.tag_offset),
+            _ => format!("\tu64 __tag; memcpy(&__tag, &__r._raw[{}], 8);\n", irq.tag_offset),
+        };
+        out.push_str(&format!(
+            "/* PCI ISR claim remains interrupt-owned; packet completion stays NIM-native. */\nstatic irqreturn_t {wrapper}(int irq, void *dev_id)\n{{\n\tstruct {drv}_priv *priv = dev_id;\n\t{ret_c} __r = {handler_sym}(&priv->inner);\n{tag_read}\n\tif (__tag == {:#x})\n\t\treturn IRQ_HANDLED;\n\treturn IRQ_NONE;\n}}\n\n",
+            irq.handled_tag
+        ));
+    }
 
     // The single resolved region's BAR (D02: per-region-shaped via
     // effective_bar; >1 region is the loud B-5 gate).
@@ -1234,7 +1274,8 @@ fn emit_scaffold_pci(
     out.push_str(&format!(
         "static int {drv}_probe(struct pci_dev *pdev, const struct pci_device_id *id)\n{{\n\tstruct {drv}_priv *priv;\n"
     ));
-    if preamble.is_some() {
+    let has_network = model.network_interface.drivers.contains_key(&driver_item);
+    if preamble.is_some() || has_network {
         out.push_str("\tint ret;\n");
     }
     out.push('\n');
@@ -1264,6 +1305,11 @@ fn emit_scaffold_pci(
                 "\n\t/* preamble: managed enable + fused request+map of BAR{bar} (T03 pin\n\t * C-7: pcim_iomap_region; devres unwinds the map, the region, then\n\t * the enable on detach and on probe failure — A-2) */\n\tret = pcim_enable_device(pdev);\n\tif (ret)\n\t\treturn ret;\n\tpriv->inner.{fname} = pcim_iomap_region(pdev, {bar}, \"{dev_name}\");\n\tif (IS_ERR(priv->inner.{fname}))\n\t\treturn PTR_ERR(priv->inner.{fname});\n"
             ));
         }
+        None if has_network => {
+            out.push_str(
+                "\n\t/* NIM packet/DMA preamble: enable the PCI function before transfer state. */\n\tret = pcim_enable_device(pdev);\n\tif (ret)\n\t\treturn ret;\n",
+            );
+        }
         None if resource_names.is_empty() => {
             out.push_str("\n\t/* preamble: no bus-managed regions in this model */\n");
         }
@@ -1275,6 +1321,11 @@ fn emit_scaffold_pci(
                 "\n\t/* preamble: region binding unresolved (no L2 literals) — not mapped */\n",
             );
         }
+    }
+    if has_network {
+        out.push_str(
+            "\tpci_set_master(pdev);\n\tret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));\n\tif (ret)\n\t\treturn ret;\n",
+        );
     }
     // Pin-controller-and-GPIO-configuration acquire preamble (pinctrl construct,
     // C07/D10, M4/T20): AFTER the region map, BEFORE the clock acquire —
@@ -1292,6 +1343,19 @@ fn emit_scaffold_pci(
     // of whether on_init is authored (the fields live in the private struct, so
     // a non-zero initial must be applied even with no on_init).
     out.push_str(&emit_atomic_init(cx));
+    out.push_str(&network::probe_prepare(model, driver_item, drv));
+    if let Some(irq) = irq {
+        let failure = format!(
+            "{}{}",
+            work.cancel,
+            network::probe_failure(model, driver_item, drv),
+        )
+        .replace('\t', "\t\t\t");
+        out.push_str(&format!(
+            "\n\t/* PCI interrupt: register disabled after native packet state exists. */\n\t{{\n\t\tint __irq_ret = request_irq(pdev->irq, {}, {}, \"{}\", priv);\n\t\tif (__irq_ret) {{\n{}\t\t\treturn __irq_ret;\n\t\t}}\n\t}}\n",
+            irq.wrapper_sym(drv), irq.flags(), c_ident(&irq.dev_name), failure,
+        ));
+    }
     if let Some(id) = on_init {
         let sym = cx.fn_symbols[&id].clone();
         let mut hook = on_init_failure.map(|fid| {
@@ -1301,6 +1365,10 @@ fn emit_scaffold_pci(
             )
         }).unwrap_or_default();
         hook.push_str(&work.cancel.replace('\t', "\t\t\t"));
+        if irq.is_some() {
+            hook.push_str("\t\t\tdisable_irq(pdev->irq);\n\t\t\tfree_irq(pdev->irq, priv);\n");
+        }
+        hook.push_str(&network::probe_failure(model, driver_item, drv).replace('\t', "\t\t\t"));
         let failure_hook = (!hook.is_empty()).then_some(hook);
         let adapter = emit_result_adapter(
             cx,
@@ -1310,6 +1378,19 @@ fn emit_scaffold_pci(
         )?;
         out.push_str(&adapter);
     }
+    if irq.is_some() {
+        out.push_str("\n\t/* Enable only after authored initialization succeeded. */\n\tenable_irq(pdev->irq);\n");
+    }
+    let mut publish_failure = work.cancel.clone();
+    if irq.is_some() {
+        publish_failure.push_str("\tdisable_irq(pdev->irq);\n\tfree_irq(pdev->irq, priv);\n");
+    }
+    out.push_str(&network::probe_publish(
+        model,
+        driver_item,
+        drv,
+        &publish_failure,
+    ));
     out.push_str("\treturn 0;\n}\n\n");
 
     // .remove — one `void` slot. With `on_surprise_remove` overridden it
@@ -1340,7 +1421,16 @@ fn emit_scaffold_pci(
         }
         None => out.push_str(&orderly_arm("\t")),
     }
-    out.push_str(&work.cancel);
+    if model.network_interface.drivers.contains_key(&driver_item) {
+        out.push_str(&work.cancel);
+    }
+    if irq.is_some() {
+        out.push_str("\t/* D1 drain completed; now mask and deregister the hardware IRQ. */\n\tdisable_irq(pdev->irq);\n\tfree_irq(pdev->irq, priv);\n");
+    }
+    out.push_str(&network::remove(model, driver_item, drv));
+    if !model.network_interface.drivers.contains_key(&driver_item) {
+        out.push_str(&work.cancel);
+    }
     out.push_str("\t/* postamble: devres-managed resources release automatically (A-2) */\n}\n\n");
 
     // .shutdown — the lone omit-when-absent slot; pci_driver carries its own

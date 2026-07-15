@@ -1,0 +1,27 @@
+{
+  "schema": "gap-closure-stage-coverage/1",
+  "stage": "C4-NIM",
+  "authority": "freeze/GAP-LEDGER.json G-network-interface-management-01..20 plus locked addendum/network-interface-management.md",
+  "rows": [
+    {"id":"G-network-interface-management-01","owner":"network-interface-management","check":"NetworkInterface recognizes the complete locked admin, packet, state, property, counter, and observer vocabulary; the historical open/stop surface rejects."},
+    {"id":"G-network-interface-management-02","owner":"l2-binding","check":"Carrier and portable operational state are present; speed, duplex, autonegotiation, and supported-mode negotiation remain provider-specific L2 data."},
+    {"id":"G-network-interface-management-03","owner":"l2-binding","check":"No standalone flow-control primitive is introduced; provider-specific pause policy remains outside the locked interface table."},
+    {"id":"G-network-interface-management-04","owner":"l2-binding","check":"Linux transmit rejection maps to NETDEV_TX_BUSY with caller ownership retained; queue stop/wake mechanics remain native and absent from L1."},
+    {"id":"G-network-interface-management-05","owner":"network-interface-management","check":"The locked read_counters operation exposes portable traffic counters; named ethtool sets and device accumulation mechanics remain L2."},
+    {"id":"G-network-interface-management-06","owner":"l2-binding","check":"MTU is a capability-gated property; ring geometry, reallocation, and restart choreography are absent from NIM IR."},
+    {"id":"G-network-interface-management-07","owner":"device-class","check":"PHY/MII and media control remain ordinary device/provider logic and are not added to NetworkInterface."},
+    {"id":"G-network-interface-management-08","owner":"network-interface-management","check":"ReceiveFilterMode is a property value while address lists, VLAN tables, and native filter programming remain L2."},
+    {"id":"G-network-interface-management-09","owner":"l2-binding","check":"Offload and feature negotiation are deliberately excluded from the frozen surface and generated portable table."},
+    {"id":"G-network-interface-management-10","owner":"l2-binding","check":"OpaquePacketBuffer carries only backend identity; Linux skb and Zephyr net_pkt layout, fragments, checksum, VLAN, GSO, and mutation stay native."},
+    {"id":"G-network-interface-management-11","owner":"network-interface-management","check":"Synchronous acceptance/refusal is independent from terminal completion; generated output states no per-packet completion is fabricated."},
+    {"id":"G-network-interface-management-12","owner":"other-construct","check":"Wake-on-LAN remains power/provider policy and is absent from NetworkInterface."},
+    {"id":"G-network-interface-management-13","owner":"device-class","check":"EEPROM access remains device register/management behavior, not network administration vocabulary."},
+    {"id":"G-network-interface-management-14","owner":"device-class","check":"Register dumps, self-test, and physical-ID LED control remain device diagnostics outside the locked element."},
+    {"id":"G-network-interface-management-15","owner":"l2-binding","check":"Interrupt coalescing metadata and operations remain backend/provider-owned and absent from L1."},
+    {"id":"G-network-interface-management-16","owner":"compiler-lowering","check":"Linux descriptor/index/DMA/IRQ/deferred-work composition and Zephyr native packet helpers are tested without adding NAPI or poll budgets to L1."},
+    {"id":"G-network-interface-management-17","owner":"other-construct","check":"Management firmware and ASF lifecycle behavior are not forced into NetworkInterface."},
+    {"id":"G-network-interface-management-18","owner":"device-lifecycle","check":"PCI error recovery remains lifecycle/error-recovery ownership; NIM supplies no AER callbacks."},
+    {"id":"G-network-interface-management-19","owner":"compiler-lowering","check":"Portable model/source negative checks forbid descriptors, indices, DMA mappings, IRQ bindings, work queues, and polling budgets in NIM."},
+    {"id":"G-network-interface-management-20","owner":"l2-binding","check":"Name, index, MTU, and link address use native Linux/Zephyr identity/property sources; no default-MAC binding is invented."}
+  ]
+}

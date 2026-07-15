@@ -29,6 +29,7 @@ pub mod fnsig;
 mod framework_type;
 mod handles;
 mod interrupt;
+mod network;
 pub(crate) mod intrinsic;
 mod opaque_handle;
 mod pinctrl;
@@ -701,6 +702,9 @@ pub enum BridgeError {
     /// The locked device-command-transport admission surface is malformed.
     #[error("device-command-transport validation: {0}")]
     TransportValidation(TransportDiagnostic),
+    /// A locked network-interface frontend check failed.
+    #[error("network-interface-management validation: {0}")]
+    NetworkValidation(NetworkDiagnostic),
 }
 
 /// Per-construct atomic-memory-access-and-ordering (atomicity) frontend
@@ -1406,6 +1410,19 @@ pub enum TransportDiagnostic {
     BadSignature { detail: String },
     #[error("DCT-ERR-DISCARDED-OUTCOME: command transport submit admission must be consumed as Accepted or Rejected(native_reason)")]
     DiscardedOutcome,
+}
+
+/// Locked network-interface frontend diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum NetworkDiagnostic {
+    #[error("NIM-ERR-WRONG-CLASS: driver `{driver}` implements `NetworkInterface` but is not tagged device_class(network)")]
+    WrongDeviceClass { driver: String },
+    #[error("NIM-ERR-EXCLUDED-SURFACE: network-class driver `{driver}` implements excluded historical surface `{surface}`; use the full `NetworkInterface` element")]
+    ExcludedSurface { driver: String, surface: String },
+    #[error("NIM-ERR-INCOMPLETE-INTERFACE: driver `{driver}` is missing required network-interface operations: {missing}")]
+    IncompleteInterface { driver: String, missing: String },
+    #[error("NIM-ERR-BAD-SIGNATURE: driver `{driver}` operation `{operation}`: {detail}")]
+    BadSignature { driver: String, operation: String, detail: String },
 }
 
 /// Per-construct timed-cpu-delay-and-sleep (TCD) frontend diagnostics (GRILL
@@ -2671,6 +2688,9 @@ fn construct_instances_and_resolve_cross_references(
     // Locked DMA recognition is independent of device class. A driver may own
     // a buffer, an async channel, both, or neither.
     dma::resolve_dma(ctxt)?;
+    // Locked NIM recognition consumes the already-public sibling tables at
+    // composition time but owns only interface operations.
+    network::resolve_network_interfaces(ctxt)?;
     // Device-interrupt (construct #6): discover + validate + bind the
     // #[rseq::isr] handlers and force-materialize their instances before the
     // drain, exactly like the lifecycle callbacks. The pending attribute
