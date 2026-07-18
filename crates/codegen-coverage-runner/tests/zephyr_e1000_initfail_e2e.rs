@@ -108,7 +108,10 @@ fn zephyr_e1000_initfail_snapshot_and_err_path() {
     // ignored = the one Pci row; the C06 note.
     let conf = std::fs::read_to_string(pipeline::zephyr_conformance_path(fixture))
         .expect("read conformance.zephyr.json");
-    assert!(conf.contains("{\"slot\": \"on_init\", \"row\": null}"), "{conf}");
+    assert!(
+        conf.contains("{\"slot\": \"on_init\", \"row\": null}"),
+        "{conf}"
+    );
     assert!(
         conf.contains("{\"slot\": \"on_init_failure\", \"row\": null}"),
         "{conf}"

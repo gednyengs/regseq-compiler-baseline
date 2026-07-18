@@ -65,8 +65,8 @@ fn e1000_initfail_snapshot_and_structure() {
         result.verdict
     );
 
-    let tu = std::fs::read_to_string(pipeline::linux_golden_path(fixture))
-        .expect("read golden.linux.c");
+    let tu =
+        std::fs::read_to_string(pipeline::linux_golden_path(fixture)).expect("read golden.linux.c");
     let pos = |needle: &str| {
         tu.find(needle)
             .unwrap_or_else(|| panic!("TU must contain `{needle}`"))
@@ -77,7 +77,8 @@ fn e1000_initfail_snapshot_and_structure() {
     // negated -EIO (HardwareError row); devres owns the unwind.
     pos("readl(_1->regs + E1000FAIL_STATUS)");
     pos("0xdeadbeefu");
-    let probe = pos("static int e1000fail_probe(struct pci_dev *pdev, const struct pci_device_id *id)");
+    let probe =
+        pos("static int e1000fail_probe(struct pci_dev *pdev, const struct pci_device_id *id)");
     let enable = pos("ret = pcim_enable_device(pdev);");
     let map = pos("priv->inner.regs = pcim_iomap_region(pdev, 0, \"e1000fail\");");
     let on_init_call = pos("e1000fail_on_init(&priv->inner)");

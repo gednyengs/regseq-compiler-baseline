@@ -102,7 +102,9 @@ fn gate(label: &str, emit: &regseq_backends::LinuxEmit) {
             kernel_version,
             warnings,
         }) => {
-            visible(format!("[{label}] kbuild PASS against kernel {kernel_version}"));
+            visible(format!(
+                "[{label}] kbuild PASS against kernel {kernel_version}"
+            ));
             if !warnings.trim().is_empty() {
                 visible(format!(
                     "[{label}] warnings (recorded, not gating):\n{warnings}"

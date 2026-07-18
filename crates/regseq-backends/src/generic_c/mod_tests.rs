@@ -297,10 +297,10 @@ fn bus_resource_map_region_records_the_effective_bar_override() {
     // `l2_bar_overrides_l1` join test proves `effective_bar = L2.bar ?? L1.bar`.
     let with = emit_generic_c(&model_with_bound_mmio_field(regseq_model::MmioBinding {
         id: None,
-        bar_index: Some(0),       // L1 default-decoded BAR
+        bar_index: Some(0), // L1 default-decoded BAR
         bar_type: regseq_model::BarType::Mem,
-        effective_bar: Some(2),   // L2 override -> resolution follows BAR 2
-        base: Some(0xc000_0000),  // the BAR-2 base
+        effective_bar: Some(2),  // L2 override -> resolution follows BAR 2
+        base: Some(0xc000_0000), // the BAR-2 base
         size: Some(0x1000),
     }))
     .unwrap();
@@ -325,7 +325,10 @@ fn bus_resource_m3_preamble_emits_four_ops_in_canonical_order() {
     let enable = idx_of(&with, "regseq_bus_enable_device();");
     let claim = idx_of(&with, "regseq_bus_claim_regions(0);");
     let handle = idx_of(&with, "regseq_bus_get_handle();");
-    let map = idx_of(&with, "regseq_bus_map_region(0xf0000000ull, 0x20000ull, 0);");
+    let map = idx_of(
+        &with,
+        "regseq_bus_map_region(0xf0000000ull, 0x20000ull, 0);",
+    );
     assert!(
         enable < claim && claim < handle && handle < map,
         "canonical order enable→claim→get_handle→map violated \
@@ -353,7 +356,10 @@ fn bus_resource_m3_non_pci_omits_enable_and_master() {
     // (pinned as tightly as the PCI paths, not merely "present").
     let claim = idx_of(&with, "regseq_bus_claim_regions(0);");
     let handle = idx_of(&with, "regseq_bus_get_handle();");
-    let map = idx_of(&with, "regseq_bus_map_region(0xf0000000ull, 0x20000ull, 0);");
+    let map = idx_of(
+        &with,
+        "regseq_bus_map_region(0xf0000000ull, 0x20000ull, 0);",
+    );
     assert!(
         claim < handle && handle < map,
         "non-PCI acquire must keep canonical order claim→get_handle→map \
@@ -381,7 +387,7 @@ fn bus_resource_m4_non_pci_no_bar_acquire_degrades() {
     let with = emit_generic_c(&model_with_bound_mmio_field_cfg(
         regseq_model::MmioBinding {
             id: None,
-            bar_index: None,         // no L1 BAR
+            bar_index: None, // no L1 BAR
             bar_type: regseq_model::BarType::Mem,
             effective_bar: None,     // platform/DT region: no effective BAR
             base: Some(0x4000_0000), // the DT-reg base stand-in
@@ -394,7 +400,10 @@ fn bus_resource_m4_non_pci_no_bar_acquire_degrades() {
     // claim → get_handle → map.
     let claim = idx_of(&with, "regseq_bus_claim_regions(-1);");
     let handle = idx_of(&with, "regseq_bus_get_handle();");
-    let map = idx_of(&with, "regseq_bus_map_region(0x40000000ull, 0x1000ull, -1);");
+    let map = idx_of(
+        &with,
+        "regseq_bus_map_region(0x40000000ull, 0x1000ull, -1);",
+    );
     assert!(
         claim < handle && handle < map,
         "non-PCI no-BAR acquire must claim(-1)→get_handle→map(-1) in order \
@@ -402,8 +411,7 @@ fn bus_resource_m4_non_pci_no_bar_acquire_degrades() {
     );
     // The PCI-only elements are absent in the emitted C (the degradation).
     assert!(
-        !with.contains("regseq_bus_enable_device();")
-            && !with.contains("regseq_bus_set_master();"),
+        !with.contains("regseq_bus_enable_device();") && !with.contains("regseq_bus_set_master();"),
         "non-PCI degradation must omit enable_device + set_bus_master; got:\n{with}"
     );
 }
@@ -460,7 +468,9 @@ fn bus_resource_m5_config_read_witness_and_pci_id_caching() {
         "cc failed:\n{}",
         String::from_utf8_lossy(&compile.stderr)
     );
-    let run = std::process::Command::new(&bin).output().expect("run binary");
+    let run = std::process::Command::new(&bin)
+        .output()
+        .expect("run binary");
     assert!(
         run.status.success(),
         "config witness program returned non-zero (id mismatch or wrong COMMAND): {:?}",
@@ -533,7 +543,9 @@ fn bus_resource_based_accessor_traces_the_real_mapped_address() {
         "cc failed:\n{}",
         String::from_utf8_lossy(&compile.stderr)
     );
-    let run = std::process::Command::new(&bin).output().expect("run binary");
+    let run = std::process::Command::new(&bin)
+        .output()
+        .expect("run binary");
     let out = String::from_utf8_lossy(&run.stdout);
     assert!(
         out.contains("BUS map base=0xf0000000 size=0x20000"),
@@ -580,7 +592,9 @@ fn compile_and_run_oracle(tag: &str, bank: &str, main: &str) -> Option<(Option<i
         "cc failed for {tag}:\n{}",
         String::from_utf8_lossy(&compile.stderr)
     );
-    let run = std::process::Command::new(&bin).output().expect("run binary");
+    let run = std::process::Command::new(&bin)
+        .output()
+        .expect("run binary");
     let out = String::from_utf8_lossy(&run.stdout).into_owned();
     let code = run.status.code();
     let _ = std::fs::remove_dir_all(&dir);
@@ -653,13 +667,21 @@ fn t13_coupling_weaves_the_mask_logic_into_both_banks() {
     // grew the expected mask logic (the `replace_once` guard would already abort
     // if an anchor were missing/duplicated, but pin the woven result here).
     let irq = prelude::irq_helpers_masked();
-    assert_ne!(irq, prelude::IRQ_HELPERS, "the masked fire must differ from the base");
+    assert_ne!(
+        irq,
+        prelude::IRQ_HELPERS,
+        "the masked fire must differ from the base"
+    );
     assert!(
         irq.contains("if (regseq_local_irq_masked > 0u)") && irq.contains("masked\\n"),
         "the masked fire must gate on the mask + trace `masked`"
     );
     let sync = prelude::sync_helpers_masked();
-    assert_ne!(sync, prelude::SYNC_HELPERS, "the masked lock ops must differ from the base");
+    assert_ne!(
+        sync,
+        prelude::SYNC_HELPERS,
+        "the masked lock ops must differ from the base"
+    );
     assert!(
         sync.contains("regseq_local_irq_masked++") && sync.contains("regseq_local_irq_masked--"),
         "acquire must raise + release must lower the IRQ mask"
@@ -2429,6 +2451,40 @@ fn weak_link_section_and_inline_qualifiers() {
         "section:\n{tu}"
     );
     assert!(tu.contains("inline "), "inline:\n{tu}");
+}
+
+#[test]
+fn referenced_authored_inline_function_preserves_section17_qualifier() {
+    let mut m = model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::Rust, false);
+    let callee_body = build_body(0, vec![unit], vec![bb(vec![], tk(TerminatorKind::Return))]);
+    let callee = fn_instance(&mut m, "inline_callee", sig, Some(callee_body));
+    m.items[m.instances[callee].item].inline_hint = InlineHint::Hint;
+    let caller_body = build_body(
+        0,
+        vec![unit],
+        vec![
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(callee),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(1)),
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+        ],
+    );
+    fn_instance(&mut m, "inline_caller", sig, Some(caller_body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert_eq!(tu.matches("inline void inline_callee(void)").count(), 2);
+    assert!(!tu.contains("static inline void inline_callee(void)"));
 }
 
 #[test]

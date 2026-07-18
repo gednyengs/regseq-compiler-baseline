@@ -158,7 +158,8 @@ fn validate_author_managed_fields(model: &RegseqModel) -> Result<(), PinctrlSema
             for stmt in bb.statements.iter() {
                 match &stmt.kind {
                     StatementKind::Assign(dst, rvalue) => {
-                        if let Some((driver, field)) = place_writes_pinctrl_field(model, body, dst) {
+                        if let Some((driver, field)) = place_writes_pinctrl_field(model, body, dst)
+                        {
                             return Err(PinctrlSemanticError::AuthorManagedField {
                                 driver,
                                 field,
@@ -178,7 +179,8 @@ fn validate_author_managed_fields(model: &RegseqModel) -> Result<(), PinctrlSema
                         }
                     }
                     StatementKind::SetDiscriminant(dst, _) => {
-                        if let Some((driver, field)) = place_writes_pinctrl_field(model, body, dst) {
+                        if let Some((driver, field)) = place_writes_pinctrl_field(model, body, dst)
+                        {
                             return Err(PinctrlSemanticError::AuthorManagedField {
                                 driver,
                                 field,
@@ -336,7 +338,10 @@ fn place_writes_pinctrl_field(
     place: &Place,
 ) -> Option<(String, String)> {
     let (item, pinctrl_id, _) = recover_pinctrl_at_place(model, body, place)?;
-    Some((driver_name(model, item), field_name(model, item, pinctrl_id)))
+    Some((
+        driver_name(model, item),
+        field_name(model, item, pinctrl_id),
+    ))
 }
 
 /// If `ty_id` is a driver struct that carries a pinctrl field, return its

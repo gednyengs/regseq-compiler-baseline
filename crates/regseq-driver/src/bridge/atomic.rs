@@ -481,7 +481,9 @@ pub(crate) fn validate_atomic_signatures(cx: &mut BridgeCtxt<'_>) -> Result<(), 
         // per input, so an in-range `Ordering` input guarantees the ops check
         // finds the ordering operand at the same index.
         for &pos in ordering_positions(op) {
-            let ok = inputs.get(pos).is_some_and(|param| is_ordering_ty(tcx, *param));
+            let ok = inputs
+                .get(pos)
+                .is_some_and(|param| is_ordering_ty(tcx, *param));
             if !ok {
                 let detail = match inputs.get(pos) {
                     None => format!(
@@ -625,11 +627,29 @@ fn validate_atomic_call(
     }
     match op {
         // `load`: Relaxed/Acquire/SeqCst (Release/AcqRel ⇒ degenerate). arg 1.
-        AtomicOp::Load => check_ordering(model, body, args, 1, name, &[0, 1, 4], "Relaxed/Acquire/SeqCst"),
+        AtomicOp::Load => check_ordering(
+            model,
+            body,
+            args,
+            1,
+            name,
+            &[0, 1, 4],
+            "Relaxed/Acquire/SeqCst",
+        ),
         // `store`: Relaxed/Release/SeqCst (Acquire/AcqRel ⇒ degenerate). arg 2.
-        AtomicOp::Store => check_ordering(model, body, args, 2, name, &[0, 2, 4], "Relaxed/Release/SeqCst"),
+        AtomicOp::Store => check_ordering(
+            model,
+            body,
+            args,
+            2,
+            name,
+            &[0, 2, 4],
+            "Relaxed/Release/SeqCst",
+        ),
         // `fetch_*`/`swap`: all five orderings legal. arg 2.
-        AtomicOp::FetchModify(_) => check_ordering(model, body, args, 2, name, &[0, 1, 2, 3, 4], "all"),
+        AtomicOp::FetchModify(_) => {
+            check_ordering(model, body, args, 2, name, &[0, 1, 2, 3, 4], "all")
+        }
         // `bit_test_*`: all five orderings legal (arg 2) + unsigned element +
         // const bit in range.
         AtomicOp::BitTestSet | AtomicOp::BitTestClear => {
@@ -678,7 +698,9 @@ fn check_fence(model: &RegseqModel, body: &Body, args: &[Operand]) -> Result<(),
         return Err(nonconst("fence"));
     };
     if variant == 0 {
-        return Err(BridgeError::AtomicValidation(AtomicDiagnostic::FenceRelaxed));
+        return Err(BridgeError::AtomicValidation(
+            AtomicDiagnostic::FenceRelaxed,
+        ));
     }
     // Valid fence orderings are exactly {Acquire, Release, AcqRel, SeqCst}.
     // Reject any out-of-range discriminant too (a malformed `Ordering`), closing
@@ -729,7 +751,10 @@ fn check_cas(model: &RegseqModel, body: &Body, args: &[Operand]) -> Result<(), B
         return Err(degenerate(
             "compare_exchange failure",
             fail,
-            &format!("an ordering no stronger than success ({})", ordering_name(succ)),
+            &format!(
+                "an ordering no stronger than success ({})",
+                ordering_name(succ)
+            ),
         ));
     }
     Ok(())
@@ -755,14 +780,16 @@ fn check_bit_test(
         ModelTy::Uint(UintKind::U32) => 32,
         ModelTy::Uint(UintKind::U64) => 64,
         _ => {
-            return Err(BridgeError::AtomicValidation(AtomicDiagnostic::BitTestType {
-                op: name.to_string(),
-                detail: format!(
-                    "requires a supported unsigned integer atomic element type (u32/u64); \
+            return Err(BridgeError::AtomicValidation(
+                AtomicDiagnostic::BitTestType {
+                    op: name.to_string(),
+                    detail: format!(
+                        "requires a supported unsigned integer atomic element type (u32/u64); \
                      observed Atomic<{}>",
-                    model_elem_name(model, elem)
-                ),
-            }));
+                        model_elem_name(model, elem)
+                    ),
+                },
+            ));
         }
     };
     // A compile-time-constant out-of-range bit index (the runtime case is
@@ -771,10 +798,14 @@ fn check_bit_test(
     if let Some(Operand::Constant(id)) = args.get(1) {
         if let Const::Uint(_, value) = model.consts.resolve(*id) {
             if *value >= width {
-                return Err(BridgeError::AtomicValidation(AtomicDiagnostic::BitTestType {
-                    op: name.to_string(),
-                    detail: format!("bit index {value} is out of range for a {width}-bit atomic"),
-                }));
+                return Err(BridgeError::AtomicValidation(
+                    AtomicDiagnostic::BitTestType {
+                        op: name.to_string(),
+                        detail: format!(
+                            "bit index {value} is out of range for a {width}-bit atomic"
+                        ),
+                    },
+                ));
             }
         }
     }

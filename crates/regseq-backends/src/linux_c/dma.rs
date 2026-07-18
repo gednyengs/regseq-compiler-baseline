@@ -5,7 +5,10 @@
 //! ownership passes to the engine at submit, and asynchronous termination is
 //! followed by the separate synchronize barrier before release.
 
-use regseq_model::{DmaBufferOps, DriverDma, ItemId, RegseqModel};
+use regseq_model::{
+    AttrData, DmaBufferOps, DriverDma, EnumShape, InstanceId, InstanceRef, ItemId, LayoutKind,
+    RegseqModel,
+};
 
 use super::body::LowerCx;
 
@@ -21,12 +24,217 @@ pub(super) fn emit(cx: &mut LowerCx<'_>, driver: ItemId, drv: &str) -> String {
 
     let mut out = String::new();
     if let Some(buffer) = &dma.buffer {
-        out.push_str(&buffer_helpers(&buffer.ops, drv));
+        if descriptor_datapath(cx.model, driver) {
+            for capability in buffer.ops.capabilities() {
+                out.push_str(&format!(
+                    "/* RSEQ-DMA-BUFFER-CAPABILITY {capability} (composed descriptor ring) */\n"
+                ));
+            }
+            out.push('\n');
+        } else {
+            out.push_str(&buffer_helpers(&buffer.ops, drv));
+        }
     }
     if dma.channel.is_some() {
         out.push_str(&channel_helpers(dma, drv));
     }
     out
+}
+
+pub(super) fn descriptor_datapath(model: &RegseqModel, driver: ItemId) -> bool {
+    model
+        .device_lifecycle
+        .drivers
+        .get(&driver)
+        .is_some_and(|lifecycle| model.strings.resolve(lifecycle.descriptor.name) == "rich-e1000")
+        && model.network_interface.drivers.contains_key(&driver)
+        && model
+            .dma
+            .drivers
+            .get(&driver)
+            .is_some_and(|dma| dma.buffer.is_some())
+        && model.domain_attrs.item_attrs.iter().flatten().any(|attr| {
+            matches!(
+                attr,
+                AttrData::Intrinsic(regseq_model::IntrinsicKind::CommandTransportSubmit)
+            )
+        })
+}
+
+pub(super) fn container_fields(model: &RegseqModel, driver: ItemId) -> String {
+    if !descriptor_datapath(model, driver) {
+        return String::new();
+    }
+    "\tvoid *__rseq_dma_cpu[2];\n\tdma_addr_t __rseq_dma_address[2];\n\tsize_t __rseq_dma_capacity[2];\n"
+        .into()
+}
+
+pub(crate) fn emit_buffer_op_shim(
+    cx: &mut LowerCx<'_>,
+    instance: InstanceId,
+    head: &str,
+) -> Result<Option<String>, super::EmitError> {
+    let Some((driver, op)) = descriptor_buffer_op(cx.model, instance) else {
+        return Ok(None);
+    };
+    if !descriptor_datapath(cx.model, driver) {
+        return Ok(None);
+    }
+    cx.extra_includes.insert("<linux/container_of.h>");
+    cx.extra_includes.insert("<linux/dma-mapping.h>");
+    cx.extra_includes.insert("<linux/string.h>");
+
+    let body = match op {
+        "allocate" => r#"	struct DmaBufferHandle _0 = { .identity = 0 };
+	struct rich_e1000_priv *__priv = container_of(_1, struct rich_e1000_priv, inner);
+	unsigned int __slot;
+
+	if (!_2.size || !_2.alignment || (_2.alignment & (_2.alignment - 1)) || _2.boundary)
+		return _0;
+	for (__slot = 0; __slot < 2; __slot++) {
+		if (__priv->__rseq_dma_cpu[__slot])
+			continue;
+		__priv->__rseq_dma_cpu[__slot] = dma_alloc_coherent(&__priv->pdev->dev,
+			_2.size, &__priv->__rseq_dma_address[__slot], GFP_KERNEL);
+		if (!__priv->__rseq_dma_cpu[__slot])
+			return _0;
+		if ((__priv->__rseq_dma_address[__slot] & (_2.alignment - 1)) != 0) {
+			dma_free_coherent(&__priv->pdev->dev, _2.size,
+				__priv->__rseq_dma_cpu[__slot], __priv->__rseq_dma_address[__slot]);
+			__priv->__rseq_dma_cpu[__slot] = NULL;
+			__priv->__rseq_dma_address[__slot] = (dma_addr_t)0;
+			return _0;
+		}
+		__priv->__rseq_dma_capacity[__slot] = _2.size;
+		if (_2.zero)
+			memset(__priv->__rseq_dma_cpu[__slot], 0, _2.size);
+		_0.identity = (size_t)__slot + 1;
+		return _0;
+	}
+	return _0;
+"#
+        .to_string(),
+        "free" => {
+            r#"	struct rich_e1000_priv *__priv = container_of(_1, struct rich_e1000_priv, inner);
+	unsigned int __slot;
+
+	if (_2.identity == 0 || _2.identity > 2)
+		return;
+	__slot = (unsigned int)_2.identity - 1;
+	if (!__priv->__rseq_dma_cpu[__slot])
+		return;
+	dma_free_coherent(&__priv->pdev->dev, __priv->__rseq_dma_capacity[__slot],
+		__priv->__rseq_dma_cpu[__slot], __priv->__rseq_dma_address[__slot]);
+	__priv->__rseq_dma_cpu[__slot] = NULL;
+	__priv->__rseq_dma_address[__slot] = (dma_addr_t)0;
+	__priv->__rseq_dma_capacity[__slot] = 0;
+	return;
+"#
+            .to_string()
+        }
+        "cpu_address" => {
+            r#"	struct rich_e1000_priv *__priv = container_of(_1, struct rich_e1000_priv, inner);
+	if (_2.identity == 0 || _2.identity > 2)
+		return NULL;
+	return __priv->__rseq_dma_cpu[_2.identity - 1];
+"#
+            .to_string()
+        }
+        "length" => {
+            r#"	struct rich_e1000_priv *__priv = container_of(_1, struct rich_e1000_priv, inner);
+	if (_2.identity == 0 || _2.identity > 2)
+		return 0;
+	return __priv->__rseq_dma_capacity[_2.identity - 1];
+"#
+            .to_string()
+        }
+        "transfer_address" => transfer_address_body(cx, instance, "rich_e1000_priv", false)?,
+        _ => return Ok(None),
+    };
+    Ok(Some(format!("{head}\n{{\n{body}}}\n")))
+}
+
+fn descriptor_buffer_op(
+    model: &RegseqModel,
+    instance: InstanceId,
+) -> Option<(ItemId, &'static str)> {
+    for (driver, dma) in &model.dma.drivers {
+        let ops = &dma.buffer.as_ref()?.ops;
+        for (name, reference) in [
+            ("allocate", ops.allocate),
+            ("free", ops.free),
+            ("cpu_address", ops.cpu_address),
+            ("length", ops.length),
+            ("transfer_address", ops.transfer_address),
+        ] {
+            if reference.is_some_and(|reference| resolves_to(model, reference, instance)) {
+                return Some((*driver, name));
+            }
+        }
+    }
+    None
+}
+
+fn resolves_to(model: &RegseqModel, reference: InstanceRef, instance: InstanceId) -> bool {
+    model.instance_ref_of(instance) == reference
+}
+
+fn transfer_address_body(
+    cx: &mut LowerCx<'_>,
+    instance: InstanceId,
+    container: &str,
+    zephyr: bool,
+) -> Result<String, super::EmitError> {
+    let regseq_model::InstanceKind::Function(data) = &cx.model.instances[instance].kind else {
+        return Err(super::EmitError::Driver(
+            "DMA operation is not a function".into(),
+        ));
+    };
+    let output = cx.model.sigs.resolve(data.fn_sig).output;
+    let cty = super::types::c_type(cx.model, &mut cx.names, output)?;
+    let layout = super::types::layout_of(cx.model, output).ok_or_else(|| {
+        super::EmitError::Driver("DMA transfer address Option has no layout".into())
+    })?;
+    let LayoutKind::Enum {
+        shape: EnumShape::Multiple { variants, .. },
+    } = &layout.kind
+    else {
+        return Err(super::EmitError::Driver(
+            "DMA transfer address does not return Option<u64>".into(),
+        ));
+    };
+    let (tag_offset, tag_size) = super::types::enum_tag_cell(cx.model, output)?;
+    let some = variants
+        .iter()
+        .find(|variant| cx.model.strings.resolve(variant.name) == "Some")
+        .ok_or_else(|| super::EmitError::Driver("DMA transfer address Option lacks Some".into()))?;
+    let some_tag = some
+        .tag_value
+        .ok_or_else(|| super::EmitError::Driver("DMA transfer address Some is untagged".into()))?;
+    let value_offset = some
+        .fields
+        .first()
+        .ok_or_else(|| super::EmitError::Driver("DMA transfer address Some lacks payload".into()))?
+        .offset;
+    let recover = if zephyr {
+        format!("\tstruct {container} *__priv = CONTAINER_OF(_1, struct {container}, inner);\n")
+    } else {
+        format!("\tstruct {container} *__priv = container_of(_1, struct {container}, inner);\n")
+    };
+    let tag_ty = match tag_size {
+        1 => "u8",
+        2 => "u16",
+        4 => "u32",
+        8 => "u64",
+        _ => {
+            return Err(super::EmitError::Driver(
+                "DMA transfer address Option tag has unsupported width".into(),
+            ))
+        }
+    };
+    Ok(format!(
+        "\t{cty} _0;\n{recover}\tmemset(&_0, 0, sizeof(_0));\n\tif (_2.identity != 0 && _2.identity <= 2 && __priv->__rseq_dma_cpu[_2.identity - 1]) {{\n\t\t{tag_ty} __tag = ({tag_ty}){some_tag};\n\t\tu64 __address = (u64)__priv->__rseq_dma_address[_2.identity - 1];\n\t\t_1->dma_address_shadow = __address;\n\t\tmemcpy(&_0._raw[{tag_offset}], &__tag, sizeof(__tag));\n\t\tmemcpy(&_0._raw[{value_offset}], &__address, sizeof(__address));\n\t}}\n\treturn _0;\n"
+    ))
 }
 
 fn buffer_helpers(ops: &DmaBufferOps, drv: &str) -> String {

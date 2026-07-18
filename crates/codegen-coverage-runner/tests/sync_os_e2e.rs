@@ -50,9 +50,7 @@ fn completion_wait_consumed_result_is_rejected() {
         )) => {
             assert_eq!(field, "done", "the rejected field is the Completion");
         }
-        other => panic!(
-            "expected CompletionWaitResultConsumed rejection, got: {other:?}"
-        ),
+        other => panic!("expected CompletionWaitResultConsumed rejection, got: {other:?}"),
     }
 }
 
@@ -116,13 +114,23 @@ fn assert_has(tu: &str, needle: &str, what: &str) {
 }
 
 fn assert_absent(tu: &str, needle: &str, what: &str) {
-    assert!(!tu.contains(needle), "{what}: did NOT expect `{needle}` in:\n{tu}");
+    assert!(
+        !tu.contains(needle),
+        "{what}: did NOT expect `{needle}` in:\n{tu}"
+    );
 }
 
 fn assert_before(tu: &str, first: &str, second: &str, what: &str) {
-    let a = tu.find(first).unwrap_or_else(|| panic!("{what}: `{first}` not found"));
-    let b = tu.find(second).unwrap_or_else(|| panic!("{what}: `{second}` not found"));
-    assert!(a < b, "{what}: expected `{first}` before `{second}` in:\n{tu}");
+    let a = tu
+        .find(first)
+        .unwrap_or_else(|| panic!("{what}: `{first}` not found"));
+    let b = tu
+        .find(second)
+        .unwrap_or_else(|| panic!("{what}: `{second}` not found"));
+    assert!(
+        a < b,
+        "{what}: expected `{first}` before `{second}` in:\n{tu}"
+    );
 }
 
 /// T07/C02 — the full per-OS lowering matrix + the per-OS guard hidden-state
@@ -143,7 +151,11 @@ fn per_os_c02_lowering_matrix() {
     assert_has(lx, "struct completion done;", "linux: Completion field");
     assert_has(lx, "#include <linux/mutex.h>", "linux: mutex include");
     assert_has(lx, "#include <linux/spinlock.h>", "linux: spinlock include");
-    assert_has(lx, "#include <linux/completion.h>", "linux: completion include");
+    assert_has(
+        lx,
+        "#include <linux/completion.h>",
+        "linux: completion include",
+    );
 
     // -- Linux C02 primitive matrix -----------------------------------------
     assert_has(lx, "mutex_lock(&_1->mtx);", "linux: Mutex acquire");
@@ -151,14 +163,26 @@ fn per_os_c02_lowering_matrix() {
     assert_has(lx, "spin_lock(&_1->spin);", "linux: SpinLock acquire");
     assert_has(lx, "spin_unlock(&_1->spin);", "linux: SpinLock release");
     assert_has(lx, "complete(&_1->done);", "linux: completion signal");
-    assert_has(lx, "reinit_completion(&_1->done);", "linux: completion reset");
-    assert_has(lx, "wait_for_completion_timeout(&_1->done,", "linux: completion wait");
+    assert_has(
+        lx,
+        "reinit_completion(&_1->done);",
+        "linux: completion reset",
+    );
+    assert_has(
+        lx,
+        "wait_for_completion_timeout(&_1->done,",
+        "linux: completion wait",
+    );
 
     // -- Linux IrqSpinLock guard-state round-trip (S10, review D2): the same
     //    `unsigned long flags` local is WRITTEN by irqsave and CONSUMED by
     //    irqrestore over the SAME lock object. -------------------------------
     let flags = extract_token(lx, "spin_lock_irqsave(&_1->irqspin, ", ")");
-    assert_has(lx, &format!("unsigned long {flags};"), "linux: flags local declared");
+    assert_has(
+        lx,
+        &format!("unsigned long {flags};"),
+        "linux: flags local declared",
+    );
     assert_has(
         lx,
         &format!("spin_lock_irqsave(&_1->irqspin, {flags});"),
@@ -172,29 +196,61 @@ fn per_os_c02_lowering_matrix() {
 
     // -- Zephyr struct field substitution + the collapse (D1/I06) -----------
     assert_has(zp, "struct k_mutex mtx;", "zephyr: Mutex field");
-    assert_has(zp, "struct k_spinlock spin;", "zephyr: SpinLock field (collapse)");
-    assert_has(zp, "struct k_spinlock irqspin;", "zephyr: IrqSpinLock field (collapse)");
+    assert_has(
+        zp,
+        "struct k_spinlock spin;",
+        "zephyr: SpinLock field (collapse)",
+    );
+    assert_has(
+        zp,
+        "struct k_spinlock irqspin;",
+        "zephyr: IrqSpinLock field (collapse)",
+    );
     assert_has(zp, "struct k_sem done;", "zephyr: Completion field");
     assert_has(zp, "#include <zephyr/kernel.h>", "zephyr: kernel include");
-    assert_has(zp, "#include <zephyr/spinlock.h>", "zephyr: spinlock include");
+    assert_has(
+        zp,
+        "#include <zephyr/spinlock.h>",
+        "zephyr: spinlock include",
+    );
 
     // -- Zephyr C02 primitive matrix ----------------------------------------
-    assert_has(zp, "k_mutex_lock(&_1->mtx, K_FOREVER);", "zephyr: Mutex acquire");
+    assert_has(
+        zp,
+        "k_mutex_lock(&_1->mtx, K_FOREVER);",
+        "zephyr: Mutex acquire",
+    );
     assert_has(zp, "k_mutex_unlock(&_1->mtx);", "zephyr: Mutex release");
     assert_has(zp, "k_sem_give(&_1->done);", "zephyr: completion signal");
     assert_has(zp, "k_sem_reset(&_1->done);", "zephyr: completion reset");
-    assert_has(zp, "k_sem_take(&_1->done, K_NSEC(", "zephyr: completion wait");
+    assert_has(
+        zp,
+        "k_sem_take(&_1->done, K_NSEC(",
+        "zephyr: completion wait",
+    );
 
     // -- Zephyr SpinLock ≡ IrqSpinLock collapse: BOTH use the key-carrying
     //    `k_spin_lock`/`k_spin_unlock` (I06) -------------------------------
-    assert_has(zp, "k_spin_lock(&_1->spin);", "zephyr: SpinLock acquire (collapse)");
-    assert_has(zp, "k_spin_lock(&_1->irqspin);", "zephyr: IrqSpinLock acquire (collapse)");
+    assert_has(
+        zp,
+        "k_spin_lock(&_1->spin);",
+        "zephyr: SpinLock acquire (collapse)",
+    );
+    assert_has(
+        zp,
+        "k_spin_lock(&_1->irqspin);",
+        "zephyr: IrqSpinLock acquire (collapse)",
+    );
 
     // -- Zephyr guard-state round-trip (S10, review D2): `k_spinlock_key_t key`
     //    ASSIGNED FROM the acquire and CONSUMED by the unlock (contrast Linux's
     //    irqsave-written flags). --------------------------------------------
     let key = extract_token(zp, "k_spin_unlock(&_1->irqspin, ", ")");
-    assert_has(zp, &format!("k_spinlock_key_t {key};"), "zephyr: key local declared");
+    assert_has(
+        zp,
+        &format!("k_spinlock_key_t {key};"),
+        "zephyr: key local declared",
+    );
     assert_has(
         zp,
         &format!("{key} = k_spin_lock(&_1->irqspin);"),
@@ -227,28 +283,71 @@ fn c05_init_destroy_placement() {
 
     // -- Linux: init_primitives in the probe, BEFORE on_init -----------------
     assert_has(lx, "mutex_init(&priv->inner.mtx);", "linux: Mutex init");
-    assert_has(lx, "spin_lock_init(&priv->inner.spin);", "linux: SpinLock init");
-    assert_has(lx, "spin_lock_init(&priv->inner.irqspin);", "linux: IrqSpinLock init");
-    assert_has(lx, "init_completion(&priv->inner.done);", "linux: Completion init");
-    assert_before(lx, "mutex_init(&priv->inner.mtx);", "sync_os_on_init(&priv->inner)", "linux: init before on_init");
+    assert_has(
+        lx,
+        "spin_lock_init(&priv->inner.spin);",
+        "linux: SpinLock init",
+    );
+    assert_has(
+        lx,
+        "spin_lock_init(&priv->inner.irqspin);",
+        "linux: IrqSpinLock init",
+    );
+    assert_has(
+        lx,
+        "init_completion(&priv->inner.done);",
+        "linux: Completion init",
+    );
+    assert_before(
+        lx,
+        "mutex_init(&priv->inner.mtx);",
+        "sync_os_on_init(&priv->inner)",
+        "linux: init before on_init",
+    );
 
     // -- Zephyr: k_mutex_init/k_sem_init in the init hub, BEFORE on_init; a
     //    k_spinlock needs NO runtime init (zero-init valid). ----------------
     assert_has(zp, "k_mutex_init(&data->inner.mtx);", "zephyr: Mutex init");
-    assert_has(zp, "k_sem_init(&data->inner.done, 0, 1);", "zephyr: Completion init");
-    assert_absent(zp, "k_spinlock_init", "zephyr: spinlock takes no runtime init");
-    assert_before(zp, "k_mutex_init(&data->inner.mtx);", "sync_os_on_init(&data->inner)", "zephyr: init before on_init");
+    assert_has(
+        zp,
+        "k_sem_init(&data->inner.done, 0, 1);",
+        "zephyr: Completion init",
+    );
+    assert_absent(
+        zp,
+        "k_spinlock_init",
+        "zephyr: spinlock takes no runtime init",
+    );
+    assert_before(
+        zp,
+        "k_mutex_init(&data->inner.mtx);",
+        "sync_os_on_init(&data->inner)",
+        "zephyr: init before on_init",
+    );
 
     // -- generic-c oracle: lock_init BEFORE the first lock_acquire (acquire-
     //    after-init, I05), and lock_destroy emitted after the section. ------
     assert_has(gc, "regseq_lock_init(", "generic-c: init emitted");
     assert_has(gc, "regseq_lock_destroy(", "generic-c: destroy emitted");
-    assert_before(gc, "regseq_lock_init(", "regseq_lock_acquire(", "generic-c: init before acquire");
+    assert_before(
+        gc,
+        "regseq_lock_init(",
+        "regseq_lock_acquire(",
+        "generic-c: init before acquire",
+    );
     // The oracle's acquire/completion ops route through the shared
     // acquire-after-init guard (which prints `SYNC error <op>-before-init` and
     // aborts at runtime) + the id-bounds overflow guard.
-    assert_has(gc, "regseq_lock_require_inited(", "generic-c: oracle wires the acquire-after-init guard");
-    assert_has(gc, "-before-init", "generic-c: the init-guard diagnostic is present");
+    assert_has(
+        gc,
+        "regseq_lock_require_inited(",
+        "generic-c: oracle wires the acquire-after-init guard",
+    );
+    assert_has(
+        gc,
+        "-before-init",
+        "generic-c: the init-guard diagnostic is present",
+    );
 }
 
 /// Pull the single token between `after` and the next `until` (a tiny golden

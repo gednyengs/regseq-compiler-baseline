@@ -224,8 +224,15 @@ fn irqspinlock_field_recognized_as_sync_resource() {
     .expect("a driver with an IrqSpinLock field must bridge");
 
     assert_eq!(n_drivers, 1, "exactly one driver has a sync surface");
-    assert_eq!(kind, SyncKind::IrqSpinLock, "the field's kind is IrqSpinLock");
-    assert_eq!(protected, None, "M1 records no protected type (T07 fills it)");
+    assert_eq!(
+        kind,
+        SyncKind::IrqSpinLock,
+        "the field's kind is IrqSpinLock"
+    );
+    assert_eq!(
+        protected, None,
+        "M1 records no protected type (T07 fills it)"
+    );
     assert!(has_marker, "field_attrs must carry the SyncResource marker");
 }
 
@@ -308,11 +315,9 @@ fn singlewaiter_completion_is_accepted() {
 
 #[test]
 fn driver_without_lock_field_has_no_sync_surface() {
-    let n_drivers = with_model(
-        "sync_none",
-        &sync_source("pub n: u32", ""),
-        |model| model.synchronization.drivers.len(),
-    )
+    let n_drivers = with_model("sync_none", &sync_source("pub n: u32", ""), |model| {
+        model.synchronization.drivers.len()
+    })
     .expect("a lock-less driver must bridge");
     assert_eq!(n_drivers, 0, "no lock field => no synchronization surface");
 }
@@ -360,10 +365,20 @@ fn irqspinlock_acquire_produces_held_region_over_live_range() {
     .expect("a spinlock acquire must bridge and produce a region");
 
     assert_eq!(n_regions, 1, "one spinlock acquire => one held region");
-    assert_eq!(kind, SyncKind::IrqSpinLock, "the region carries the spinning kind");
+    assert_eq!(
+        kind,
+        SyncKind::IrqSpinLock,
+        "the region carries the spinning kind"
+    );
     assert_eq!(lock_id, 0, "the region tracks the only lock (id 0)");
-    assert!(acquire_excluded, "the acquire block is not in the held region");
-    assert!(n_blocks >= 1, "the guard is held in at least the release block");
+    assert!(
+        acquire_excluded,
+        "the acquire block is not in the held region"
+    );
+    assert!(
+        n_blocks >= 1,
+        "the guard is held in at least the release block"
+    );
     assert!(
         releases_in_region,
         "the guard's release blocks bound the held region (it ends there)"
@@ -387,7 +402,10 @@ fn mutex_acquire_produces_no_region_but_spinlock_does() {
         },
     )
     .expect("must bridge");
-    assert_eq!(n_regions, 1, "only the SpinLock produces a region; the Mutex does not");
+    assert_eq!(
+        n_regions, 1,
+        "only the SpinLock produces a region; the Mutex does not"
+    );
     assert_eq!(region_kind, Some(SyncKind::SpinLock));
 }
 
@@ -460,7 +478,10 @@ fn irqspinlock_lock_in_isr_is_accepted() {
         },
     )
     .expect("an IrqSpinLock acquire in an #[rseq::isr] body is legal and must bridge");
-    assert_eq!(n_regions, 1, "the ISR-body IrqSpinLock acquire produces a region");
+    assert_eq!(
+        n_regions, 1,
+        "the ISR-body IrqSpinLock acquire produces a region"
+    );
 }
 
 #[test]
@@ -649,5 +670,8 @@ fn nested_distinct_spinlocks_are_accepted() {
         },
     )
     .expect("nesting distinct spinlocks is legal and must bridge");
-    assert_eq!(n_regions, 2, "each distinct spinlock acquire produces its own region");
+    assert_eq!(
+        n_regions, 2,
+        "each distinct spinlock acquire produces its own region"
+    );
 }

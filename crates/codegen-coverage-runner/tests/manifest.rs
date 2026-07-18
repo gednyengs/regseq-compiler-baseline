@@ -193,7 +193,9 @@ impl TempCorpus {
         std::fs::create_dir_all(&fixture_dir).expect("must create fixture dir");
         std::fs::write(
             fixture_dir.join("manifest.toml"),
-            format!("name = \"{name}\"\nkind = \"rust\"\ncovers = [\"BRM-1\"]\nexpect = \"pass\"\n"),
+            format!(
+                "name = \"{name}\"\nkind = \"rust\"\ncovers = [\"BRM-1\"]\nexpect = \"pass\"\n"
+            ),
         )
         .expect("must write manifest.toml");
         std::fs::write(fixture_dir.join("input.rs"), "#![no_std]\n").expect("must write input.rs");

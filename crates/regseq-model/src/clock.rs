@@ -139,9 +139,7 @@ mod ordered_clock_map {
         entries.serialize(serializer)
     }
 
-    pub fn deserialize<'de, D>(
-        deserializer: D,
-    ) -> Result<BTreeMap<ItemId, DriverClocks>, D::Error>
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<BTreeMap<ItemId, DriverClocks>, D::Error>
     where
         D: Deserializer<'de>,
     {

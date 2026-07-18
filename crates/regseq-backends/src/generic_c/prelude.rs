@@ -123,6 +123,92 @@ __attribute__((unused)) static intptr_t regseq_command_transport_submit(
 }
 "#;
 
+/// Deterministic host model for the rich-E1000 descriptor-DMA oracle seam.
+///
+/// This is deliberately gated by the caller to the composed descriptor-datapath
+/// model. Other DMA fixtures continue to execute their authored generic-C
+/// bodies unchanged. The two successful allocations model distinct coherent
+/// rings with stable, nonzero 32-bit bus addresses; reset-state seeds make the
+/// passive MMIO register file resemble the minimum 82540EM state consumed by
+/// the authored init path (link up and one valid unicast RAR entry).
+pub const DESCRIPTOR_DMA_ORACLE_HELPERS: &str = r#"
+/* ---------------------------------------------------------------------------
+ * Rich-E1000 descriptor-DMA host model. The addresses are simulated bus
+ * addresses, not host pointers, and remain stable across oracle executions. */
+#define REGSEQ_DESCRIPTOR_DMA_SLOTS 2u
+#define REGSEQ_DESCRIPTOR_DMA_BYTES 4096u
+typedef struct {
+    int allocated;
+    size_t length;
+    uint64_t transfer_address;
+} regseq_descriptor_dma_slot_t;
+static regseq_descriptor_dma_slot_t
+    regseq_descriptor_dma_slots[REGSEQ_DESCRIPTOR_DMA_SLOTS] __attribute__((unused));
+static uint8_t regseq_descriptor_dma_cpu[REGSEQ_DESCRIPTOR_DMA_SLOTS]
+                                         [REGSEQ_DESCRIPTOR_DMA_BYTES]
+    __attribute__((aligned(128), unused));
+
+__attribute__((unused)) static size_t regseq_descriptor_dma_allocate(
+        size_t size, size_t alignment, size_t boundary, int zero) {
+    if (size == 0u || size > REGSEQ_DESCRIPTOR_DMA_BYTES || alignment == 0u ||
+        (alignment & (alignment - 1u)) != 0u || alignment > 128u || boundary != 0u) {
+        return 0u;
+    }
+    for (size_t i = 0; i < REGSEQ_DESCRIPTOR_DMA_SLOTS; i++) {
+        regseq_descriptor_dma_slot_t *slot = &regseq_descriptor_dma_slots[i];
+        if (slot->allocated) continue;
+        slot->allocated = 1;
+        slot->length = size;
+        slot->transfer_address = 0x00100000ull + (uint64_t)i * 0x1000ull;
+        if (zero) memset(regseq_descriptor_dma_cpu[i], 0, size);
+        return i + 1u;
+    }
+    return 0u;
+}
+
+__attribute__((unused)) static void regseq_descriptor_dma_free(size_t identity) {
+    if (identity == 0u || identity > REGSEQ_DESCRIPTOR_DMA_SLOTS) return;
+    regseq_descriptor_dma_slot_t *slot = &regseq_descriptor_dma_slots[identity - 1u];
+    slot->allocated = 0;
+    slot->length = 0u;
+    slot->transfer_address = 0u;
+}
+
+__attribute__((unused)) static uint8_t *regseq_descriptor_dma_cpu_address(size_t identity) {
+    if (identity == 0u || identity > REGSEQ_DESCRIPTOR_DMA_SLOTS ||
+        !regseq_descriptor_dma_slots[identity - 1u].allocated) return 0;
+    return &regseq_descriptor_dma_cpu[identity - 1u][0];
+}
+
+__attribute__((unused)) static size_t regseq_descriptor_dma_length(size_t identity) {
+    if (identity == 0u || identity > REGSEQ_DESCRIPTOR_DMA_SLOTS ||
+        !regseq_descriptor_dma_slots[identity - 1u].allocated) return 0u;
+    return regseq_descriptor_dma_slots[identity - 1u].length;
+}
+
+__attribute__((unused)) static uint64_t regseq_descriptor_dma_transfer_address(size_t identity) {
+    if (identity == 0u || identity > REGSEQ_DESCRIPTOR_DMA_SLOTS ||
+        !regseq_descriptor_dma_slots[identity - 1u].allocated) return 0u;
+    return regseq_descriptor_dma_slots[identity - 1u].transfer_address;
+}
+
+/* Minimum deterministic 82540EM reset state used by the authored lifecycle:
+ * STATUS.LU=1 and RAR0=52:54:00:12:34:56 with RAH.AV=1. This is a device-model
+ * seed, not an MMIO access, so it emits no R/W oracle event. */
+__attribute__((constructor)) static void regseq_descriptor_dma_seed_device(void) {
+    const struct { uint32_t off; uint32_t value; } seeds[] = {
+        { 0x0008u, 0x00000002u },
+        { 0x5400u, 0x12005452u },
+        { 0x5404u, 0x80005634u },
+    };
+    for (size_t s = 0; s < sizeof(seeds) / sizeof(seeds[0]); s++) {
+        for (uint32_t i = 0; i < 4u; i++) {
+            regseq_regfile[seeds[s].off + i] = (uint8_t)(seeds[s].value >> (8u * i));
+        }
+    }
+}
+"#;
+
 /// Device-lifecycle trace-hook block (device-lifecycle construct, GRILL C01).
 ///
 /// Unlike the always-on register-access block above, this is emitted ONLY for a

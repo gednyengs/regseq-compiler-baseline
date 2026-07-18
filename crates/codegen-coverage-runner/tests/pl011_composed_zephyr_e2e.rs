@@ -103,8 +103,7 @@ fn pl011_composed_zephyr_six_stage_oracle() {
     // map_region with the real DUT platform literals (A-10: L2 is the
     // trigger; -1 = no BAR on an AMBA region), under the traced
     // qemu_cortex_a53/aarch64 Zephyr identity.
-    let golden =
-        std::fs::read_to_string(&fixture.golden_c).expect("read golden.zephyr-oracle.c");
+    let golden = std::fs::read_to_string(&fixture.golden_c).expect("read golden.zephyr-oracle.c");
     assert!(
         golden.contains("regseq_bus_map_region(0x9040000ull, 0x1000ull, -1);"),
         "golden.c must map the real declared DUT (base, size) from platform.toml"
@@ -133,8 +132,8 @@ fn pl011_composed_zephyr_six_stage_oracle() {
     // math lands the 24 MHz / 115200 divisors (IBRD 13, FBRD 1); and the
     // teardown suffix carries NO on_deinit call (GRILL risk #9 / D10's cited
     // whitelist entry class).
-    let stdout = std::fs::read_to_string(&fixture.expected_stdout)
-        .expect("read expected.zephyr.stdout");
+    let stdout =
+        std::fs::read_to_string(&fixture.expected_stdout).expect("read expected.zephyr.stdout");
     assert!(
         stdout.contains("match=amba:0x41011/0xfffff"),
         "the register marker keys on match_set.first() = the amba row (D09; \

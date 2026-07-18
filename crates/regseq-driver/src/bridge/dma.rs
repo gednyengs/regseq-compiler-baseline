@@ -98,7 +98,10 @@ pub(crate) fn resolve_dma(cx: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
                 build_channel(cx, trait_def, impl_def, driver_ty, &driver)
             })
             .transpose()?;
-        cx.model.dma.drivers.insert(item, DriverDma { buffer, channel });
+        cx.model
+            .dma
+            .drivers
+            .insert(item, DriverDma { buffer, channel });
     }
     Ok(())
 }
@@ -126,9 +129,7 @@ fn build_buffer<'tcx>(
         ));
     }
     validate_buffer_signatures(cx.input.tcx, trait_def, &overrides, driver)?;
-    let mut resolve = |name| {
-        resolve_method(cx, trait_def, driver_ty, name, &overrides, driver)
-    };
+    let mut resolve = |name| resolve_method(cx, trait_def, driver_ty, name, &overrides, driver);
     Ok(OwnedDmaBuffer {
         ops: DmaBufferOps {
             allocate: resolve("allocate")?,
@@ -171,9 +172,7 @@ fn build_channel<'tcx>(
         ));
     }
     validate_channel_signatures(cx.input.tcx, trait_def, &overrides, driver)?;
-    let mut resolve = |name| {
-        resolve_method(cx, trait_def, driver_ty, name, &overrides, driver)
-    };
+    let mut resolve = |name| resolve_method(cx, trait_def, driver_ty, name, &overrides, driver);
     Ok(AsyncTransferChannel {
         ops: DmaChannelOps {
             acquire: resolve("acquire")?,
@@ -284,7 +283,10 @@ fn reject_unknown(
     overrides: &HashSet<String>,
     allowed: &[&str],
 ) -> Result<(), BridgeError> {
-    if let Some(operation) = overrides.iter().find(|name| !allowed.contains(&name.as_str())) {
+    if let Some(operation) = overrides
+        .iter()
+        .find(|name| !allowed.contains(&name.as_str()))
+    {
         return Err(bad_signature(
             driver,
             operation,
@@ -306,27 +308,24 @@ fn validate_buffer_signatures(
         let inputs = sig.inputs();
         let output = sig.output();
         let result = match name.as_str() {
-            "allocate" => expect_signature(inputs, output, &["DmaBufferRequest"], "DmaBufferHandle"),
-            "free" => expect_signature(inputs, output, &["DmaBufferHandle"], "()"),
-            "cpu_address" => {
-                (|| {
-                    expect_arity(inputs, 2)?;
-                    expect_adt(inputs[1], "DmaBufferHandle")?;
-                    expect_u8_ptr(output, Mutability::Mut)
-                })()
+            "allocate" => {
+                expect_signature(inputs, output, &["DmaBufferRequest"], "DmaBufferHandle")
             }
+            "free" => expect_signature(inputs, output, &["DmaBufferHandle"], "()"),
+            "cpu_address" => (|| {
+                expect_arity(inputs, 2)?;
+                expect_adt(inputs[1], "DmaBufferHandle")?;
+                expect_u8_ptr(output, Mutability::Mut)
+            })(),
             "length" => expect_signature(inputs, output, &["DmaBufferHandle"], "usize"),
             "transfer_address" => (|| {
                 expect_arity(inputs, 2)?;
                 expect_adt(inputs[1], "DmaBufferHandle")?;
                 expect_option(tcx, output, "u64")
             })(),
-            "set_valid_length" => expect_signature(
-                inputs,
-                output,
-                &["DmaBufferHandle", "usize"],
-                "DmaStatus",
-            ),
+            "set_valid_length" => {
+                expect_signature(inputs, output, &["DmaBufferHandle", "usize"], "DmaStatus")
+            }
             _ => Ok(()),
         };
         result.map_err(|detail| bad_signature(driver, name, &detail))?;
@@ -353,8 +352,12 @@ fn validate_channel_signatures(
                 &["DmaChannelHandle", "DmaTransferConfig"],
                 "DmaStatus",
             ),
-            "prepare" => expect_signature(inputs, output, &["DmaChannelHandle"], "DmaRequestHandle"),
-            "submit" | "reclaim" => expect_signature(inputs, output, &["DmaRequestHandle"], "DmaStatus"),
+            "prepare" => {
+                expect_signature(inputs, output, &["DmaChannelHandle"], "DmaRequestHandle")
+            }
+            "submit" | "reclaim" => {
+                expect_signature(inputs, output, &["DmaRequestHandle"], "DmaStatus")
+            }
             "activate" | "pause" | "resume" | "suspend" | "terminate" | "synchronize" => {
                 expect_signature(inputs, output, &["DmaChannelHandle"], "DmaStatus")
             }
@@ -386,9 +389,12 @@ fn expect_signature(
 }
 
 fn expect_arity(inputs: &[Ty<'_>], count: usize) -> Result<(), String> {
-    (inputs.len() == count)
-        .then_some(())
-        .ok_or_else(|| format!("expected {count} inputs including receiver, found {}", inputs.len()))
+    (inputs.len() == count).then_some(()).ok_or_else(|| {
+        format!(
+            "expected {count} inputs including receiver, found {}",
+            inputs.len()
+        )
+    })
 }
 
 fn expect_type(ty: Ty<'_>, expected: &str) -> Result<(), String> {
@@ -428,8 +434,7 @@ fn expect_option(tcx: TyCtxt<'_>, ty: Ty<'_>, expected_inner: &str) -> Result<()
 fn expect_u8_ptr(ty: Ty<'_>, mutability: Mutability) -> Result<(), String> {
     match ty.kind() {
         TyKind::RawPtr(pointee, found)
-            if *found == mutability
-                && matches!(pointee.kind(), TyKind::Uint(ty::UintTy::U8)) =>
+            if *found == mutability && matches!(pointee.kind(), TyKind::Uint(ty::UintTy::U8)) =>
         {
             Ok(())
         }

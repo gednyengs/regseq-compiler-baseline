@@ -23,7 +23,22 @@ fn locked_serial_stage_accounts_for_all_frozen_pl011_rows() {
         .iter()
         .map(|row| row["owner"].as_str().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(owners.iter().filter(|owner| **owner == "serial-port").count(), 15);
-    assert_eq!(owners.iter().filter(|owner| **owner == "backend").count(), 4);
-    assert_eq!(owners.iter().filter(|owner| **owner == "other-construct").count(), 2);
+    assert_eq!(
+        owners
+            .iter()
+            .filter(|owner| **owner == "serial-port")
+            .count(),
+        15
+    );
+    assert_eq!(
+        owners.iter().filter(|owner| **owner == "backend").count(),
+        4
+    );
+    assert_eq!(
+        owners
+            .iter()
+            .filter(|owner| **owner == "other-construct")
+            .count(),
+        2
+    );
 }

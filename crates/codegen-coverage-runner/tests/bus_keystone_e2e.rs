@@ -115,7 +115,8 @@ fn brm_e1000_keystone_maps_the_real_platform_base_end_to_end() {
     // BEHAVIORAL GATE (dual oracle): `on_init`'s register access routes through the
     // BASED accessor, so the trace shows the real mapped absolute address
     // (base 0xf0000000 + ICR offset 0x08).
-    let stdout = std::fs::read_to_string(dir.join("expected.stdout")).expect("read expected.stdout");
+    let stdout =
+        std::fs::read_to_string(dir.join("expected.stdout")).expect("read expected.stdout");
     assert!(
         stdout.contains("@0xf0000008"),
         "behavioral stdout must show the based register access at the real mapped \

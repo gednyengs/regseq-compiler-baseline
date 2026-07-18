@@ -22,7 +22,11 @@ fn fixture(name: &str) -> manifest::Fixture {
 
 #[test]
 fn locked_dma_positive_frontend_and_generic_c_behavior() {
-    for name in ["dma-buffer-e1000", "dma-channel-pl011", "dma-independent-lifetimes"] {
+    for name in [
+        "dma-buffer-e1000",
+        "dma-channel-pl011",
+        "dma-independent-lifetimes",
+    ] {
         let fixture = fixture(name);
         let mut model = match try_bridge_fixture_path(&fixture.input) {
             BridgeOutcome::Ok(model) => model,
@@ -45,7 +49,10 @@ fn locked_dma_positive_frontend_and_generic_c_behavior() {
             referenced_core_shims.sort_unstable();
             assert_eq!(
                 referenced_core_shims,
-                vec![("core::cmp::PartialEq::ne", true), ("core::ptr::null_mut", true)],
+                vec![
+                    ("core::cmp::PartialEq::ne", true),
+                    ("core::ptr::null_mut", true)
+                ],
                 "external core helpers must remain model-bodyless after bridging",
             );
         }
@@ -114,7 +121,12 @@ fn locked_dma_negative_frontend_corpus() {
     assert_eq!(rejects.len(), 4, "the locked DMA negative corpus is exact");
     for fixture in rejects {
         let result = pipeline::run_fixture(fixture, Path::new("cc"));
-        assert!(result.is_green(), "{}: {:?}", fixture.manifest.name, result.verdict);
+        assert!(
+            result.is_green(),
+            "{}: {:?}",
+            fixture.manifest.name,
+            result.verdict
+        );
     }
 }
 

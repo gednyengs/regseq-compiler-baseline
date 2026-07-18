@@ -2,9 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use regseq_model::{
-    ClassTag, DriverNetworkInterface, InstanceRef, ItemId, NetworkInterfaceOps,
-};
+use regseq_model::{ClassTag, DriverNetworkInterface, InstanceRef, ItemId, NetworkInterfaceOps};
 use rustc_middle::ty::{self, Mutability, Ty, TyCtxt, TyKind};
 use rustc_span::def_id::DefId;
 
@@ -128,22 +126,38 @@ pub(crate) fn resolve_network_interfaces(cx: &mut BridgeCtxt<'_>) -> Result<(), 
         let driver_ty = tcx.type_of(driver_def).instantiate_identity();
         let ops = NetworkInterfaceOps {
             set_published: resolve_method(
-                cx, trait_def, driver_ty, "set_published", &overrides, &driver,
+                cx,
+                trait_def,
+                driver_ty,
+                "set_published",
+                &overrides,
+                &driver,
             )?,
             set_admin_enabled: resolve_method(
-                cx, trait_def, driver_ty, "set_admin_enabled", &overrides, &driver,
+                cx,
+                trait_def,
+                driver_ty,
+                "set_admin_enabled",
+                &overrides,
+                &driver,
             )?,
-            transmit: resolve_method(
-                cx, trait_def, driver_ty, "transmit", &overrides, &driver,
-            )?,
-            receive: resolve_method(
-                cx, trait_def, driver_ty, "receive", &overrides, &driver,
-            )?,
+            transmit: resolve_method(cx, trait_def, driver_ty, "transmit", &overrides, &driver)?,
+            receive: resolve_method(cx, trait_def, driver_ty, "receive", &overrides, &driver)?,
             report_carrier: resolve_method(
-                cx, trait_def, driver_ty, "report_carrier", &overrides, &driver,
+                cx,
+                trait_def,
+                driver_ty,
+                "report_carrier",
+                &overrides,
+                &driver,
             )?,
             report_dormant: resolve_method(
-                cx, trait_def, driver_ty, "report_dormant", &overrides, &driver,
+                cx,
+                trait_def,
+                driver_ty,
+                "report_dormant",
+                &overrides,
+                &driver,
             )?,
             query_operational_state: resolve_method(
                 cx,
@@ -154,25 +168,50 @@ pub(crate) fn resolve_network_interfaces(cx: &mut BridgeCtxt<'_>) -> Result<(), 
                 &driver,
             )?,
             get_property: resolve_method(
-                cx, trait_def, driver_ty, "get_property", &overrides, &driver,
+                cx,
+                trait_def,
+                driver_ty,
+                "get_property",
+                &overrides,
+                &driver,
             )?,
             set_property: resolve_method(
-                cx, trait_def, driver_ty, "set_property", &overrides, &driver,
+                cx,
+                trait_def,
+                driver_ty,
+                "set_property",
+                &overrides,
+                &driver,
             )?,
             read_counters: resolve_method(
-                cx, trait_def, driver_ty, "read_counters", &overrides, &driver,
+                cx,
+                trait_def,
+                driver_ty,
+                "read_counters",
+                &overrides,
+                &driver,
             )?,
             register_observer: resolve_method(
-                cx, trait_def, driver_ty, "register_observer", &overrides, &driver,
+                cx,
+                trait_def,
+                driver_ty,
+                "register_observer",
+                &overrides,
+                &driver,
             )?,
             unregister_observer: resolve_method(
-                cx, trait_def, driver_ty, "unregister_observer", &overrides, &driver,
+                cx,
+                trait_def,
+                driver_ty,
+                "unregister_observer",
+                &overrides,
+                &driver,
             )?,
         };
-        cx.model.network_interface.drivers.insert(
-            item,
-            DriverNetworkInterface { ops },
-        );
+        cx.model
+            .network_interface
+            .drivers
+            .insert(item, DriverNetworkInterface { ops });
     }
     Ok(())
 }
@@ -196,7 +235,9 @@ fn all_trait_impls_by_driver(tcx: TyCtxt<'_>) -> HashMap<DefId, Vec<(String, Def
         for local_impl in impls {
             let impl_def = local_impl.to_def_id();
             let trait_ref = tcx.impl_trait_ref(impl_def).skip_binder();
-            let Some(adt) = trait_ref.self_ty().ty_adt_def() else { continue };
+            let Some(adt) = trait_ref.self_ty().ty_adt_def() else {
+                continue;
+            };
             result.entry(adt.did()).or_default().push((
                 tcx.item_name(trait_ref.def_id).to_string(),
                 trait_ref.def_id,
@@ -279,9 +320,13 @@ fn validate_signatures(
             "set_published" | "set_admin_enabled" => {
                 expect(tcx, inputs, output, &["bool"], "isize")
             }
-            "transmit" => {
-                expect(tcx, inputs, output, &["OpaquePacketBuffer"], "Option<SubmissionVerdict>")
-            }
+            "transmit" => expect(
+                tcx,
+                inputs,
+                output,
+                &["OpaquePacketBuffer"],
+                "Option<SubmissionVerdict>",
+            ),
             "receive" => expect(tcx, inputs, output, &["OpaquePacketBuffer"], "()"),
             "report_carrier" => expect(tcx, inputs, output, &["bool"], "()"),
             "report_dormant" => expect(tcx, inputs, output, &["bool"], "isize"),
@@ -317,9 +362,7 @@ fn expect_receiver(receiver: Option<Ty<'_>>, mutable: bool) -> Result<(), String
         return Err(format!("expected `{expected}` receiver"));
     };
     let matches = match receiver.kind() {
-        TyKind::Ref(_, _, mutability) => {
-            (*mutability == Mutability::Mut) == mutable
-        }
+        TyKind::Ref(_, _, mutability) => (*mutability == Mutability::Mut) == mutable,
         _ => false,
     };
     matches

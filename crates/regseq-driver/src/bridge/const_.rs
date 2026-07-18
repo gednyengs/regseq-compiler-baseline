@@ -18,10 +18,13 @@ use super::{ty::translate_ty, BridgeCtxt, BridgeError, ItemHandle, PendingItem};
 /// Phase-2 cache entry for a bridge-synthesised ConstMemoryStatic item.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConstMemoryStaticHandle {
-    /// Canonical content hash for the byte-level allocation.
+    /// Canonical identity hash for the byte-level allocation.
     pub content_hash: ContentHash,
     /// ConstId of the byte-level initializer.
     pub pointee_const: ConstId,
+    /// Consumer type used only to disambiguate identical bytes at incompatible
+    /// pointee types. The first consumer retains the legacy content-only hash.
+    pub consumer_type: Option<String>,
     /// Phase-2 item handle remapped to final ItemId during Phase 4.
     pub handle: ItemHandle,
 }
@@ -141,15 +144,26 @@ fn translate_ty_const<'tcx>(
 pub fn synthesise_const_memory_static<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     pointee_const: ConstId,
+    consumer_ty: Option<rustc_middle::ty::Ty<'tcx>>,
 ) -> Result<ItemHandle, BridgeError> {
-    let content_hash = content_hash_for_const(cx, pointee_const);
+    let consumer_type = consumer_type(cx, consumer_ty);
     if let Some(entry) = cx
         .const_memory_static_cache
         .iter()
-        .find(|entry| entry.content_hash == content_hash)
+        .find(|entry| entry.pointee_const == pointee_const && entry.consumer_type == consumer_type)
     {
         return Ok(entry.handle);
     }
+    let base_hash = content_hash_for_const(cx, pointee_const);
+    let content_hash = if cx
+        .const_memory_static_cache
+        .iter()
+        .any(|entry| entry.content_hash == base_hash)
+    {
+        typed_content_hash_for_const(cx, pointee_const, consumer_type.as_deref())
+    } else {
+        base_hash
+    };
 
     let handle = cx.handles.fresh_handle();
     let synthetic_kind = SyntheticItemKind::ConstMemoryStatic {
@@ -196,6 +210,7 @@ pub fn synthesise_const_memory_static<'tcx>(
     cx.const_memory_static_cache.push(ConstMemoryStaticHandle {
         content_hash,
         pointee_const,
+        consumer_type,
         handle,
     });
     Ok(handle)
@@ -350,8 +365,8 @@ fn translate_const_value<'tcx>(
             };
             let bytes = allocation_bytes(cx, memory.inner())?;
             let pointee = cx.model.consts.intern(Const::Bytes(bytes));
-            synthesise_const_memory_static(cx, pointee)?;
-            let inner = Const::Reloc(instance_ref_for_const(cx, pointee));
+            synthesise_const_memory_static(cx, pointee, Some(ty))?;
+            let inner = Const::Reloc(instance_ref_for_const(cx, pointee, Some(ty)));
             wrap_reference_const(cx, ty, inner, meta as u128)?
         }
         mir::ConstValue::Indirect { alloc_id, offset } => {
@@ -366,13 +381,13 @@ fn translate_const_value<'tcx>(
                     let bytes = allocation_bytes(cx, memory.inner())?;
                     if matches!(ty.kind(), TyKind::Ref(..)) {
                         let pointee = cx.model.consts.intern(Const::Bytes(bytes));
-                        synthesise_const_memory_static(cx, pointee)?;
-                        let inner = Const::Reloc(instance_ref_for_const(cx, pointee));
+                        synthesise_const_memory_static(cx, pointee, Some(ty))?;
+                        let inner = Const::Reloc(instance_ref_for_const(cx, pointee, Some(ty)));
                         wrap_reference_const(cx, ty, inner, 0)?
                     } else if matches!(ty.kind(), TyKind::RawPtr(..)) {
                         let pointee = cx.model.consts.intern(Const::Bytes(bytes));
-                        synthesise_const_memory_static(cx, pointee)?;
-                        Const::Reloc(instance_ref_for_const(cx, pointee))
+                        synthesise_const_memory_static(cx, pointee, Some(ty))?;
+                        Const::Reloc(instance_ref_for_const(cx, pointee, Some(ty)))
                     } else {
                         Const::Bytes(bytes)
                     }
@@ -419,8 +434,8 @@ fn translate_scalar<'tcx>(
                 GlobalAlloc::Memory(memory) => {
                     let bytes = allocation_bytes(cx, memory.inner())?;
                     let pointee = cx.model.consts.intern(Const::Bytes(bytes));
-                    synthesise_const_memory_static(cx, pointee)?;
-                    Const::Reloc(instance_ref_for_const(cx, pointee))
+                    synthesise_const_memory_static(cx, pointee, Some(ty))?;
+                    Const::Reloc(instance_ref_for_const(cx, pointee, Some(ty)))
                 }
                 GlobalAlloc::Static(def_id) => {
                     Const::Reloc(instance_ref_for_static(cx.input.tcx, def_id))
@@ -510,16 +525,14 @@ fn translate_scalar_int<'tcx>(
         TyKind::RawPtr(pointee, _) | TyKind::Ref(_, pointee, _) if bits == 0 => {
             Const::NullPtr(translate_ty(cx, *pointee)?)
         }
-        _ => {
-            match translate_scalar_int_aggregate(cx, value, ty)? {
-                Some(aggregate) => aggregate,
-                None => {
-                    return Err(BridgeError::UnsupportedConst {
-                        const_repr: format!("scalar int {value:?} for {}", ty),
-                    });
-                }
+        _ => match translate_scalar_int_aggregate(cx, value, ty)? {
+            Some(aggregate) => aggregate,
+            None => {
+                return Err(BridgeError::UnsupportedConst {
+                    const_repr: format!("scalar int {value:?} for {}", ty),
+                });
             }
-        }
+        },
     })
 }
 
@@ -598,8 +611,8 @@ fn allocation_bytes<'tcx>(
                 GlobalAlloc::Memory(memory) => {
                     let pointee_bytes = allocation_bytes(cx, memory.inner())?;
                     let pointee = cx.model.consts.intern(Const::Bytes(pointee_bytes));
-                    synthesise_const_memory_static(cx, pointee)?;
-                    Byte::Reloc(instance_ref_for_const(cx, pointee))
+                    synthesise_const_memory_static(cx, pointee, None)?;
+                    Byte::Reloc(instance_ref_for_const(cx, pointee, None))
                 }
                 GlobalAlloc::Static(def_id) => {
                     Byte::Reloc(instance_ref_for_static(cx.input.tcx, def_id))
@@ -683,8 +696,19 @@ pub(crate) fn instance_ref_for_function_provenance<'tcx>(
     Ok(cx.model.instance_ref_of(id))
 }
 
-fn instance_ref_for_const(cx: &BridgeCtxt<'_>, pointee_const: ConstId) -> InstanceRef {
-    let content_hash = content_hash_for_const(cx, pointee_const);
+fn instance_ref_for_const<'tcx>(
+    cx: &BridgeCtxt<'tcx>,
+    pointee_const: ConstId,
+    consumer_ty: Option<rustc_middle::ty::Ty<'tcx>>,
+) -> InstanceRef {
+    let consumer_type = consumer_type(cx, consumer_ty);
+    let content_hash = cx
+        .const_memory_static_cache
+        .iter()
+        .find(|entry| entry.pointee_const == pointee_const && entry.consumer_type == consumer_type)
+        .expect("ConstMemoryStatic must be synthesised before its InstanceRef")
+        .content_hash
+        .clone();
     let kind = SyntheticItemKind::ConstMemoryStatic { content_hash };
     InstanceRef {
         regseq_kind_rank: 1,
@@ -714,6 +738,29 @@ fn def_path_hash(tcx: rustc_middle::ty::TyCtxt<'_>, def_id: DefId) -> regseq_mod
 fn content_hash_for_const(cx: &BridgeCtxt<'_>, pointee_const: ConstId) -> ContentHash {
     let bytes = canonical_const_bytes(&cx.model, pointee_const);
     let digest = Sha256::digest(bytes);
+    let mut head = [0; 16];
+    head.copy_from_slice(&digest[..16]);
+    ContentHash(u128::from_be_bytes(head))
+}
+
+fn consumer_type<'tcx>(
+    cx: &BridgeCtxt<'tcx>,
+    consumer_ty: Option<rustc_middle::ty::Ty<'tcx>>,
+) -> Option<String> {
+    consumer_ty.map(|ty| cx.input.tcx.erase_and_anonymize_regions(ty).to_string())
+}
+
+fn typed_content_hash_for_const(
+    cx: &BridgeCtxt<'_>,
+    pointee_const: ConstId,
+    consumer_type: Option<&str>,
+) -> ContentHash {
+    let bytes = canonical_const_bytes(&cx.model, pointee_const);
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher.update([0xff]);
+    hasher.update(consumer_type.unwrap_or("<untyped>").as_bytes());
+    let digest = hasher.finalize();
     let mut head = [0; 16];
     head.copy_from_slice(&digest[..16]);
     ContentHash(u128::from_be_bytes(head))

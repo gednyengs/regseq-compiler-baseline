@@ -52,9 +52,7 @@ pub(crate) fn validate_submit_signatures(cx: &mut BridgeCtxt<'_>) -> Result<(), 
 
         let output = sig.output();
         let Some(adt) = output.ty_adt_def() else {
-            return bad_signature(format!(
-                "return type `{output}` is not `SubmissionOutcome`"
-            ));
+            return bad_signature(format!("return type `{output}` is not `SubmissionOutcome`"));
         };
         if !adt.is_enum() || tcx.item_name(adt.did()).as_str() != "SubmissionOutcome" {
             return bad_signature(format!(
@@ -78,8 +76,7 @@ pub(crate) fn validate_submit_signatures(cx: &mut BridgeCtxt<'_>) -> Result<(), 
             });
         if !exact {
             return bad_signature(
-                "`SubmissionOutcome` must contain exactly `Accepted` and `Rejected(isize)`"
-                    .into(),
+                "`SubmissionOutcome` must contain exactly `Accepted` and `Rejected(isize)`".into(),
             );
         }
     }
@@ -97,7 +94,11 @@ fn bad_signature(detail: String) -> Result<(), BridgeError> {
 /// only `Accepted | Rejected(native_reason)` at the call site.
 pub(crate) fn validate_submit_results(model: &RegseqModel) -> Result<(), BridgeError> {
     for instance in model.instances.iter() {
-        let Some(body) = instance.kind.as_function().and_then(|data| data.body.as_ref()) else {
+        let Some(body) = instance
+            .kind
+            .as_function()
+            .and_then(|data| data.body.as_ref())
+        else {
             continue;
         };
         for block in body.basic_blocks.iter() {

@@ -3,11 +3,12 @@
 use std::collections::{HashMap, HashSet};
 
 use regseq_model::{
-    ClassTag, DriverSerialPort, InstanceRef, ItemId, SerialEnumBinding, SerialPortOps,
-    SerialTypeBindings, VariantIdx,
+    ClassTag, DriverSerialPort, InstanceRef, ItemId, SerialEnumBinding, SerialHardwareOps,
+    SerialPortOps, SerialTypeBindings, VariantIdx,
 };
+use rustc_hir::def::DefKind;
 use rustc_middle::ty::{self, Mutability, Ty, TyCtxt, TyKind};
-use rustc_span::def_id::DefId;
+use rustc_span::{def_id::DefId, Symbol as RustcSymbol};
 
 use super::const_::instance_ref_for_function_provenance;
 use super::framework_type::recover_source_def_id;
@@ -137,12 +138,102 @@ pub(crate) fn resolve_serial_ports(cx: &mut BridgeCtxt<'_>) -> Result<(), Bridge
             await_drain: resolve("await_drain")?,
             abort: resolve("abort")?,
         };
-        cx.model
-            .serial_port
-            .drivers
-            .insert(item_id, DriverSerialPort { ops, types });
+        let hardware_ops = SerialHardwareOps {
+            break_send: resolve_break_send(cx, driver_def, driver_ty, &driver_name)?,
+            break_send_enabled: false,
+        };
+        cx.model.serial_port.drivers.insert(
+            item_id,
+            DriverSerialPort {
+                ops,
+                types,
+                hardware_ops,
+            },
+        );
     }
     Ok(())
+}
+
+fn resolve_break_send<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    driver_def: DefId,
+    driver_ty: Ty<'tcx>,
+    driver: &str,
+) -> Result<Option<InstanceRef>, BridgeError> {
+    let tcx = cx.input.tcx;
+    let path = [
+        RustcSymbol::intern("rseq"),
+        RustcSymbol::intern("backend_capability"),
+    ];
+    let mut matches = Vec::new();
+    for local_def in tcx.hir_crate_items(()).definitions() {
+        let method = local_def.to_def_id();
+        if tcx.def_kind(method) != DefKind::AssocFn {
+            continue;
+        }
+        let impl_def = tcx.parent(method);
+        if !matches!(tcx.def_kind(impl_def), DefKind::Impl { of_trait: false })
+            || tcx
+                .type_of(impl_def)
+                .instantiate_identity()
+                .ty_adt_def()
+                .is_none_or(|adt| adt.did() != driver_def)
+        {
+            continue;
+        }
+        let mut attrs = tcx.get_attrs_by_path(method, &path);
+        let Some(attr) = attrs.next() else {
+            continue;
+        };
+        if attrs.next().is_some() {
+            continue;
+        }
+        let Some(list) = attr.meta_item_list() else {
+            continue;
+        };
+        let [nested] = list.as_slice() else {
+            continue;
+        };
+        let Some(lit) = nested.lit() else {
+            continue;
+        };
+        let rustc_ast::LitKind::Str(name, _) = lit.kind else {
+            continue;
+        };
+        if name.as_str() == "serial-hardware-ops.break-send" {
+            matches.push(method);
+        }
+    }
+
+    let bad = |detail: String| {
+        BridgeError::SerialValidation(SerialDiagnostic::BadSignature {
+            driver: driver.to_string(),
+            operation: "serial-hardware-ops.break-send".into(),
+            detail,
+        })
+    };
+    let Some(method) = matches.pop() else {
+        return Ok(None);
+    };
+    if !matches.is_empty() {
+        return Err(bad(
+            "more than one authored hook carries this capability".into()
+        ));
+    }
+    let sig = tcx.fn_sig(method).instantiate_identity().skip_binder();
+    let [receiver, asserted] = sig.inputs() else {
+        return Err(bad("expected `fn(&mut Self, bool)`".into()));
+    };
+    if !matches!(receiver.kind(), TyKind::Ref(_, inner, Mutability::Mut) if *inner == driver_ty)
+        || !matches!(asserted.kind(), TyKind::Bool)
+        || !matches!(sig.output().kind(), TyKind::Tuple(fields) if fields.is_empty())
+    {
+        return Err(bad("expected `fn(&mut Self, bool) -> ()`".into()));
+    }
+    Ok(Some(instance_ref_for_function_provenance(
+        cx,
+        ty::Instance::mono(tcx, method),
+    )?))
 }
 
 fn serial_targets(cx: &BridgeCtxt<'_>) -> Vec<(ItemId, DefId)> {
@@ -273,14 +364,12 @@ fn validate_overrides(
             }
             "transmit" => {
                 expect_arity(inputs, 2).map_err(bad)?;
-                validate_buffer(tcx, inputs[1], "SerialTxBuffer", false)
-                    .map_err(bad)?;
+                validate_buffer(tcx, inputs[1], "SerialTxBuffer", false).map_err(bad)?;
                 expect_uint(output, ty::UintTy::Usize).map_err(bad)?;
             }
             "receive" => {
                 expect_arity(inputs, 2).map_err(bad)?;
-                validate_buffer(tcx, inputs[1], "SerialRxBuffer", true)
-                    .map_err(bad)?;
+                validate_buffer(tcx, inputs[1], "SerialRxBuffer", true).map_err(bad)?;
                 expect_uint(output, ty::UintTy::Usize).map_err(bad)?;
             }
             "set_signals" => {
@@ -290,8 +379,16 @@ fn validate_overrides(
                     inputs[1],
                     "ModemSignalSet",
                     &[
-                        "dtr", "rts", "cts", "dsr", "dcd", "ri", "changed_cts",
-                        "changed_dsr", "changed_dcd", "changed_ri",
+                        "dtr",
+                        "rts",
+                        "cts",
+                        "dsr",
+                        "dcd",
+                        "ri",
+                        "changed_cts",
+                        "changed_dsr",
+                        "changed_dcd",
+                        "changed_ri",
                     ],
                 )
                 .map_err(bad)?;
@@ -304,8 +401,16 @@ fn validate_overrides(
                     output,
                     "ModemSignalSet",
                     &[
-                        "dtr", "rts", "cts", "dsr", "dcd", "ri", "changed_cts",
-                        "changed_dsr", "changed_dcd", "changed_ri",
+                        "dtr",
+                        "rts",
+                        "cts",
+                        "dsr",
+                        "dcd",
+                        "ri",
+                        "changed_cts",
+                        "changed_dsr",
+                        "changed_dcd",
+                        "changed_ri",
                     ],
                 )
                 .map_err(bad)?;
@@ -353,9 +458,12 @@ fn validate_overrides(
 }
 
 fn expect_arity(inputs: &[Ty<'_>], count: usize) -> Result<(), String> {
-    (inputs.len() == count)
-        .then_some(())
-        .ok_or_else(|| format!("expected {count} inputs including receiver, found {}", inputs.len()))
+    (inputs.len() == count).then_some(()).ok_or_else(|| {
+        format!(
+            "expected {count} inputs including receiver, found {}",
+            inputs.len()
+        )
+    })
 }
 
 fn expect_uint(ty: Ty<'_>, expected: ty::UintTy) -> Result<(), String> {
@@ -455,8 +563,8 @@ fn validate_buffer(
                 }
                 _ => {
                     return Err(format!(
-                        "expected `{expected}.errors` to be `*mut LineErrorFlags`, found `{field_ty}`"
-                    ))
+                    "expected `{expected}.errors` to be `*mut LineErrorFlags`, found `{field_ty}`"
+                ))
                 }
             },
             _ => unreachable!(),

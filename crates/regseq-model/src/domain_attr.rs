@@ -857,7 +857,10 @@ mod tests {
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Log(LogLevel::Debug)), 0);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Mmio(MmioOp::Read)), 1);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::PollUntil), 2);
-        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)), 3);
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)),
+            3
+        );
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::BusyWait), 4);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Sleep), 5);
         assert_eq!(attr_data_tag(&AttrData::Intrinsic(IntrinsicKind::Sleep)), 0);
@@ -900,7 +903,10 @@ mod tests {
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Log(LogLevel::Debug)), 0);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Mmio(MmioOp::Read)), 1);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::PollUntil), 2);
-        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)), 3);
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)),
+            3
+        );
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::BusyWait), 4);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Sleep), 5);
         assert_eq!(
@@ -1285,7 +1291,10 @@ mod tests {
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Log(LogLevel::Debug)), 0);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Mmio(MmioOp::Read)), 1);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::PollUntil), 2);
-        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)), 3);
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)),
+            3
+        );
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::BusyWait), 4);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Sleep), 5);
         assert_eq!(
@@ -1387,7 +1396,10 @@ mod tests {
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Log(LogLevel::Debug)), 0);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Mmio(MmioOp::Read)), 1);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::PollUntil), 2);
-        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)), 3);
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)),
+            3
+        );
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::BusyWait), 4);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Sleep), 5);
         assert_eq!(
@@ -1491,7 +1503,10 @@ mod tests {
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Log(LogLevel::Debug)), 0);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Mmio(MmioOp::Read)), 1);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::PollUntil), 2);
-        assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)), 3);
+        assert_eq!(
+            intrinsic_kind_tag(&IntrinsicKind::Config(ConfigOp::Read)),
+            3
+        );
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::BusyWait), 4);
         assert_eq!(intrinsic_kind_tag(&IntrinsicKind::Sleep), 5);
         assert_eq!(
@@ -1520,12 +1535,18 @@ mod tests {
         // `submit_unique` is reserved (Out of Scope); `init_work`/`cancel_work`
         // are compiler-managed (not intrinsics); dash-form is rejected (deferred
         // work uses underscore form, matching the facade tag).
-        assert_eq!(IntrinsicKind::from_name(symbol("deferred_work_submit_unique")), None);
+        assert_eq!(
+            IntrinsicKind::from_name(symbol("deferred_work_submit_unique")),
+            None
+        );
         assert_eq!(IntrinsicKind::from_name(symbol("submit_unique")), None);
         assert_eq!(IntrinsicKind::from_name(symbol("init_work")), None);
         assert_eq!(IntrinsicKind::from_name(symbol("cancel_work")), None);
         assert_eq!(IntrinsicKind::from_name(symbol("acquire_work")), None);
-        assert_eq!(IntrinsicKind::from_name(symbol("deferred-work-submit")), None);
+        assert_eq!(
+            IntrinsicKind::from_name(symbol("deferred-work-submit")),
+            None
+        );
         assert_eq!(IntrinsicKind::from_name(symbol("deferred_work")), None);
         assert_eq!(IntrinsicKind::from_name(symbol("submit")), None);
     }
@@ -1560,10 +1581,7 @@ mod tests {
         // (next-free after `PinStateMarker = 8`) without shifting any prior
         // variant, and round-trips through JSON for both `field` values (only
         // the bare `None` form is built; `Some` is design-in).
-        assert_eq!(
-            attr_data_tag(&AttrData::WorkHandler { field: None }),
-            9
-        );
+        assert_eq!(attr_data_tag(&AttrData::WorkHandler { field: None }), 9);
         assert_eq!(
             attr_data_tag(&AttrData::PinStateMarker {
                 id: StringId::from_u32(1),

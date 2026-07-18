@@ -7,8 +7,8 @@ use std::path::Path;
 use test_ir_fixtures::{try_bridge_fixture_path, BridgeOutcome};
 
 fn model() -> regseq_model::RegseqModel {
-    let input = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/_network/network-full/input.rs");
+    let input =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_network/network-full/input.rs");
     match try_bridge_fixture_path(&input) {
         BridgeOutcome::Ok(model) => model,
         other => panic!("network-full bridge failed: {other:?}"),
@@ -17,8 +17,13 @@ fn model() -> regseq_model::RegseqModel {
 
 fn linux_model() -> regseq_model::RegseqModel {
     let mut model = model();
-    model.device_lifecycle.drivers.values_mut().next().unwrap().ops =
-        regseq_model::LifecycleOps::default();
+    model
+        .device_lifecycle
+        .drivers
+        .values_mut()
+        .next()
+        .unwrap()
+        .ops = regseq_model::LifecycleOps::default();
     let interrupt = model.interrupt.drivers.values_mut().next().unwrap();
     interrupt.resources[0].binding.shared = false;
     model
@@ -29,9 +34,7 @@ fn zephyr_model() -> regseq_model::RegseqModel {
     let compatible = model.strings.intern("regseq,netfull");
     let driver = model.device_lifecycle.drivers.values_mut().next().unwrap();
     driver.descriptor.bus_type = None;
-    driver.descriptor.match_set = vec![regseq_model::MatchEntry::Devicetree {
-        compatible,
-    }];
+    driver.descriptor.match_set = vec![regseq_model::MatchEntry::Devicetree { compatible }];
     driver.ops = regseq_model::LifecycleOps::default();
     model.interrupt.drivers.clear();
     model.dma.drivers.clear();
@@ -67,6 +70,9 @@ fn network_linux_lowers_packet_descriptor_index_and_lifecycle_ownership() {
         "NETDEV_TX_BUSY; /* rejection: caller retains packet */",
         "NETDEV_TX_OK; /* accepted: binding owns reclamation */",
         "dev_consume_skb_any(packet)",
+        "netif_carrier_off(priv->netdev)",
+        "netif_tx_stop_all_queues(priv->netdev)",
+        "alloc_etherdev installed the kernel default ethtool_ops",
         "register_netdev(priv->netdev)",
         "unregister_netdev(priv->netdev)",
         "request_irq(pdev->irq",
@@ -78,13 +84,21 @@ fn network_linux_lowers_packet_descriptor_index_and_lifecycle_ownership() {
     let initialize = tu.find("priv->tx_ring = dma_alloc_coherent").unwrap();
     let publish = tu.find("register_netdev(priv->netdev)").unwrap();
     assert!(initialize < publish, "publication preceded initialization");
+    assert!(
+        tu.find("netif_carrier_off(priv->netdev)").unwrap() < publish
+            && tu.find("netif_tx_stop_all_queues(priv->netdev)").unwrap() < publish,
+        "carrier/queue state was not initialized before publication",
+    );
 
     let remove = tu.find("static void netfull_remove").unwrap();
     let teardown = &tu[remove..];
     let drain = teardown.find("cancel_work_sync").unwrap();
     let mask = teardown.find("disable_irq").unwrap();
     let withdraw = teardown.find("unregister_netdev").unwrap();
-    assert!(drain < mask && mask < withdraw, "teardown is not D1 -> D2 -> withdraw");
+    assert!(
+        drain < mask && mask < withdraw,
+        "teardown is not D1 -> D2 -> withdraw"
+    );
     assert!(!tu.contains("packet_completed"));
     assert!(!tu.contains("packet_canceled"));
 }
@@ -97,6 +111,7 @@ fn network_zephyr_lowers_native_capabilities_and_rejects_runtime_publication() {
     for needle in [
         "net_if_up(iface)",
         "net_if_down(iface)",
+        "net_if_flag_set(iface, NET_IF_NO_AUTO_START)",
         "net_if_send_data(iface, packet)",
         "net_recv_data(iface, packet)",
         "net_if_carrier_on(iface)",
@@ -109,6 +124,13 @@ fn network_zephyr_lowers_native_capabilities_and_rejects_runtime_publication() {
     ] {
         assert!(tu.contains(needle), "missing Zephyr NIM proof {needle}");
     }
+
+    assert!(
+        tu.find("ethernet_init(iface);").unwrap()
+            < tu.find("net_if_flag_set(iface, NET_IF_NO_AUTO_START);")
+                .unwrap(),
+        "publication must suppress OS auto-start after Ethernet L2 initialization"
+    );
 
     let error = regseq_backends::emit_zephyr_c(&model())
         .expect_err("runtime publication must remain absent on Zephyr");
@@ -131,6 +153,9 @@ fn network_source_forbids_backend_mechanisms_in_portable_table() {
         "IrqBinding",
         "WorkQueue",
     ] {
-        assert!(!text.contains(forbidden), "portable NIM source contains {forbidden}");
+        assert!(
+            !text.contains(forbidden),
+            "portable NIM source contains {forbidden}"
+        );
     }
 }

@@ -55,6 +55,9 @@ pub(crate) struct LowerCx<'m> {
     /// Function instances intentionally emitted as surface-complete but not
     /// scaffold-wired callbacks.
     pub unused_fn_instances: std::collections::BTreeSet<InstanceId>,
+    /// Function whose body is currently being lowered. Register lowering uses
+    /// this to apply callback-specific native glue without changing author IR.
+    pub emitting_fn: Option<InstanceId>,
 }
 
 impl<'m> LowerCx<'m> {
@@ -160,7 +163,12 @@ pub(crate) fn fn_head(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
     } else {
         ""
     };
-    Ok(format!("static{unused} {ret} {c_name}({params})"))
+    let inline = if c_name.ends_with("_descriptor_command") {
+        " __always_inline"
+    } else {
+        ""
+    };
+    Ok(format!("static{unused}{inline} {ret} {c_name}({params})"))
 }
 
 /// A trivial projection accessor: a one-block body of exactly
@@ -225,6 +233,12 @@ pub(crate) fn trivial_accessor_tail(
 /// Emit one lowered function definition.
 pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<String, EmitError> {
     let head = fn_head(cx, instance)?;
+    if let Some(shim) = super::serial::emit_event_shim(cx, instance, &head)? {
+        return Ok(shim);
+    }
+    if let Some(shim) = super::dma::emit_buffer_op_shim(cx, instance, &head)? {
+        return Ok(shim);
+    }
     let inst = &cx.model.instances[instance];
     let InstanceKind::Function(data) = &inst.kind else {
         unreachable!("fn_head certified the function shape");
@@ -239,7 +253,9 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
         return Ok(format!("{head}\n{{\n{body}}}\n"));
     }
     let body = data.body.as_ref().expect("fn_head certified a body");
+    cx.emitting_fn = Some(instance);
     let sig = cx.model.sigs.resolve(data.fn_sig);
+    let return_epilogue = super::serial::set_signals_shadow_update(cx, instance, body)?;
 
     // Destinations of trivial-accessor calls: their calls are elided and the
     // locals are never declared; any non-receiver use fails loud.
@@ -389,6 +405,11 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
         if let Some(stmt) = sync_body.stmts.get(&block_id) {
             emit_sync_terminator(&bb.terminator.kind, stmt, &mut out)?;
         } else {
+            if matches!(bb.terminator.kind, TerminatorKind::Return) {
+                if let Some(epilogue) = &return_epilogue {
+                    out.push_str(epilogue);
+                }
+            }
             emit_terminator(cx, body, &bb.terminator.kind, ret_zst, &mut out)?;
         }
     }
@@ -482,7 +503,7 @@ fn emit_assign(
         }
         Rvalue::Cast(kind, op, to_ty) => {
             match kind {
-                CastKind::IntToInt => {}
+                CastKind::IntToInt | CastKind::PointerExposeProvenance => {}
                 other => {
                     return Err(EmitError::Unsupported(format!(
                         "cast kind {other:?} (first-light subset)"
@@ -525,9 +546,8 @@ fn emit_assign(
                     )))
                 }
             };
-            let layout = types::layout_of(cx.model, src_ty).ok_or_else(|| {
-                EmitError::Unsupported("discriminant of a non-aggregate".into())
-            })?;
+            let layout = types::layout_of(cx.model, src_ty)
+                .ok_or_else(|| EmitError::Unsupported("discriminant of a non-aggregate".into()))?;
             let LayoutKind::Enum {
                 shape: EnumShape::Multiple { variants, .. },
             } = &layout.kind
@@ -545,7 +565,9 @@ fn emit_assign(
             let is_identity = variants.iter().all(|v| v.tag_value == Some(v.discriminant));
             let to_u64 = |x: u128| -> Result<u64, EmitError> {
                 (x <= u64::MAX as u128).then_some(x as u64).ok_or_else(|| {
-                    EmitError::Unsupported("128-bit enum tag/discriminant (first-light subset)".into())
+                    EmitError::Unsupported(
+                        "128-bit enum tag/discriminant (first-light subset)".into(),
+                    )
                 })
             };
             if is_identity && size == 1 {
@@ -621,12 +643,23 @@ fn bin_op_token(op: &BinOp) -> Result<&'static str, EmitError> {
         BinOp::Le => "<=",
         BinOp::Ge => ">=",
         BinOp::Gt => ">",
+        BinOp::Offset => "+",
         other => {
             return Err(EmitError::Unsupported(format!(
                 "binary op {other:?} (first-light subset)"
             )))
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pointer_offset_uses_c_pointer_arithmetic() {
+        assert_eq!(bin_op_token(&BinOp::Offset).unwrap(), "+");
+    }
 }
 
 /// Aggregate construction. Structs/tuples assign memberwise; enum variants
@@ -999,7 +1032,44 @@ fn emit_call(
         let lv = place_lvalue(cx, body, destination)?;
         out.push_str(&format!("\t{lv} = {call};\n"));
     }
+    if let Some(op) = descriptor_network_op(cx.model, *instance) {
+        let recovery = config_recovery(cx, body)?;
+        match op {
+            "report_carrier" => {
+                let present = operand_expr(cx, body, &args[1])?;
+                cx.extra_includes.insert("<linux/netdevice.h>");
+                out.push_str(&format!(
+                    "\t{{ {recovery} if ({present}) netif_carrier_on(__rseq_priv->netdev); else netif_carrier_off(__rseq_priv->netdev); }}\n"
+                ));
+            }
+            "receive" => {
+                let packet = operand_expr(cx, body, &args[1])?;
+                cx.extra_includes.insert("<linux/skbuff.h>");
+                out.push_str(&format!(
+                    "\t{{ {recovery} struct sk_buff *__packet = (struct sk_buff *)(uintptr_t)({packet}.identity); if (__packet) {{ __packet->dev = __rseq_priv->netdev; __packet->protocol = eth_type_trans(__packet, __rseq_priv->netdev); (void)napi_gro_receive(&__rseq_priv->napi, __packet); }} }}\n"
+                ));
+            }
+            _ => {}
+        }
+    }
     Ok(())
+}
+
+fn descriptor_network_op(model: &RegseqModel, instance: InstanceId) -> Option<&'static str> {
+    for (driver, interface) in &model.network_interface.drivers {
+        if !super::dma::descriptor_datapath(model, *driver) {
+            continue;
+        }
+        for (name, reference) in [
+            ("report_carrier", interface.ops.report_carrier),
+            ("receive", interface.ops.receive),
+        ] {
+            if reference.is_some_and(|reference| model.instance_ref_of(instance) == reference) {
+                return Some(name);
+            }
+        }
+    }
+    None
 }
 
 /// Lower the locked command-transport operation to Linux mailbox admission.
@@ -1019,6 +1089,16 @@ fn emit_command_transport_submit(
             "command_transport_submit requires endpoint and payload operands".into(),
         ));
     }
+    if cx
+        .model
+        .dma
+        .drivers
+        .keys()
+        .copied()
+        .any(|driver| super::dma::descriptor_datapath(cx.model, driver))
+    {
+        return emit_descriptor_transport_submit(cx, body, args, destination, out);
+    }
     cx.uses_command_transport = true;
     cx.extra_includes.insert("<linux/errno.h>");
     cx.extra_includes.insert("<linux/mailbox_client.h>");
@@ -1032,6 +1112,308 @@ fn emit_command_transport_submit(
 
     out.push_str(&format!(
         "\t{{ struct {drv}_command_transport_endpoint *__endpoint = (struct {drv}_command_transport_endpoint *)(unsigned long)({endpoint});\n\t  int __reason;\n\t  if (!__endpoint || !__endpoint->channel || !__endpoint->client || __endpoint->client->tx_block)\n\t\t__reason = -EINVAL;\n\t  else\n\t\t__reason = mbox_send_message(__endpoint->channel, (void *)(unsigned long)({payload}));\n\t  if (__reason >= 0) {{\n"
+    ));
+    out.push_str(&format!("\t\tmemset(&{dst}, 0, sizeof({dst}));\n"));
+    emit_enum_tag_write(cx, dst_ty, &dst, VariantIdx::from_u32(0), out)?;
+    out.push_str("\t  } else {\n");
+    cx_emit_cas_result(cx, &dst, dst_ty, 1, "__reason", out)?;
+    out.push_str("\t  } }\n");
+    Ok(())
+}
+
+/// The E1000 device-class DCT seam: L1 supplies the operation and ring slot;
+/// Linux owns skb mapping and reclamation. The coherent rings allocated by the
+/// DMA construct are the exact rings programmed through TDBA/RDBA.
+fn emit_descriptor_transport_submit(
+    cx: &mut LowerCx<'_>,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    destination: &Place,
+    out: &mut String,
+) -> Result<(), EmitError> {
+    cx.extra_includes.insert("<linux/dma-mapping.h>");
+    cx.extra_includes.insert("<linux/errno.h>");
+    cx.extra_includes.insert("<linux/netdevice.h>");
+    cx.extra_includes.insert("<linux/skbuff.h>");
+    cx.extra_includes.insert("<linux/string.h>");
+
+    let endpoint = operand_expr(cx, body, &args[0])?;
+    let payload = operand_expr(cx, body, &args[1])?;
+    let dst = place_lvalue(cx, body, destination)?;
+    let dst_ty = place_ty(cx.model, body, destination)?;
+    let recovery = config_recovery(cx, body)?;
+
+    out.push_str(&format!(
+        r#"	{{ {recovery}
+	  struct DescriptorCommand *__command =
+		(struct DescriptorCommand *)(uintptr_t)({payload});
+	  int __reason = -EINVAL;
+	  if (({endpoint}) == 1 && __command &&
+	      ((uintptr_t)__command % _Alignof(struct DescriptorCommand)) == 0 &&
+	      __command->slot < 256) {{
+		unsigned int __slot = __command->slot;
+		if (__command->operation == 1) {{
+			struct sk_buff *__packet =
+				(struct sk_buff *)(uintptr_t)__command->packet_identity;
+			struct rich_e1000_legacy_tx_descriptor *__ring =
+				__rseq_priv->__rseq_dma_cpu[0];
+			bool __checksum = __packet && __packet->ip_summed == CHECKSUM_PARTIAL;
+			unsigned int __head_len = __packet ? skb_headlen(__packet) : 0u;
+			unsigned int __nr_frags = __packet ? skb_shinfo(__packet)->nr_frags : 0u;
+			unsigned int __data_count = (__head_len ? 1u : 0u) + __nr_frags;
+			unsigned int __count = __data_count + (__checksum ? 1u : 0u);
+			unsigned int __head = READ_ONCE(__rseq_priv->inner.tx_head);
+			unsigned int __free = __head > __slot ?
+				__head - __slot - 1u : 256u - __slot + __head - 1u;
+			int __checksum_start = 0;
+			unsigned int __checksum_offset = 0;
+			if (!__packet || !__ring || __rseq_priv->__rseq_tx_packets[__slot] ||
+			    __rseq_priv->__rseq_tx_descriptor_count[__slot] || __count > __free) {{
+				__reason = -EBUSY;
+			}} else {{
+				if (__checksum) {{
+					__checksum_start = skb_checksum_start_offset(__packet);
+					__checksum_offset = (unsigned int)__checksum_start +
+						(unsigned int)__packet->csum_offset;
+				}}
+				if (__data_count == 0u || __count > 255u || __packet->len > 0xfffffu ||
+				    (__checksum && (__checksum_start < 0 || __checksum_start > 0xff ||
+				     __checksum_offset > 0xff || __checksum_offset + 2u > __packet->len))) {{
+					__reason = -EINVAL;
+				}} else {{
+					unsigned int __mapped = 0u;
+					unsigned int __data_index;
+					bool __map_failed = false;
+					if (__checksum) {{
+						struct TxChecksumContextDescriptor *__context =
+							(void *)&__ring[__slot];
+						__context->ip_checksum_start =
+							__command->checksum_context.ip_checksum_start;
+						__context->ip_checksum_offset =
+							__command->checksum_context.ip_checksum_offset;
+						__context->ip_checksum_end = cpu_to_le16(
+							__command->checksum_context.ip_checksum_end);
+						__context->transport_checksum_start = (u8)__checksum_start;
+						__context->transport_checksum_offset = (u8)__checksum_offset;
+						__context->transport_checksum_end = cpu_to_le16(
+							__command->checksum_context.transport_checksum_end);
+						__context->command_length = cpu_to_le32(
+							__command->checksum_context.command_length);
+						__context->segmentation = cpu_to_le32(
+							__command->checksum_context.segmentation);
+					}}
+					/* Intel 82540EM rx_tx_operations.md 487-555, 693-780:
+					 * each descriptor names one segment; only the last data
+					 * descriptor carries EOP/IFCS/RS and therefore DD. */
+					for (__data_index = 0u; __data_index < __data_count; __data_index++) {{
+						unsigned int __data_slot =
+							(__slot + (__checksum ? 1u : 0u) + __data_index) % 256u;
+						unsigned int __segment_len;
+						dma_addr_t __address;
+						bool __page;
+						const skb_frag_t *__frag = NULL;
+						if (__head_len && __data_index == 0u) {{
+							__segment_len = __head_len;
+							__page = false;
+						}} else {{
+							unsigned int __frag_index =
+								__data_index - (__head_len ? 1u : 0u);
+							__frag = &skb_shinfo(__packet)->frags[__frag_index];
+							__segment_len = skb_frag_size(__frag);
+							__page = true;
+						}}
+						if (__segment_len == 0u || __segment_len > 0xffffu) {{
+							__map_failed = true;
+							break;
+						}}
+						if (__page)
+							__address = skb_frag_dma_map(&__rseq_priv->pdev->dev,
+								__frag, 0, __segment_len, DMA_TO_DEVICE);
+						else
+							__address = dma_map_single(&__rseq_priv->pdev->dev,
+								__packet->data, __segment_len, DMA_TO_DEVICE);
+						if (dma_mapping_error(&__rseq_priv->pdev->dev, __address)) {{
+							__map_failed = true;
+							break;
+						}}
+						__rseq_priv->__rseq_tx_dma[__data_slot] = __address;
+						__rseq_priv->__rseq_tx_dma_len[__data_slot] = __segment_len;
+						__rseq_priv->__rseq_tx_dma_page[__data_slot] = __page;
+						if (__checksum) {{
+							struct TxChecksumDataDescriptor *__data =
+								(void *)&__ring[__data_slot];
+							u32 __command_length =
+								__command->checksum_data.command_length | __segment_len;
+							if (__data_index + 1u != __data_count)
+								__command_length &= ~((1u << 24) | (1u << 25) | (1u << 27));
+							__data->buffer_address = cpu_to_le64(__address);
+							__data->command_length = cpu_to_le32(__command_length);
+							__data->status = __command->checksum_data.status;
+							__data->packet_options = __data_index == 0u ?
+								__command->checksum_data.packet_options : 0u;
+							__data->special = cpu_to_le16(__command->checksum_data.special);
+						}} else {{
+							__ring[__data_slot].buffer_address = cpu_to_le64(__address);
+							__ring[__data_slot].length = cpu_to_le16(__segment_len);
+							__ring[__data_slot].checksum_offset = 0;
+							__ring[__data_slot].command =
+								__data_index + 1u == __data_count ? 0x8b : 0x00;
+							__ring[__data_slot].status = 0;
+							__ring[__data_slot].checksum_start = 0;
+							__ring[__data_slot].special = 0;
+						}}
+						__mapped++;
+					}}
+					if (__map_failed) {{
+						unsigned int __cleanup;
+						for (__cleanup = 0u; __cleanup < __mapped; __cleanup++) {{
+							unsigned int __mapped_slot =
+								(__slot + (__checksum ? 1u : 0u) + __cleanup) % 256u;
+							if (__rseq_priv->__rseq_tx_dma_page[__mapped_slot])
+								dma_unmap_page(&__rseq_priv->pdev->dev,
+									__rseq_priv->__rseq_tx_dma[__mapped_slot],
+									__rseq_priv->__rseq_tx_dma_len[__mapped_slot], DMA_TO_DEVICE);
+							else
+								dma_unmap_single(&__rseq_priv->pdev->dev,
+									__rseq_priv->__rseq_tx_dma[__mapped_slot],
+									__rseq_priv->__rseq_tx_dma_len[__mapped_slot], DMA_TO_DEVICE);
+							__rseq_priv->__rseq_tx_dma[__mapped_slot] = (dma_addr_t)0;
+							__rseq_priv->__rseq_tx_dma_len[__mapped_slot] = 0u;
+							__rseq_priv->__rseq_tx_dma_page[__mapped_slot] = 0u;
+						}}
+						for (__cleanup = 0u; __cleanup < __count; __cleanup++)
+							memset(&__ring[(__slot + __cleanup) % 256u], 0,
+								sizeof(__ring[0]));
+						__reason = -EIO;
+					}} else {{
+						__rseq_priv->__rseq_tx_packets[__slot] = __packet;
+						__rseq_priv->__rseq_tx_descriptor_count[__slot] = __count;
+						__rseq_priv->__rseq_tx_advanced[__slot] = __checksum;
+						__command->descriptor_count = __count;
+						__command->length = __packet->len;
+						dma_wmb();
+						__reason = 0;
+					}}
+				}}
+			}}
+		}} else if (__command->operation == 2) {{
+			struct rich_e1000_legacy_tx_descriptor *__ring =
+				__rseq_priv->__rseq_dma_cpu[0];
+			struct sk_buff *__packet = __rseq_priv->__rseq_tx_packets[__slot];
+			unsigned int __count = __rseq_priv->__rseq_tx_descriptor_count[__slot];
+			unsigned int __done_slot = __slot;
+			volatile u8 *__status = NULL;
+			if (__ring && __packet && __count > 0u && __count < 256u) {{
+				__done_slot = (__slot + __count - 1u) % 256u;
+				if (__rseq_priv->__rseq_tx_advanced[__slot]) {{
+					struct TxChecksumDataDescriptor *__data =
+						(void *)&__ring[__done_slot];
+					__status = &__data->status;
+				}} else {{
+					__status = &__ring[__done_slot].status;
+				}}
+			}}
+			if (!__ring || !__packet || !__status) {{
+				__reason = -EAGAIN;
+			}} else {{
+				dma_rmb();
+				if (!(READ_ONCE(*__status) & 0x01)) {{
+					__reason = -EAGAIN;
+				}} else {{
+					u8 __completed_status = READ_ONCE(*__status);
+					unsigned int __cleanup;
+					for (__cleanup = 0u; __cleanup < __count; __cleanup++) {{
+						unsigned int __mapped_slot = (__slot + __cleanup) % 256u;
+						if (__rseq_priv->__rseq_tx_dma_len[__mapped_slot]) {{
+							if (__rseq_priv->__rseq_tx_dma_page[__mapped_slot])
+								dma_unmap_page(&__rseq_priv->pdev->dev,
+									__rseq_priv->__rseq_tx_dma[__mapped_slot],
+									__rseq_priv->__rseq_tx_dma_len[__mapped_slot], DMA_TO_DEVICE);
+							else
+								dma_unmap_single(&__rseq_priv->pdev->dev,
+									__rseq_priv->__rseq_tx_dma[__mapped_slot],
+									__rseq_priv->__rseq_tx_dma_len[__mapped_slot], DMA_TO_DEVICE);
+						}}
+						__rseq_priv->__rseq_tx_dma[__mapped_slot] = (dma_addr_t)0;
+						__rseq_priv->__rseq_tx_dma_len[__mapped_slot] = 0u;
+						__rseq_priv->__rseq_tx_dma_page[__mapped_slot] = 0u;
+						memset(&__ring[__mapped_slot], 0, sizeof(__ring[0]));
+					}}
+					__command->length = __packet->len;
+					__command->descriptor_status = __completed_status;
+					__command->descriptor_count = __count;
+					__rseq_priv->__rseq_itr_window_tx_packets++;
+					__rseq_priv->__rseq_itr_window_tx_bytes += __packet->len;
+					__rseq_priv->__rseq_tx_packets[__slot] = NULL;
+					__rseq_priv->__rseq_tx_descriptor_count[__slot] = 0;
+					__rseq_priv->__rseq_tx_advanced[__slot] = 0;
+					dev_consume_skb_any(__packet);
+					__reason = 0;
+				}}
+			}}
+		}} else if (__command->operation == 3) {{
+			struct rich_e1000_legacy_rx_descriptor *__ring =
+				__rseq_priv->__rseq_dma_cpu[1];
+			struct sk_buff *__packet;
+			dma_addr_t __address;
+			if (!__ring || __rseq_priv->__rseq_rx_packets[__slot]) {{
+				__reason = -EBUSY;
+			}} else {{
+				__packet = netdev_alloc_skb_ip_align(__rseq_priv->netdev, 2048);
+				if (!__packet) {{
+					__reason = -ENOMEM;
+				}} else {{
+					__address = dma_map_single(&__rseq_priv->pdev->dev,
+						__packet->data, 2048, DMA_FROM_DEVICE);
+					if (dma_mapping_error(&__rseq_priv->pdev->dev, __address)) {{
+						dev_kfree_skb_any(__packet);
+						__reason = -EIO;
+					}} else {{
+						__rseq_priv->__rseq_rx_packets[__slot] = __packet;
+						__rseq_priv->__rseq_rx_packet_dma[__slot] = __address;
+						memset(&__ring[__slot], 0, sizeof(__ring[__slot]));
+						__ring[__slot].buffer_address = cpu_to_le64(__address);
+						dma_wmb();
+						__reason = 0;
+					}}
+				}}
+			}}
+		}} else if (__command->operation == 4) {{
+			struct rich_e1000_legacy_rx_descriptor *__ring =
+				__rseq_priv->__rseq_dma_cpu[1];
+			struct sk_buff *__packet = __rseq_priv->__rseq_rx_packets[__slot];
+			if (!__ring || !__packet) {{
+				__reason = -EAGAIN;
+			}} else {{
+				dma_rmb();
+				if (!(__ring[__slot].status & 0x01)) {{
+					__reason = -EAGAIN;
+				}} else {{
+					u16 __length = le16_to_cpu(__ring[__slot].length);
+					dma_unmap_single(&__rseq_priv->pdev->dev,
+						__rseq_priv->__rseq_rx_packet_dma[__slot],
+						2048, DMA_FROM_DEVICE);
+					__rseq_priv->__rseq_rx_packets[__slot] = NULL;
+					__rseq_priv->__rseq_rx_packet_dma[__slot] = (dma_addr_t)0;
+					__command->length = __length;
+					__command->descriptor_status = __ring[__slot].status;
+					if ((__ring[__slot].status & 0x03) == 0x03 &&
+					    __ring[__slot].errors == 0 && __length <= 2048) {{
+						skb_put(__packet, __length);
+						__command->packet_identity = (size_t)(uintptr_t)__packet;
+						__rseq_priv->__rseq_itr_window_rx_packets++;
+						__rseq_priv->__rseq_itr_window_rx_bytes += __length;
+					}} else {{
+						dev_kfree_skb_any(__packet);
+						__command->packet_identity = 0;
+					}}
+					__reason = 0;
+				}}
+			}}
+		}}
+	  }}
+	  if (__reason == 0) {{
+"#
     ));
     out.push_str(&format!("\t\tmemset(&{dst}, 0, sizeof({dst}));\n"));
     emit_enum_tag_write(cx, dst_ty, &dst, VariantIdx::from_u32(0), out)?;
@@ -1312,7 +1694,11 @@ fn recover_atomic_field(
             PlaceElem::Deref => {
                 ty = match &cx.model.types[ty] {
                     Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
-                    _ => return Err(EmitError::Unsupported("atomic receiver deref of non-pointer".into())),
+                    _ => {
+                        return Err(EmitError::Unsupported(
+                            "atomic receiver deref of non-pointer".into(),
+                        ))
+                    }
                 };
             }
             PlaceElem::Field(idx, fty) => {
@@ -1324,11 +1710,19 @@ fn recover_atomic_field(
             PlaceElem::Index(_) | PlaceElem::ConstantIndex { .. } => {
                 ty = match &cx.model.types[ty] {
                     Ty::Array(elem, _) => *elem,
-                    _ => return Err(EmitError::Unsupported("atomic receiver index of non-array".into())),
+                    _ => {
+                        return Err(EmitError::Unsupported(
+                            "atomic receiver index of non-array".into(),
+                        ))
+                    }
                 };
                 field = None;
             }
-            _ => return Err(EmitError::Unsupported("atomic receiver unsupported projection".into())),
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "atomic receiver unsupported projection".into(),
+                ))
+            }
         }
     }
     let (item, fidx) = field.ok_or_else(|| {
@@ -1364,12 +1758,14 @@ fn atomic_ordering(
     args: &[Operand],
     i: usize,
 ) -> Result<u32, EmitError> {
-    let op = args
-        .get(i)
-        .ok_or_else(|| EmitError::Unsupported("atomic call missing the Ordering argument".into()))?;
+    let op = args.get(i).ok_or_else(|| {
+        EmitError::Unsupported("atomic call missing the Ordering argument".into())
+    })?;
     cx.model
         .resolve_operand_enum_variant(body, op)
-        .ok_or_else(|| EmitError::Unsupported("atomic Ordering is not a compile-time constant".into()))
+        .ok_or_else(|| {
+            EmitError::Unsupported("atomic Ordering is not a compile-time constant".into())
+        })
 }
 
 /// Atomic-memory-access-and-ordering lowering (atomicity construct) — Linux
@@ -1418,7 +1814,9 @@ fn emit_atomic(
             let v = atomic_ordering(cx, body, args, 2)?;
             let suffix = if matches!(v, 2 | 4) { "_release" } else { "" }; // SeqCst->release
             let val = operand_expr(cx, body, &args[1])?;
-            out.push_str(&format!("\t{api}_set{suffix}({faddr}, ({valty})({val}));\n"));
+            out.push_str(&format!(
+                "\t{api}_set{suffix}({faddr}, ({valty})({val}));\n"
+            ));
         }
         AtomicOp::FetchModify(fop) => {
             let v = atomic_ordering(cx, body, args, 2)?;
@@ -1450,7 +1848,11 @@ fn emit_atomic(
             // implementation-defined; bit_test is unsigned-only (D08), so the
             // unsigned type is exact. The mask is cast to the signed API value
             // type only at the call boundary (bit pattern preserved).
-            let ubits = if element.width_bits() == 32 { "u32" } else { "u64" };
+            let ubits = if element.width_bits() == 32 {
+                "u32"
+            } else {
+                "u64"
+            };
             // Mask the shift AMOUNT to width-1 so `<< bit` / `>> bit` is never
             // UB even for a runtime out-of-range bit (a const out-of-range bit is
             // already a frontend reject; a non-const out-of-range bit is an
@@ -1464,7 +1866,9 @@ fn emit_atomic(
                 }
                 _ => format!("{api}_fetch_and{suffix}(({valty})(~(({ubits})1 << {sh})), {faddr})"),
             };
-            out.push_str(&format!("\t{dst} = ({cty})(((({ubits}){rmw}) >> {sh}) & 1);\n"));
+            out.push_str(&format!(
+                "\t{dst} = ({cty})(((({ubits}){rmw}) >> {sh}) & 1);\n"
+            ));
         }
         AtomicOp::CompareExchange => {
             // args = [recv, current, new, success, failure]. try_cmpxchg writeback
@@ -1564,7 +1968,9 @@ fn recover_clock(
             })
         })
         .ok_or_else(|| {
-            EmitError::Unsupported("clock receiver field has no recorded ClockResource marker".into())
+            EmitError::Unsupported(
+                "clock receiver field has no recorded ClockResource marker".into(),
+            )
         })?;
     let binding = cx
         .model
@@ -1574,7 +1980,9 @@ fn recover_clock(
         .and_then(|d| d.resources.iter().find(|r| r.id == id))
         .map(|r| r.binding.clone())
         .ok_or_else(|| {
-            EmitError::Unsupported("clock receiver field has no resolved ClockResource binding".into())
+            EmitError::Unsupported(
+                "clock receiver field has no resolved ClockResource binding".into(),
+            )
         })?;
     let lv = place_lvalue(cx, body, &src)?;
     Ok((lv, binding))
@@ -1593,7 +2001,11 @@ fn recover_deferred_work(
             PlaceElem::Deref => {
                 ty = match &cx.model.types[ty] {
                     Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
-                    _ => return Err(EmitError::Unsupported("deferred-work receiver deref of a non-pointer type".into())),
+                    _ => {
+                        return Err(EmitError::Unsupported(
+                            "deferred-work receiver deref of a non-pointer type".into(),
+                        ))
+                    }
                 };
             }
             PlaceElem::Field(idx, fty) => {
@@ -1602,17 +2014,27 @@ fn recover_deferred_work(
                 }
                 ty = *fty;
             }
-            _ => return Err(EmitError::Unsupported("deferred-work receiver has an unsupported projection".into())),
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "deferred-work receiver has an unsupported projection".into(),
+                ))
+            }
         }
     }
-    let (item, field) = field.ok_or_else(|| EmitError::Unsupported("deferred-work receiver does not resolve to a driver field".into()))?;
+    let (item, field) = field.ok_or_else(|| {
+        EmitError::Unsupported("deferred-work receiver does not resolve to a driver field".into())
+    })?;
     let idx = cx
         .model
         .deferred_work
         .drivers
         .get(&item)
         .and_then(|d| d.resources.iter().position(|r| r.field == field))
-        .ok_or_else(|| EmitError::Unsupported("deferred-work receiver field is not a recognized Work resource".into()))?;
+        .ok_or_else(|| {
+            EmitError::Unsupported(
+                "deferred-work receiver field is not a recognized Work resource".into(),
+            )
+        })?;
     let parent = Place {
         local: src.local,
         projection: src.projection[..src.projection.len() - 1]
@@ -1628,9 +2050,28 @@ fn emit_deferred_work(
     args: &[Operand],
     out: &mut String,
 ) -> Result<(), EmitError> {
-    let recv = args.first().ok_or_else(|| EmitError::Unsupported("deferred-work submit without a receiver".into()))?;
+    let recv = args
+        .first()
+        .ok_or_else(|| EmitError::Unsupported("deferred-work submit without a receiver".into()))?;
     let (idx, driver) = recover_deferred_work(cx, body, recv)?;
     let driver = place_lvalue(cx, body, &driver)?;
+    let driver_item = match &cx.model.types[cx.driver.driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => return Err(EmitError::Driver("driver type is not a struct".into())),
+    };
+    if super::dma::descriptor_datapath(cx.model, driver_item) {
+        cx.extra_includes.insert("<linux/netdevice.h>");
+        cx.extra_includes.insert("<linux/container_of.h>");
+        out.push_str(&format!(
+            "\t{{ struct {}_priv *__rseq_priv = container_of(&{}, struct {}_priv, inner);\n\t  /* Linux e1000_main.c:3772-3787: flush posted IMC, then acquire NAPI. */\n\t  (void)readl(__rseq_priv->inner.regs + {}_STATUS);\n\t  (void){}_schedule_napi(__rseq_priv, true); }}\n",
+            cx.driver.drv,
+            driver,
+            cx.driver.drv,
+            cx.driver.drv.to_ascii_uppercase(),
+            cx.driver.drv,
+        ));
+        return Ok(());
+    }
     cx.extra_includes.insert("<linux/workqueue.h>");
     cx.extra_includes.insert("<linux/container_of.h>");
     out.push_str(&format!(
@@ -1936,7 +2377,9 @@ fn emit_pinctrl_absent_fold(
             EmitError::Unsupported("pinctrl absent fold: RegseqError has no layout".into())
         })?;
         let LayoutKind::Enum {
-            shape: EnumShape::Multiple { variants: re_vars, .. },
+            shape: EnumShape::Multiple {
+                variants: re_vars, ..
+            },
         } = &re_layout.kind
         else {
             return Err(EmitError::Unsupported(
@@ -2012,8 +2455,9 @@ fn cx_emit_cas_result(
     let variant = VariantIdx::from_u32(variant_idx);
     out.push_str(&format!("\t\tmemset(&{dst}, 0, sizeof({dst}));\n"));
     emit_enum_tag_write(cx, dst_ty, dst, variant, out)?;
-    let layout = types::layout_of(cx.model, dst_ty)
-        .ok_or_else(|| EmitError::Unsupported("compare_exchange destination has no layout".into()))?;
+    let layout = types::layout_of(cx.model, dst_ty).ok_or_else(|| {
+        EmitError::Unsupported("compare_exchange destination has no layout".into())
+    })?;
     let LayoutKind::Enum {
         shape: EnumShape::Multiple { variants, .. },
     } = &layout.kind
@@ -2050,9 +2494,7 @@ fn cx_emit_cas_result(
 /// driver delay (the corpus tops out at a 4 s settle).
 pub(crate) fn delay_helpers(busy: bool, sleep: bool) -> String {
     let mut s = String::new();
-    s.push_str(
-        "/* timed-cpu-delay-and-sleep (TCD construct) lowering helpers. */\n",
-    );
+    s.push_str("/* timed-cpu-delay-and-sleep (TCD construct) lowering helpers. */\n");
     if busy {
         s.push_str(
             "static void regseq_linux_busy_wait_ns(uint64_t ns)\n{\n\
@@ -2095,9 +2537,7 @@ fn const_expr(
                         let mut v: u64 = 0;
                         for i in 0..size {
                             match bytes.get((f.offset + i) as usize) {
-                                Some(regseq_model::Byte::Value(b)) => {
-                                    v |= (*b as u64) << (8 * i)
-                                }
+                                Some(regseq_model::Byte::Value(b)) => v |= (*b as u64) << (8 * i),
                                 _ => {
                                     return Err(EmitError::Unsupported(
                                         "byte-image constant with non-value bytes".into(),
@@ -2168,7 +2608,10 @@ fn const_expr(
             let ty = consumer.ok_or_else(|| {
                 EmitError::Unsupported("null pointer constant without a consumer type".into())
             })?;
-            Ok(format!("(({})0)", types::c_type(cx.model, &mut cx.names, ty)?))
+            Ok(format!(
+                "(({})0)",
+                types::c_type(cx.model, &mut cx.names, ty)?
+            ))
         }
         Const::Aggregate(children) => aggregate_const_expr(cx, &children, consumer),
         Const::EnumValue {
@@ -2191,9 +2634,8 @@ fn enum_const_expr(
     variant: VariantIdx,
     payload: &[regseq_model::ConstId],
 ) -> Result<String, EmitError> {
-    let ty = consumer.ok_or_else(|| {
-        EmitError::Unsupported("enum constant without a consumer type".into())
-    })?;
+    let ty = consumer
+        .ok_or_else(|| EmitError::Unsupported("enum constant without a consumer type".into()))?;
     let fields = match &types::layout_of(cx.model, ty)
         .ok_or_else(|| EmitError::Unsupported("enum constant without layout".into()))?
         .kind
@@ -2218,7 +2660,10 @@ fn enum_const_expr(
     }
     let cname = types::c_type(cx.model, &mut cx.names, ty)?;
     if payload.is_empty() {
-        let tag = match &types::layout_of(cx.model, ty).expect("layout checked above").kind {
+        let tag = match &types::layout_of(cx.model, ty)
+            .expect("layout checked above")
+            .kind
+        {
             LayoutKind::Enum {
                 shape: EnumShape::Multiple { variants, .. },
             } => variants[variant.as_u32() as usize].tag_value,
@@ -2284,7 +2729,10 @@ fn aggregate_const_expr(
                 "reference-carrier aggregate metadata is not a usize".into(),
             ));
         }
-        if matches!(cx.model.types[pointee], Ty::Str | Ty::Slice(_) | Ty::Dynamic { .. }) {
+        if matches!(
+            cx.model.types[pointee],
+            Ty::Str | Ty::Slice(_) | Ty::Dynamic { .. }
+        ) {
             return Err(EmitError::Unsupported(
                 "unsized reference-carrier aggregate (first-light subset)".into(),
             ));
@@ -2480,6 +2928,8 @@ pub(crate) struct DriverFacts {
     /// The C-sanitized driver name (`struct <drv>_priv` in the per-site
     /// container recovery).
     pub drv: String,
+    /// Whether this driver uses the descriptor command transport datapath.
+    pub descriptor_datapath: bool,
 }
 
 impl LowerCx<'_> {
@@ -2535,6 +2985,11 @@ impl LowerCx<'_> {
         }
         // Field/FieldValue descriptors: a runtime place renders as member
         // reads; a const-propagated aggregate const-folds to literals.
+        let write_op = matches!(&op, MmioOp::Write | MmioOp::WriteField);
+        let offset_token = self.offset_token(offset);
+        let lsc_cause_read = self.driver.descriptor_datapath
+            && matches!(&op, MmioOp::Read)
+            && offset_token.ends_with("_ICR");
         let stmt = match op {
             MmioOp::Write => {
                 let val = self.operand_or_desc(body, &args[1], None)?;
@@ -2571,7 +3026,62 @@ impl LowerCx<'_> {
                 )
             }
         };
-        out.push_str(&stmt);
+        let transmit_symbol = format!("{}_transmit", self.driver.drv);
+        let batches_tdt = self.driver.descriptor_datapath
+            && self
+                .emitting_fn
+                .and_then(|instance| self.fn_symbols.get(&instance))
+                .is_some_and(|symbol| symbol == &transmit_symbol)
+            && offset_token.ends_with("_TDT")
+            && write_op;
+        if lsc_cause_read {
+            self.extra_includes.insert("<linux/workqueue.h>");
+            let recv = body
+                .arg_locals()
+                .next()
+                .filter(|local| {
+                    matches!(
+                        &self.model.types[body.local_decls[*local].ty],
+                        Ty::Ref(pointee, _) if *pointee == self.driver.driver_ty
+                    )
+                })
+                .ok_or_else(|| {
+                    EmitError::Unsupported(
+                        "descriptor ICR read outside a driver-receiver body".into(),
+                    )
+                })?;
+            let recv = local_name(self.model, body, recv);
+            let dst = place_lvalue(self, body, destination)?;
+            let drv = &self.driver.drv;
+            out.push_str(&stmt);
+            out.push_str(&format!(
+                "\t{{\n\t\tstruct {drv}_priv *__rseq_priv = container_of({recv}, struct {drv}_priv, inner);\n\t\t/* Linux e1000_main.c:3765-3769: LSC schedules watchdog work. */\n\t\tif (unlikely(({dst}) & 0x4u))\n\t\t\tschedule_delayed_work(&__rseq_priv->__rseq_link_work, 1);\n\t}}\n"
+            ));
+        } else if batches_tdt {
+            let recv = body
+                .arg_locals()
+                .next()
+                .filter(|local| {
+                    matches!(
+                        &self.model.types[body.local_decls[*local].ty],
+                        Ty::Ref(pointee, _) if *pointee == self.driver.driver_ty
+                    )
+                })
+                .ok_or_else(|| {
+                    EmitError::Unsupported(
+                        "descriptor TDT publication outside a driver-receiver body".into(),
+                    )
+                })?;
+            let recv = local_name(self.model, body, recv);
+            let drv = &self.driver.drv;
+            out.push_str(&format!(
+                "\t{{\n\t\tstruct {drv}_priv *__rseq_priv = container_of({recv}, struct {drv}_priv, inner);\n\t\t/* Linux e1000 doorbell batching: e1000_main.c:3273-3276. */\n\t\tif (!netdev_xmit_more() ||\n\t\t    (({recv}->tx_tail % {drv_upper}_TX_DOORBELL_BATCH) == 0u) ||\n\t\t    netif_xmit_stopped(netdev_get_tx_queue(__rseq_priv->netdev, 0)))\n\t\t\t{}\t}}\n",
+                stmt.trim_start(),
+                drv_upper = drv.to_ascii_uppercase(),
+            ));
+        } else {
+            out.push_str(&stmt);
+        }
         Ok(())
     }
 

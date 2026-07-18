@@ -198,11 +198,7 @@ pub fn shared_discipline_warnings(model: &RegseqModel) -> Vec<String> {
             if !resource.binding.shared {
                 continue;
             }
-            let Some(handler) = tables
-                .handlers
-                .iter()
-                .find(|h| h.resource as usize == idx)
-            else {
+            let Some(handler) = tables.handlers.iter().find(|h| h.resource as usize == idx) else {
                 continue;
             };
             if handler.arms.not_handled != ArmReachability::ProvenReachable {
@@ -244,9 +240,7 @@ fn validate_interrupt_surface(model: &RegseqModel) -> Result<(), InterruptL2Erro
 mod tests {
     use super::*;
     use crate::L2Binder;
-    use regseq_model::{
-        DriverInterrupts, InterruptResource, ItemId, RegseqModel, StableCrateId,
-    };
+    use regseq_model::{DriverInterrupts, InterruptResource, ItemId, RegseqModel, StableCrateId};
 
     fn model_with_resource(id: &str, form: InterruptForm) -> RegseqModel {
         let mut model = RegseqModel::with_primary("irq-l2-test", StableCrateId(1));
@@ -326,7 +320,9 @@ mod tests {
     fn missing_section_on_single_form_is_an_error() {
         let mut model = model_with_resource("uart_irq", InterruptForm::Single);
         let b = bindings("[mmio.regs]\nbase = 0\nsize = 16\n");
-        InterruptBinder.bind(&mut model, &b).expect("bind is a no-op join");
+        InterruptBinder
+            .bind(&mut model, &b)
+            .expect("bind is a no-op join");
         let err = InterruptBinder.validate(&model).unwrap_err();
         assert_eq!(err.code(), "IRQ-L2-003");
         assert!(err.to_string().contains("uart_irq"), "{err}");
@@ -337,7 +333,10 @@ mod tests {
         let mut model = model_with_resource("lines", InterruptForm::Array { len: 2 });
         let b = bindings("version = \"1\"\n");
         InterruptBinder.bind(&mut model, &b).expect("bind");
-        assert_eq!(InterruptBinder.validate(&model).unwrap_err().code(), "IRQ-L2-003");
+        assert_eq!(
+            InterruptBinder.validate(&model).unwrap_err().code(),
+            "IRQ-L2-003"
+        );
     }
 
     #[test]
@@ -345,7 +344,9 @@ mod tests {
         let mut model = model_with_resource("maybe_irq", InterruptForm::Optional);
         let b = bindings("version = \"1\"\n");
         InterruptBinder.bind(&mut model, &b).expect("bind");
-        InterruptBinder.validate(&model).expect("Option absence is valid (D06)");
+        InterruptBinder
+            .validate(&model)
+            .expect("Option absence is valid (D06)");
         assert!(!sole_binding(&model).resolved);
     }
 
@@ -361,10 +362,7 @@ mod tests {
 
     // --- R11 shared-line discipline warning (warn-on-unknown floor) ---
 
-    fn model_with_shared_handler(
-        shared: bool,
-        not_handled: ArmReachability,
-    ) -> RegseqModel {
+    fn model_with_shared_handler(shared: bool, not_handled: ArmReachability) -> RegseqModel {
         let mut model = model_with_resource("nic_irq", InterruptForm::Single);
         let method = model.strings.intern("handle_irq");
         let tables = model
@@ -393,7 +391,11 @@ mod tests {
         let model = model_with_shared_handler(true, ArmReachability::Unknown);
         let warnings = shared_discipline_warnings(&model);
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("IRQ-WARN-SHARED-NOTHANDLED"), "{}", warnings[0]);
+        assert!(
+            warnings[0].contains("IRQ-WARN-SHARED-NOTHANDLED"),
+            "{}",
+            warnings[0]
+        );
     }
 
     #[test]

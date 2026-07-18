@@ -87,10 +87,8 @@ fn locked_transport_generic_c_admission_has_no_terminal_event() {
     let fixture = fixture("transport-admission");
     let model = bridge("transport-admission");
     let options = pipeline::backend_options_for(&fixture).expect("backend options");
-    let context = regseq_backends::BackendContext::new(
-        options,
-        regseq_model::PlatformIdentity::default(),
-    );
+    let context =
+        regseq_backends::BackendContext::new(options, regseq_model::PlatformIdentity::default());
     let emit = regseq_backends::emit_generic_c_for_entry_with_context(
         &model,
         &fixture.manifest.entry,
@@ -115,7 +113,12 @@ fn locked_transport_generic_c_admission_has_no_terminal_event() {
 
     let run = toolchain::compile_and_run(&emit.tu, &emit.shim, Path::new("cc"))
         .expect("compile and run locked transport");
-    assert_eq!(run.exit_code, Some(0), "generated program failed: {}", run.stderr);
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "generated program failed: {}",
+        run.stderr
+    );
     assert_eq!(
         run.stdout,
         "LC register dctadmit match=dt:regseq,dct-admit\n\

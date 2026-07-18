@@ -27,6 +27,20 @@ pub struct DriverSerialPort {
     pub ops: SerialPortOps,
     /// Validated value-type bindings used by OS backends.
     pub types: SerialTypeBindings,
+    /// Hardware-specific authored hooks plus their L2 capability gates. These
+    /// are backend inputs and are deliberately excluded from `SerialPortOps`.
+    #[serde(default)]
+    pub hardware_ops: SerialHardwareOps,
+}
+
+/// Backend-only serial hardware hooks recognized from explicit capability
+/// attributes. A hook is callable only when its matching L2 gate is enabled.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SerialHardwareOps {
+    /// `serial-hardware-ops.break-send` authored hook.
+    pub break_send: Option<InstanceRef>,
+    /// Whether the platform binding enables `break_send` for this target.
+    pub break_send_enabled: bool,
 }
 
 /// The locked serial-port operations. Transfers take ordinary pointer+length
@@ -113,9 +127,11 @@ mod ordered_serial_port_map {
     where
         D: Deserializer<'de>,
     {
-        Ok(Vec::<(ItemId, DriverSerialPort)>::deserialize(deserializer)?
-            .into_iter()
-            .collect())
+        Ok(
+            Vec::<(ItemId, DriverSerialPort)>::deserialize(deserializer)?
+                .into_iter()
+                .collect(),
+        )
     }
 }
 
@@ -148,6 +164,7 @@ mod tests {
                     ..SerialPortOps::default()
                 },
                 types: SerialTypeBindings::default(),
+                hardware_ops: SerialHardwareOps::default(),
             },
         );
         let json = serde_json::to_string(&tables).unwrap();

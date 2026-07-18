@@ -328,6 +328,9 @@ fn emit_generic_c_inner(
     if body_emit::model_has_command_transport_submit(model) {
         out.push_str(prelude::COMMAND_TRANSPORT_HELPERS);
     }
+    if body_emit::model_has_descriptor_dma_oracle(model) {
+        out.push_str(prelude::DESCRIPTOR_DMA_ORACLE_HELPERS);
+    }
     // Locked serial-port capability manifest. Generic C executes authored
     // bodies directly; this emitted table makes capability absence explicit
     // without inventing an event, cancellation, or successful fallback.
@@ -363,12 +366,18 @@ fn emit_generic_c_inner(
             out.push_str(" * absent buffer operations are unsupported; no address or allocation is fabricated\n");
         }
         if let Some(channel) = &dma.channel {
-            out.push_str(" * element: AsyncTransferChannel (exclusive acquire-to-release lifetime)\n");
+            out.push_str(
+                " * element: AsyncTransferChannel (exclusive acquire-to-release lifetime)\n",
+            );
             for capability in channel.ops.capabilities() {
                 out.push_str(&format!(" * channel capability: {capability}\n"));
             }
-            out.push_str(" * prepare, submit, and activate are distinct; terminate emits no completion\n");
-            out.push_str(" * synchronize precedes release when asynchronous termination is present\n");
+            out.push_str(
+                " * prepare, submit, and activate are distinct; terminate emits no completion\n",
+            );
+            out.push_str(
+                " * synchronize precedes release when asynchronous termination is present\n",
+            );
             out.push_str(" * absent channel operations are unsupported; no status or completion is fabricated\n");
         }
         out.push_str(" */\n");
@@ -1727,8 +1736,13 @@ fn validate_referenced_bodyless_functions(
         let Some(data) = instance.kind.as_function() else {
             continue;
         };
-        if data.body.is_some()
-            || model.items[instance.item].linkage == Linkage::Foreign
+        if data.body.is_some() {
+            if core_shims::is_bodyful_concrete_partial_eq(model, id) {
+                backend_shim_dependencies.insert(id);
+            }
+            continue;
+        }
+        if model.items[instance.item].linkage == Linkage::Foreign
             || model.instance_intrinsic(id).is_some()
         {
             continue;
@@ -1863,12 +1877,7 @@ fn fn_signature(
         types::declare(model, names, out_ty, &declarator)
     };
 
-    let quals = fn_qualifiers(
-        model,
-        instance.item,
-        backend_shim,
-        backend_shim_dependency,
-    );
+    let quals = fn_qualifiers(model, instance.item, backend_shim, backend_shim_dependency);
     let noreturn = if matches!(model.types[fn_sig.output], Ty::Never) {
         "_Noreturn "
     } else {

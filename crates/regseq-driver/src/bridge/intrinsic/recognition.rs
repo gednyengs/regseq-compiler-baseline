@@ -8,7 +8,7 @@
 //! family-specific logic lives in each construct's bridge module.
 
 use regseq_model::{
-    AtomicOp, AttrData, ClockOp, ConfigOp, DeferredWorkOp, DefPathData, FetchOp, IntrinsicKind,
+    AtomicOp, AttrData, ClockOp, ConfigOp, DefPathData, DeferredWorkOp, FetchOp, IntrinsicKind,
     ItemId, LogLevel, MmioOp, PinctrlOp, RegseqModel,
 };
 use rustc_span::{def_id::DefId, Symbol as RustcSymbol};
@@ -282,8 +282,14 @@ mod tests {
         // `write_config` free functions map to `IntrinsicKind::Config(op)` and the
         // redundant fn-name gate accepts them.
         for (leaf, kind) in [
-            ("read_config", IntrinsicKind::Config(regseq_model::ConfigOp::Read)),
-            ("write_config", IntrinsicKind::Config(regseq_model::ConfigOp::Write)),
+            (
+                "read_config",
+                IntrinsicKind::Config(regseq_model::ConfigOp::Read),
+            ),
+            (
+                "write_config",
+                IntrinsicKind::Config(regseq_model::ConfigOp::Write),
+            ),
         ] {
             assert_eq!(intrinsic_kind_for_name(leaf), Some(kind.clone()));
             let mut model = model_with_item_attrs(1);
@@ -357,7 +363,11 @@ mod tests {
         ];
         for (tag, leaf, op) in cases {
             let kind = IntrinsicKind::Atomic(op);
-            assert_eq!(intrinsic_kind_for_name(tag), Some(kind.clone()), "tag {tag}");
+            assert_eq!(
+                intrinsic_kind_for_name(tag),
+                Some(kind.clone()),
+                "tag {tag}"
+            );
             let mut model = model_with_item_attrs(1);
             let def_path = def_path(&mut model, leaf);
             assert!(
@@ -388,7 +398,10 @@ mod tests {
         // driver-side vocabulary `materialise_intrinsics` keys on (Codex
         // BLOCKING-1) — without it `Work::submit` never reaches lowering.
         let kind = IntrinsicKind::DeferredWork(DeferredWorkOp::Submit);
-        assert_eq!(intrinsic_kind_for_name("deferred_work_submit"), Some(kind.clone()));
+        assert_eq!(
+            intrinsic_kind_for_name("deferred_work_submit"),
+            Some(kind.clone())
+        );
         let mut model = model_with_item_attrs(1);
         let submit_path = def_path(&mut model, "submit");
         assert!(callee_name_matches_kind(&model, &submit_path, &kind));
@@ -424,5 +437,4 @@ mod tests {
             vec![AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Warn))]
         );
     }
-
 }

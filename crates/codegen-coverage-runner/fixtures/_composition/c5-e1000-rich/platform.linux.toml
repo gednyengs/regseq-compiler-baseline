@@ -9,3 +9,9 @@ arch = "x86_64"
 bar = 0
 base = 0xf0000000
 size = 0x20000
+
+[interrupt.irq]
+irq_number = 16
+trigger_type = "level"
+trigger_polarity = "active_low"
+shared = true

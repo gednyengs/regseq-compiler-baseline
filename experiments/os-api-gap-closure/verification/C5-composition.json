@@ -5,7 +5,7 @@
     {
       "argv": [
         "bash", "--noprofile", "--norc", "-c",
-        "test \"$(git rev-parse HEAD)\" = 0bab8010d4f57a58dc649e72162b6aa112e4afe2"
+        "test \"$(git rev-parse HEAD)\" = 50ffaa61f8fc1369d3d5404d467a1b31678735f3"
       ],
       "cwd": ".",
       "expected_outputs": []
@@ -21,19 +21,50 @@
     {
       "argv": [
         "bash", "--noprofile", "--norc", "-c",
-        "RSEQ_REGENERATE=1 cargo test -p codegen-coverage-runner --test composition_e2e regenerate_four_outputs_and_manifest -- --exact --nocapture"
+        "RSEQ_REGENERATE=1 cargo test -p codegen-coverage-runner --test composition_e2e regenerate_products_and_manifest -- --exact --nocapture"
       ],
       "cwd": ".",
       "expected_outputs": [
-        "experiments/os-api-gap-closure/generated/C5-composition/pl011.linux.c",
+        "experiments/os-api-gap-closure/generated/C5-composition/pl011_linux.c",
+        "experiments/os-api-gap-closure/generated/C5-composition/pl011_linux_initfail.c",
         "experiments/os-api-gap-closure/generated/C5-composition/pl011.zephyr.c",
-        "experiments/os-api-gap-closure/generated/C5-composition/e1000.linux.c",
+        "experiments/os-api-gap-closure/generated/C5-composition/pl011_zephyr_initfail.c",
+        "experiments/os-api-gap-closure/generated/C5-composition/pl011_zephyr.binding.yaml",
+        "experiments/os-api-gap-closure/generated/C5-composition/e1000_linux.c",
+        "experiments/os-api-gap-closure/generated/C5-composition/e1000_linux_initfail.c",
         "experiments/os-api-gap-closure/generated/C5-composition/e1000.zephyr.c",
+        "experiments/os-api-gap-closure/generated/C5-composition/e1000_zephyr_initfail.c",
+        "experiments/os-api-gap-closure/generated/C5-composition/e1000_zephyr.binding.yaml",
+        "experiments/os-api-gap-closure/generated/C5-composition/e1000_zephyr_initfail.binding.yaml",
         "experiments/os-api-gap-closure/generated/C5-composition/MANIFEST.json"
       ]
     },
     {
       "argv": ["cargo", "test", "--workspace"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "cargo", "test", "-p", "codegen-coverage-runner", "--test", "composition_e2e",
+        "e1000_carrier_and_receive_are_composed_without_ics_self_kick", "--", "--exact", "--nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "cargo", "test", "-p", "codegen-coverage-runner", "--test", "transport_os_lowering_e2e",
+        "transport_zephyr_is_native_admission_only", "--", "--exact", "--nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "cargo", "test", "-p", "codegen-coverage-runner", "--test", "composition_e2e",
+        "persisted_linux_product_names_are_kbuild_safe", "--", "--exact", "--nocapture"
+      ],
       "cwd": ".",
       "expected_outputs": []
     },
@@ -48,7 +79,15 @@
     {
       "argv": [
         "cargo", "test", "-p", "codegen-coverage-runner", "--test", "composition_e2e",
-        "regenerate_four_outputs_and_manifest", "--", "--exact", "--nocapture"
+        "regenerate_products_and_manifest", "--", "--exact", "--nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "cargo", "test", "-p", "codegen-coverage-runner", "--test", "composition_e2e",
+        "negative_products_are_unique_and_induced", "--", "--exact", "--nocapture"
       ],
       "cwd": ".",
       "expected_outputs": []
@@ -152,7 +191,7 @@
     {
       "argv": [
         "bash", "--noprofile", "--norc", "-c",
-        "before=$(sha256sum experiments/os-api-gap-closure/generated/C5-composition/{pl011.linux.c,pl011.zephyr.c,e1000.linux.c,e1000.zephyr.c,MANIFEST.json}); RSEQ_REGENERATE=1 cargo test -p codegen-coverage-runner --test composition_e2e regenerate_four_outputs_and_manifest -- --exact --nocapture; after=$(sha256sum experiments/os-api-gap-closure/generated/C5-composition/{pl011.linux.c,pl011.zephyr.c,e1000.linux.c,e1000.zephyr.c,MANIFEST.json}); test \"$before\" = \"$after\""
+        "before=$(sha256sum experiments/os-api-gap-closure/generated/C5-composition/{pl011_linux.c,pl011_linux_initfail.c,pl011.zephyr.c,pl011_zephyr_initfail.c,pl011_zephyr.binding.yaml,e1000_linux.c,e1000_linux_initfail.c,e1000.zephyr.c,e1000_zephyr_initfail.c,e1000_zephyr.binding.yaml,e1000_zephyr_initfail.binding.yaml,MANIFEST.json}); RSEQ_REGENERATE=1 cargo test -p codegen-coverage-runner --test composition_e2e regenerate_products_and_manifest -- --exact --nocapture; after=$(sha256sum experiments/os-api-gap-closure/generated/C5-composition/{pl011_linux.c,pl011_linux_initfail.c,pl011.zephyr.c,pl011_zephyr_initfail.c,pl011_zephyr.binding.yaml,e1000_linux.c,e1000_linux_initfail.c,e1000.zephyr.c,e1000_zephyr_initfail.c,e1000_zephyr.binding.yaml,e1000_zephyr_initfail.binding.yaml,MANIFEST.json}); test \"$before\" = \"$after\""
       ],
       "cwd": ".",
       "expected_outputs": []

@@ -4,10 +4,8 @@ extern crate rustc_driver;
 
 use std::path::Path;
 
-use codegen_coverage_runner::zephyr_build::{
-    west_build, StagedBus, StagedDriver, WestOutcome,
-};
 use codegen_coverage_runner::kbuild;
+use codegen_coverage_runner::zephyr_build::{west_build, StagedBus, StagedDriver, WestOutcome};
 use test_ir_fixtures::{try_bridge_fixture_path, BridgeOutcome};
 
 fn model() -> regseq_model::RegseqModel {

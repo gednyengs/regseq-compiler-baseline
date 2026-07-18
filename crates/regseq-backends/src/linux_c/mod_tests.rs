@@ -509,6 +509,30 @@ fn full_match_set_renders_with_zero_sentinel() {
 }
 
 #[test]
+fn l2_amba_binding_overrides_device_identity_for_the_table_only() {
+    let mut m = minimal_amba_model();
+    m.device_lifecycle.platform_binding.amba = Some(regseq_model::AmbaPlatformBinding {
+        periphid: 0x00ab_c123,
+        mask: 0x00ff_ffff,
+    });
+    let tu = emit_linux_c(&m).expect("L2-bound AMBA emit").tu;
+    let table = tu
+        .find("static const struct amba_id minimal_ids[]")
+        .expect("AMBA table");
+    let sentinel = tu[table..]
+        .find("{ 0, 0 },")
+        .map(|offset| table + offset)
+        .expect("zero sentinel");
+    let table_body = &tu[table..sentinel];
+    assert!(table_body.contains(".id\t= 0x00abc123,"));
+    assert!(table_body.contains(".mask\t= 0x00ffffff,"));
+    assert!(
+        !table_body.contains("0x00041011"),
+        "the device-derived fallback must not leak into an overridden table"
+    );
+}
+
+#[test]
 fn foreign_dt_entry_under_amba_is_audited_not_tabled() {
     // C06/C03/A2 (spec-convergence-pl011): a recognized foreign entry under
     // an amba driver EMITS — audited adjacent to the id table, ABSENT from
@@ -972,6 +996,7 @@ fn seam_cx_and_body(m: &RegseqModel, dst_ty: TyId) -> (super::body::LowerCx<'_>,
             reg_macros: vec![],
             bus_type: Some(BusType::Pci),
             drv: "seam".into(),
+            descriptor_datapath: false,
         },
         width8_used: false,
         uses_pr: false,
@@ -980,6 +1005,7 @@ fn seam_cx_and_body(m: &RegseqModel, dst_ty: TyId) -> (super::body::LowerCx<'_>,
         uses_command_transport: false,
         elided_locals: std::collections::BTreeSet::new(),
         unused_fn_instances: std::collections::BTreeSet::new(),
+        emitting_fn: None,
     };
     let body = Body::default();
     (cx, body)

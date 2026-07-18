@@ -45,9 +45,16 @@ fn visible(line: String) {
 fn kbuild_gate(label: &str, emit: &regseq_backends::LinuxEmit) {
     match kbuild::kbuild_module(&emit.tu, &emit.kbuild, &emit.module_name) {
         Ok(kbuild::KbuildOutcome::Skipped { notice }) => visible(format!("[{label}] {notice}")),
-        Ok(kbuild::KbuildOutcome::Built { kernel_version, warnings }) => {
-            visible(format!("[{label}] DMA kbuild PASS against kernel {kernel_version}"));
-            if !warnings.trim().is_empty() { visible(warnings); }
+        Ok(kbuild::KbuildOutcome::Built {
+            kernel_version,
+            warnings,
+        }) => {
+            visible(format!(
+                "[{label}] DMA kbuild PASS against kernel {kernel_version}"
+            ));
+            if !warnings.trim().is_empty() {
+                visible(warnings);
+            }
         }
         Err(err) => panic!("[{label}] {err}"),
     }
@@ -55,30 +62,38 @@ fn kbuild_gate(label: &str, emit: &regseq_backends::LinuxEmit) {
 
 #[test]
 fn dma_linux_locked_output_builds_against_real_headers() {
-    let buffer = regseq_backends::emit_linux_c(&linux_buffer_model())
-        .expect("emit Linux DMA buffer");
+    let buffer =
+        regseq_backends::emit_linux_c(&linux_buffer_model()).expect("emit Linux DMA buffer");
     kbuild_gate("dma-buffer-e1000", &buffer);
 
     let mut channel_model = model("dma-channel-pl011");
-    let driver = channel_model.device_lifecycle.drivers.values_mut().next().unwrap();
+    let driver = channel_model
+        .device_lifecycle
+        .drivers
+        .values_mut()
+        .next()
+        .unwrap();
     driver.descriptor.bus_type = Some(regseq_model::BusType::Amba);
     driver.descriptor.match_set = vec![regseq_model::MatchEntry::Amba {
         id: 0x0004_1011,
         mask: 0x000f_ffff,
     }];
     driver.ops = regseq_model::LifecycleOps::default();
-    let channel = regseq_backends::emit_linux_c(&channel_model)
-        .expect("emit Linux DMA channel");
+    let channel = regseq_backends::emit_linux_c(&channel_model).expect("emit Linux DMA channel");
     kbuild_gate("dma-channel-pl011", &channel);
 }
 
 #[test]
 fn dma_zephyr_locked_channel_builds_against_real_headers() {
     let mut model = model("dma-channel-pl011");
-    model.device_lifecycle.drivers.values_mut().next().unwrap().ops =
-        regseq_model::LifecycleOps::default();
-    let emit = regseq_backends::emit_zephyr_c(&model)
-        .expect("emit Zephyr DMA channel");
+    model
+        .device_lifecycle
+        .drivers
+        .values_mut()
+        .next()
+        .unwrap()
+        .ops = regseq_model::LifecycleOps::default();
+    let emit = regseq_backends::emit_zephyr_c(&model).expect("emit Zephyr DMA channel");
     let driver = StagedDriver {
         tu: &emit.tu,
         binding_yaml: &emit.binding_yaml,
@@ -91,9 +106,16 @@ fn dma_zephyr_locked_channel_builds_against_real_headers() {
     };
     match west_build(&driver) {
         Ok(WestOutcome::Skipped { notice }) => visible(notice),
-        Ok(WestOutcome::Built { zephyr_version, warnings }) => {
-            visible(format!("DMA west PASS for {BOARD} / Zephyr {zephyr_version} (${WORKSPACE_VAR})"));
-            if !warnings.trim().is_empty() { visible(warnings); }
+        Ok(WestOutcome::Built {
+            zephyr_version,
+            warnings,
+        }) => {
+            visible(format!(
+                "DMA west PASS for {BOARD} / Zephyr {zephyr_version} (${WORKSPACE_VAR})"
+            ));
+            if !warnings.trim().is_empty() {
+                visible(warnings);
+            }
         }
         Err(err) => panic!("DMA west gate failed: {err}"),
     }

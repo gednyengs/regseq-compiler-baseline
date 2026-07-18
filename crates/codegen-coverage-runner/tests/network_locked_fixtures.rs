@@ -39,7 +39,11 @@ fn locked_network_positive_frontend_has_full_surface_and_composed_owners() {
         .expect("one network interface");
     assert_eq!(interface.ops.capabilities().count(), 12);
     assert_eq!(model.dma.drivers.len(), 1, "DMA remains a sibling owner");
-    assert_eq!(model.interrupt.drivers.len(), 1, "IRQ remains a sibling owner");
+    assert_eq!(
+        model.interrupt.drivers.len(),
+        1,
+        "IRQ remains a sibling owner"
+    );
     assert_eq!(
         model.deferred_work.drivers.len(),
         1,
@@ -50,9 +54,10 @@ fn locked_network_positive_frontend_has_full_surface_and_composed_owners() {
         .item_attrs
         .iter()
         .flatten()
-        .any(|attr| matches!(attr, regseq_model::AttrData::Intrinsic(
-            regseq_model::IntrinsicKind::CommandTransportSubmit
-        ))));
+        .any(|attr| matches!(
+            attr,
+            regseq_model::AttrData::Intrinsic(regseq_model::IntrinsicKind::CommandTransportSubmit)
+        )));
 
     let network_json = serde_json::to_string(&model.network_interface).unwrap();
     for forbidden in [

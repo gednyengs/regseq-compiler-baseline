@@ -16,21 +16,21 @@ use regseq_model::{
 
 mod assign;
 mod atomic;
-mod clock;
-mod deferred_work;
 pub mod body;
+mod clock;
 pub mod const_;
 pub mod def_path;
+mod deferred_work;
 mod device_lifecycle;
-mod dma;
 pub mod diag_log;
 mod discovery;
+mod dma;
 pub mod fnsig;
 mod framework_type;
 mod handles;
 mod interrupt;
-mod network;
 pub(crate) mod intrinsic;
+mod network;
 mod opaque_handle;
 mod pinctrl;
 mod serial;
@@ -652,6 +652,20 @@ pub enum BridgeError {
     #[error("device-lifecycle validation: {0}")]
     DeviceLifecycleValidation(DeviceLifecycleDiagnostic),
 
+    /// A canonical register-access `regseq::Mmio<T>` resource named an inner
+    /// type that is not declared as a register block.
+    #[error(
+        "register-access validation: driver `{driver}` field `{field}` uses regseq::Mmio<{block_type}>, but `{block_type}` is not marked #[rseq::register_block(...)]"
+    )]
+    RegisterAccessValidation {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending MMIO resource field.
+        field: String,
+        /// The canonical resource's inner type, rendered by rustc.
+        block_type: String,
+    },
+
     /// A device-interrupt frontend check failed (construct #6, contract C06).
     #[error("device-interrupt validation: {0}")]
     InterruptValidation(InterruptDiagnostic),
@@ -864,11 +878,13 @@ pub enum DeviceLifecycleDiagnostic {
         /// The offending driver's logical name.
         driver: String,
     },
-    /// D3: a user-data field whose type is neither Rule-1 (the scalar zero-init
-    /// whitelist bool/u8/u16/u32/u64) nor Rule-2 (`Option<T: Copy>`).
+    /// D3: a user-data field whose type is neither Rule-1 (the zero-init
+    /// whitelist bool/u8/u16/u32/u64 plus recursively initializable POD
+    /// structs) nor Rule-2 (`Option<T: Copy>`).
     #[error(
         "driver `{driver}` field `{field}` of type `{rejected_type}` is not a valid user-data \
-         field (expected a scalar bool/u8/u16/u32/u64 or Option<T: Copy>)"
+         field (expected a scalar bool/u8/u16/u32/u64, a recursively zero-initializable POD \
+         struct, or Option<T: Copy>)"
     )]
     UserDataNotInitializable {
         /// The offending driver's logical name.
@@ -1422,7 +1438,11 @@ pub enum NetworkDiagnostic {
     #[error("NIM-ERR-INCOMPLETE-INTERFACE: driver `{driver}` is missing required network-interface operations: {missing}")]
     IncompleteInterface { driver: String, missing: String },
     #[error("NIM-ERR-BAD-SIGNATURE: driver `{driver}` operation `{operation}`: {detail}")]
-    BadSignature { driver: String, operation: String, detail: String },
+    BadSignature {
+        driver: String,
+        operation: String,
+        detail: String,
+    },
 }
 
 /// Per-construct timed-cpu-delay-and-sleep (TCD) frontend diagnostics (GRILL
@@ -2378,11 +2398,8 @@ fn scan_terminator_for_synthesis<'tcx>(
                 // vtable / drop-glue needs.
                 if !matches!(canonical.flavor, FunctionInstanceFlavor::FnPtrShim) {
                     let _ = ty::translate_ty(ctxt, canonical.callee_ty);
-                    if intrinsic::intrinsic_kind_for_def_id(
-                        ctxt.input.tcx,
-                        canonical.callee_def_id,
-                    )
-                    .is_some()
+                    if intrinsic::intrinsic_kind_for_def_id(ctxt.input.tcx, canonical.callee_def_id)
+                        .is_some()
                     {
                         let model_ty = ty::translate_ty(ctxt, canonical.callee_ty)?;
                         if let Ty::FnDef(callee_item, _) =
@@ -2733,6 +2750,12 @@ fn construct_instances_and_resolve_cross_references(
     // another late-item path.
     let item_remap = ctxt.model.sort_items_by_f4();
     ctxt.handles.remap_item_ids(&item_remap);
+    // ISR/work-handler bodies are force-materialized after the first intrinsic
+    // pass. Calls first discovered in those bodies (for example an ISR's
+    // `self.work.submit()`) must receive the same intrinsic marker as calls in
+    // lifecycle roots before the backend computes its reachable closure.
+    intrinsic::materialise_intrinsics(ctxt);
+    deferred_work::validate_deferred_work_signatures(ctxt)?;
     const_::construct_const_memory_static_instances(ctxt)?;
     // Audit-finding regseq-driver-48 (spec.md section 26.6
     // `I-DiagLog-CallArity` carrier-survival contract): the

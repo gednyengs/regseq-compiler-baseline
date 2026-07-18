@@ -13,8 +13,8 @@ fn corpus() -> PathBuf {
 
 #[test]
 fn empty_serial_port_impl_preserves_every_capability_as_absent() {
-    let input = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("fixtures/_lifecycle/lifecycle-pl011/input.rs");
+    let input =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_lifecycle/lifecycle-pl011/input.rs");
     let model = match try_bridge_fixture_path(&input) {
         BridgeOutcome::Ok(model) => model,
         other => panic!("empty serial-port bridge failed: {other:?}"),
@@ -100,7 +100,10 @@ fn serial_capability_absence_has_no_fabricated_event_or_success() {
         other => panic!("minimal serial bridge failed: {other:?}"),
     };
     let serial = model.serial_port.drivers.values().next().unwrap();
-    assert_eq!(serial.ops.capabilities().collect::<Vec<_>>(), vec!["transmit"]);
+    assert_eq!(
+        serial.ops.capabilities().collect::<Vec<_>>(),
+        vec!["transmit"]
+    );
     assert!(serial.ops.subscribe_events.is_none());
     assert!(serial.ops.abort.is_none());
     assert!(serial.ops.await_drain.is_none());
@@ -117,7 +120,9 @@ fn serial_capability_absence_has_no_fabricated_event_or_success() {
     assert!(emit.tu.contains("capability: transmit"));
     assert!(!emit.tu.contains("capability: subscribe_events"));
     assert!(!emit.tu.contains("capability: abort"));
-    assert!(emit.tu.contains("absent operations are unsupported; no terminal event is implied"));
+    assert!(emit
+        .tu
+        .contains("absent operations are unsupported; no terminal event is implied"));
     let run = toolchain::compile_and_run(&emit.tu, &emit.shim, Path::new("cc"))
         .expect("compile and run minimal generic C serial behavior");
     assert_eq!(run.exit_code, Some(0), "stderr: {}", run.stderr);

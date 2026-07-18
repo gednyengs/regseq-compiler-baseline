@@ -50,7 +50,10 @@ impl NetworkInterfaceOps {
             ("receive", self.receive.is_some()),
             ("report_carrier", self.report_carrier.is_some()),
             ("report_dormant", self.report_dormant.is_some()),
-            ("query_operational_state", self.query_operational_state.is_some()),
+            (
+                "query_operational_state",
+                self.query_operational_state.is_some(),
+            ),
             ("get_property", self.get_property.is_some()),
             ("set_property", self.set_property.is_some()),
             ("read_counters", self.read_counters.is_some()),
@@ -82,9 +85,11 @@ mod ordered_network_map {
     where
         D: Deserializer<'de>,
     {
-        Ok(Vec::<(ItemId, DriverNetworkInterface)>::deserialize(deserializer)?
-            .into_iter()
-            .collect())
+        Ok(
+            Vec::<(ItemId, DriverNetworkInterface)>::deserialize(deserializer)?
+                .into_iter()
+                .collect(),
+        )
     }
 }
 

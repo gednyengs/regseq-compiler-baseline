@@ -96,8 +96,7 @@ fn zephyr_pl011_snapshot_and_l0_structure() {
 
     // -- the converged-fixture deltas (spec-convergence-pl011): the C04
     //    deinit artifacts + the C03/A1 audit blocks at the consumed surface.
-    let p_deinit_macro =
-        pos("DEVICE_DT_INST_DEINIT_DEFINE(n, pl011_init, pl011_deinit, NULL,");
+    let p_deinit_macro = pos("DEVICE_DT_INST_DEINIT_DEFINE(n, pl011_init, pl011_deinit, NULL,");
     assert!(
         !tu.contains("DEVICE_DT_INST_DEFINE(n,"),
         "the macro is SWAPPED, not duplicated (C04)"

@@ -72,8 +72,8 @@ fn linux_e1000_snapshot_and_l0_structure() {
         result.verdict
     );
 
-    let tu = std::fs::read_to_string(pipeline::linux_golden_path(fixture))
-        .expect("read golden.linux.c");
+    let tu =
+        std::fs::read_to_string(pipeline::linux_golden_path(fixture)).expect("read golden.linux.c");
     let pos = |needle: &str| {
         tu.find(needle)
             .unwrap_or_else(|| panic!("TU must contain `{needle}`"))
@@ -112,7 +112,10 @@ fn linux_e1000_snapshot_and_l0_structure() {
     let native = pos("return PTR_ERR(priv->inner.regs);");
     let on_init_call = pos("e1000_on_init(&priv->inner)");
     assert!(
-        create < associate && associate < enable && enable < map && map < native
+        create < associate
+            && associate < enable
+            && enable < map
+            && map < native
             && native < on_init_call,
         "probe ladder must run create -> associate -> pcim enable -> fused \
          request+map (native channel) -> on_init"
@@ -249,7 +252,10 @@ fn linux_e1000_snapshot_and_l0_structure() {
     let msg = regseq_backends::emit_linux_c(&multi)
         .expect_err(">1 region must fail")
         .to_string();
-    assert!(msg.contains("B-5"), "the >1-region rejection names B-5: {msg}");
+    assert!(
+        msg.contains("B-5"),
+        "the >1-region rejection names B-5: {msg}"
+    );
 
     // -- foreign-transport match entry under a PCI driver: audited and
     //    filtered out of the table, never silently dropped (C06/C03/A2 —

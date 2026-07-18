@@ -38,7 +38,10 @@ fn assert_absent(tu: &str) {
         "tx_done",
         "register_callback",
     ] {
-        assert!(!tu.contains(forbidden), "native output fabricated {forbidden}");
+        assert!(
+            !tu.contains(forbidden),
+            "native output fabricated {forbidden}"
+        );
     }
 }
 
@@ -62,6 +65,7 @@ fn transport_zephyr_is_native_admission_only() {
         .tu;
     assert!(tu.contains("#include <zephyr/drivers/mbox.h>"));
     assert!(tu.contains("const struct mbox_dt_spec *__endpoint"));
+    assert!(tu.contains("((uintptr_t)__endpoint % _Alignof(struct mbox_dt_spec)) == 0"));
     assert!(tu.contains("mbox_send(__endpoint->dev, __endpoint->channel_id"));
     assert!(tu.contains("if (__reason == 0)"));
     assert_absent(&tu);

@@ -234,7 +234,10 @@ fn busy_wait_in_isr_body_is_accepted() {
         &isr_source("busy_wait(Duration::from_us(5));", ""),
         |_| (),
     );
-    assert!(ok.is_ok(), "busy_wait in an ISR body must be accepted: {ok:?}");
+    assert!(
+        ok.is_ok(),
+        "busy_wait in an ISR body must be accepted: {ok:?}"
+    );
 }
 
 #[test]
@@ -267,7 +270,10 @@ fn busy_wait_with_duration_arg_is_accepted() {
         ),
         |_| (),
     );
-    assert!(ok.is_ok(), "canonical busy_wait(Duration) must bridge: {ok:?}");
+    assert!(
+        ok.is_ok(),
+        "canonical busy_wait(Duration) must bridge: {ok:?}"
+    );
 }
 
 #[test]

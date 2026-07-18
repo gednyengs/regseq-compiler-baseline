@@ -89,6 +89,20 @@ fn concrete_eq_path(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
             && named_segment(model, method, "eq", true))
 }
 
+pub(crate) fn is_bodyful_concrete_partial_eq(model: &RegseqModel, id: InstanceId) -> bool {
+    let instance = &model.instances[id];
+    let Some(data) = instance.kind.as_function() else {
+        return false;
+    };
+    data.body.is_some()
+        && data.flavor == FunctionInstanceFlavor::Item
+        && model.items[instance.item].kind == ItemKind::Function
+        && model.items[instance.item].linkage == Linkage::Default
+        && model.items[instance.item].def_path.crate_id == model.primary_crate
+        && concrete_eq_path(model, instance.item)
+        && valid_partial_eq_ne_signature(model, model.sigs.resolve(data.fn_sig))
+}
+
 fn valid_null_mut_signature(
     model: &RegseqModel,
     instance: &regseq_model::Instance,

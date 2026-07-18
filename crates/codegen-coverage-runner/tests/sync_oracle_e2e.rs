@@ -52,21 +52,11 @@ impl Drop for TempCorpus {
 /// Write a single-`IrqSpinLock` driver fixture (named `name`, `on_init` body
 /// `init_body`) into the temp corpus and return its dir.
 fn write_fixture(corpus: &TempCorpus, name: &str, init_body: &str) -> PathBuf {
-    write_fixture_with(
-        corpus,
-        name,
-        "pub lock: IrqSpinLock<u32>",
-        init_body,
-    )
+    write_fixture_with(corpus, name, "pub lock: IrqSpinLock<u32>", init_body)
 }
 
 /// Write a lock-driver fixture with arbitrary `fields` + `on_init` `init_body`.
-fn write_fixture_with(
-    corpus: &TempCorpus,
-    name: &str,
-    fields: &str,
-    init_body: &str,
-) -> PathBuf {
+fn write_fixture_with(corpus: &TempCorpus, name: &str, fields: &str, init_body: &str) -> PathBuf {
     let fixture_dir = corpus.dir.join(name);
     std::fs::create_dir_all(&fixture_dir).expect("create fixture dir");
 
@@ -210,7 +200,11 @@ fn all_kinds_and_completion_lower_and_oracle_passes() {
         run.stdout,
         run.stderr
     );
-    assert!(!run.stdout.contains("SYNC error"), "no violation; stdout:\n{}", run.stdout);
+    assert!(
+        !run.stdout.contains("SYNC error"),
+        "no violation; stdout:\n{}",
+        run.stdout
+    );
     for ev in [
         "SYNC completion_signal id=3",
         "SYNC completion_reset id=3",
@@ -219,7 +213,11 @@ fn all_kinds_and_completion_lower_and_oracle_passes() {
         "SYNC lock_acquire id=1 kind=SPIN",
         "SYNC lock_acquire id=2 kind=IRQSPIN",
     ] {
-        assert!(run.stdout.contains(ev), "missing trace `{ev}`; stdout:\n{}", run.stdout);
+        assert!(
+            run.stdout.contains(ev),
+            "missing trace `{ev}`; stdout:\n{}",
+            run.stdout
+        );
     }
 }
 
@@ -242,9 +240,16 @@ fn guard_drop_early_releases_and_oracle_passes() {
         emit.tu
     );
     let run = toolchain::compile_and_run(&emit.tu, &emit.shim, cc()).expect("compile + run");
-    assert_eq!(run.exit_code, Some(0), "stdout:\n{}\nstderr:\n{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "stdout:\n{}\nstderr:\n{}",
+        run.stdout,
+        run.stderr
+    );
     assert!(
-        run.stdout.contains("SYNC lock_acquire id=0") && run.stdout.contains("SYNC lock_release id=0"),
+        run.stdout.contains("SYNC lock_acquire id=0")
+            && run.stdout.contains("SYNC lock_release id=0"),
         "stdout:\n{}",
         run.stdout
     );

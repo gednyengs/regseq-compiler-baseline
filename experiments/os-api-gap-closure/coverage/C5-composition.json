@@ -32,9 +32,9 @@
     {"stage": "C4-NIM", "rows": 20}
   ],
   "target_matrix": [
-    {"device": "pl011", "target": "linux", "source": "crates/codegen-coverage-runner/fixtures/_composition/c5-pl011-rich/input.rs", "output": "experiments/os-api-gap-closure/generated/C5-composition/pl011.linux.c", "frozen_rows": 21},
+    {"device": "pl011", "target": "linux", "source": "crates/codegen-coverage-runner/fixtures/_composition/c5-pl011-rich/input.rs", "output": "experiments/os-api-gap-closure/generated/C5-composition/pl011_linux.c", "frozen_rows": 21},
     {"device": "pl011", "target": "zephyr", "source": "crates/codegen-coverage-runner/fixtures/_composition/c5-pl011-rich/input.rs", "output": "experiments/os-api-gap-closure/generated/C5-composition/pl011.zephyr.c", "frozen_rows": 21},
-    {"device": "e1000", "target": "linux", "source": "crates/codegen-coverage-runner/fixtures/_composition/c5-e1000-rich/input.rs", "output": "experiments/os-api-gap-closure/generated/C5-composition/e1000.linux.c", "frozen_rows": 60},
+    {"device": "e1000", "target": "linux", "source": "crates/codegen-coverage-runner/fixtures/_composition/c5-e1000-rich/input.rs", "output": "experiments/os-api-gap-closure/generated/C5-composition/e1000_linux.c", "frozen_rows": 60},
     {"device": "e1000", "target": "zephyr", "source": "crates/codegen-coverage-runner/fixtures/_composition/c5-e1000-rich/input.rs", "output": "experiments/os-api-gap-closure/generated/C5-composition/e1000.zephyr.c", "frozen_rows": 60}
   ],
   "composition": [

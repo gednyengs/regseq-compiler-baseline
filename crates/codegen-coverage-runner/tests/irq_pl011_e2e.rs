@@ -143,7 +143,8 @@ fn irq_pl011_six_stage_oracle() {
         "enable must follow on_init Ok and precede the masked fire's NotHandled"
     );
     assert!(
-        not_handled < poke && poke < handled && handled < ack || not_handled < poke && poke < ack && ack < handled,
+        not_handled < poke && poke < handled && handled < ack
+            || not_handled < poke && poke < ack && ack < handled,
         "the cause poke must precede the Handled dispatch and its ICR ack"
     );
     assert!(

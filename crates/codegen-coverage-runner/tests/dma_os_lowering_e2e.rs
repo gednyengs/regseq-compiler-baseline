@@ -38,8 +38,13 @@ fn linux_channel_model() -> regseq_model::RegseqModel {
 
 fn zephyr_channel_model() -> regseq_model::RegseqModel {
     let mut model = model("dma-channel-pl011");
-    model.device_lifecycle.drivers.values_mut().next().unwrap().ops =
-        regseq_model::LifecycleOps::default();
+    model
+        .device_lifecycle
+        .drivers
+        .values_mut()
+        .next()
+        .unwrap()
+        .ops = regseq_model::LifecycleOps::default();
     model
 }
 
@@ -56,8 +61,8 @@ fn linux_buffer_model() -> regseq_model::RegseqModel {
 
 #[test]
 fn dma_linux_buffer_and_channel_use_native_owned_lifetimes() {
-    let buffer = regseq_backends::emit_linux_c(&linux_buffer_model())
-        .expect("Linux DmaBuffer lowering");
+    let buffer =
+        regseq_backends::emit_linux_c(&linux_buffer_model()).expect("Linux DmaBuffer lowering");
     assert!(buffer.tu.contains("dma_alloc_coherent("));
     assert!(buffer.tu.contains("dma_free_coherent("));
     assert!(buffer.tu.contains("_dma_buffer_cpu_address("));
@@ -101,7 +106,10 @@ fn dma_linux_buffer_and_channel_use_native_owned_lifetimes() {
         "(owned->terminated && !owned->synchronized)",
         "dma_release_channel(",
     ] {
-        assert!(channel.tu.contains(needle), "missing Linux DMA shape {needle}");
+        assert!(
+            channel.tu.contains(needle),
+            "missing Linux DMA shape {needle}"
+        );
     }
     let terminate = channel.tu.find("dmaengine_terminate_async(").unwrap();
     let synchronize = channel.tu.find("dmaengine_synchronize(").unwrap();
@@ -120,7 +128,9 @@ fn dma_linux_buffer_and_channel_use_native_owned_lifetimes() {
 fn dma_zephyr_preserves_buffer_absence_and_lowers_channel() {
     let error = regseq_backends::emit_zephyr_c(&model("dma-buffer-e1000"))
         .expect_err("Zephyr has no owned DMA-buffer allocator");
-    assert!(error.to_string().contains("DmaBuffer owned allocation is unsupported"));
+    assert!(error
+        .to_string()
+        .contains("DmaBuffer owned allocation is unsupported"));
 
     let channel = regseq_backends::emit_zephyr_c(&zephyr_channel_model())
         .expect("Zephyr async channel lowering");
@@ -135,9 +145,14 @@ fn dma_zephyr_preserves_buffer_absence_and_lowers_channel() {
         "(owned->terminated && !owned->synchronized)",
         "dma_release_channel(",
     ] {
-        assert!(channel.tu.contains(needle), "missing Zephyr DMA shape {needle}");
+        assert!(
+            channel.tu.contains(needle),
+            "missing Zephyr DMA shape {needle}"
+        );
     }
-    assert!(channel.tu.contains("dma_request_channel(controller, filter_param)"));
+    assert!(channel
+        .tu
+        .contains("dma_request_channel(controller, filter_param)"));
     assert!(!channel.tu.contains("dma_alloc_coherent"));
     assert!(!channel.tu.contains("__nocache"));
     assert!(!channel.tu.contains("callback ="));
@@ -152,8 +167,17 @@ fn dma_forbidden_old_surface_is_absent_from_new_implementation() {
         root.join("regseq-backends/src/zephyr_c/dma.rs"),
     ] {
         let text = std::fs::read_to_string(&path).unwrap();
-        for forbidden in ["DmaStreamBuffer", "element_access", "stage_transfer", "dma_mmio_store_order"] {
-            assert!(!text.contains(forbidden), "{} contains {forbidden}", path.display());
+        for forbidden in [
+            "DmaStreamBuffer",
+            "element_access",
+            "stage_transfer",
+            "dma_mmio_store_order",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "{} contains {forbidden}",
+                path.display()
+            );
         }
     }
     let bridge = std::fs::read_to_string(root.join("regseq-driver/src/bridge/dma.rs")).unwrap();

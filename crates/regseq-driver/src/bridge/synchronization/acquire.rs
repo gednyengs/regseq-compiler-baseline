@@ -211,8 +211,7 @@ fn wait_result_consumed(model: &RegseqModel, body: &Body, dest: regseq_model::Lo
     }
     // Pass 2 — a consuming use of any tainted local (alias/copy edges, handled
     // in pass 1, are NOT themselves consumes).
-    let reads =
-        |op: &Operand| matches!(op, Operand::Copy(p) | Operand::Move(p) if tainted.contains(&p.local));
+    let reads = |op: &Operand| matches!(op, Operand::Copy(p) | Operand::Move(p) if tainted.contains(&p.local));
     for bb in body.basic_blocks.iter() {
         for stmt in bb.statements.iter() {
             match &stmt.kind {

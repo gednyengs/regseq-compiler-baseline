@@ -32,7 +32,10 @@ impl TempCorpus {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let dir = std::env::temp_dir().join(format!("ccr-atomic-conf-{label}-{}-{nanos}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!(
+            "ccr-atomic-conf-{label}-{}-{nanos}",
+            std::process::id()
+        ));
         std::fs::create_dir_all(&dir).expect("create temp corpus dir");
         TempCorpus { dir }
     }
@@ -47,7 +50,10 @@ impl Drop for TempCorpus {
 fn write_fixture(corpus: &TempCorpus) -> PathBuf {
     let fixture_dir = corpus.dir.join("atomic-driver");
     std::fs::create_dir_all(&fixture_dir).expect("create fixture dir");
-    let surface = format!("{}/fixtures/_lifecycle_surface.rs", env!("CARGO_MANIFEST_DIR"));
+    let surface = format!(
+        "{}/fixtures/_lifecycle_surface.rs",
+        env!("CARGO_MANIFEST_DIR")
+    );
     let input = format!(
         "#![no_std]\n#![feature(register_tool)]\n#![register_tool(rseq)]\n\
          include!(\"{surface}\");\n\n\
@@ -122,7 +128,9 @@ fn linux_atomic_api_selection() {
     let corpus = TempCorpus::new("linux");
     let dir = write_fixture(&corpus);
     let model = bound_model(&corpus.dir, manifest::OsBinding::Linux);
-    let tu = regseq_backends::emit_linux_c(&model).expect("linux_c emit").tu;
+    let tu = regseq_backends::emit_linux_c(&model)
+        .expect("linux_c emit")
+        .tu;
     let _ = dir;
 
     // The ops live in the `atomicdrv_on_init(struct AtomicDrv *_1)` callback, so
@@ -157,10 +165,16 @@ fn linux_atomic_api_selection() {
         // fence: conservative full barrier.
         "smp_mb();",
     ] {
-        assert!(tu.contains(needle), "linux emit must contain `{needle}`:\n{tu}");
+        assert!(
+            tu.contains(needle),
+            "linux emit must contain `{needle}`:\n{tu}"
+        );
     }
     // The bit op must NOT use the non-idiomatic test_and_set_bit cast hack.
-    assert!(!tu.contains("test_and_set_bit"), "must use fetch_or, not test_and_set_bit:\n{tu}");
+    assert!(
+        !tu.contains("test_and_set_bit"),
+        "must use fetch_or, not test_and_set_bit:\n{tu}"
+    );
 }
 
 #[test]
@@ -168,7 +182,9 @@ fn zephyr_atomic_builtin_selection() {
     let corpus = TempCorpus::new("zephyr");
     let _dir = write_fixture(&corpus);
     let model = bound_model(&corpus.dir, manifest::OsBinding::Zephyr);
-    let tu = regseq_backends::emit_zephyr_c(&model).expect("zephyr_c emit").tu;
+    let tu = regseq_backends::emit_zephyr_c(&model)
+        .expect("zephyr_c emit")
+        .tu;
 
     // Ops are in `atomicdrv_on_init(struct AtomicDrv *_1)` (receiver `&(*_1).f`);
     // the init is in the probe (`&data->inner.f`).
@@ -201,6 +217,9 @@ fn zephyr_atomic_builtin_selection() {
         // fence builtin with the exact order.
         "__atomic_thread_fence(__ATOMIC_RELEASE);",
     ] {
-        assert!(tu.contains(needle), "zephyr emit must contain `{needle}`:\n{tu}");
+        assert!(
+            tu.contains(needle),
+            "zephyr emit must contain `{needle}`:\n{tu}"
+        );
     }
 }

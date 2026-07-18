@@ -1,0 +1,6 @@
+name = "c5-pl011-linux-initfail"
+kind = "rust"
+lifecycle_scenario = "orderly"
+covers = []
+expect = "pass"
+version = "1"

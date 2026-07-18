@@ -51,9 +51,7 @@ fn deferred_work_uses_native_linux_and_zephyr_work_apis() {
     assert!(linux.contains("INIT_WORK(&priv->__rseq_work_0, dwreset_work_0);"));
     assert!(linux.contains("schedule_work(&__rseq_priv->__rseq_work_0);"));
     assert!(linux.contains("cancel_work_sync(&priv->__rseq_work_0);"));
-    assert!(linux.contains(
-        "container_of(work, struct dwreset_priv, __rseq_work_0)"
-    ));
+    assert!(linux.contains("container_of(work, struct dwreset_priv, __rseq_work_0)"));
     assert!(
         linux.find("INIT_WORK(&priv->__rseq_work_0").unwrap()
             < linux.find("dwreset_on_init(&priv->inner)").unwrap(),
@@ -61,7 +59,9 @@ fn deferred_work_uses_native_linux_and_zephyr_work_apis() {
     );
     assert!(
         linux.find("dwreset_on_deinit(&priv->inner)").unwrap_or(0)
-            < linux.find("cancel_work_sync(&priv->__rseq_work_0)").unwrap(),
+            < linux
+                .find("cancel_work_sync(&priv->__rseq_work_0)")
+                .unwrap(),
         "Linux drains work after authored teardown and before storage release"
     );
 
@@ -73,9 +73,7 @@ fn deferred_work_uses_native_linux_and_zephyr_work_apis() {
     assert!(zephyr.contains("k_work_init(&data->__rseq_work_0, dwreset_work_0);"));
     assert!(zephyr.contains("k_work_submit(&__rseq_data->__rseq_work_0);"));
     assert!(zephyr.contains("k_work_cancel_sync(&data->__rseq_work_0, &__sync)"));
-    assert!(zephyr.contains(
-        "CONTAINER_OF(work, struct dwreset_data, __rseq_work_0)"
-    ));
+    assert!(zephyr.contains("CONTAINER_OF(work, struct dwreset_data, __rseq_work_0)"));
     assert!(
         zephyr.find("k_work_init(&data->__rseq_work_0").unwrap()
             < zephyr.find("dwreset_on_init(&data->inner)").unwrap(),

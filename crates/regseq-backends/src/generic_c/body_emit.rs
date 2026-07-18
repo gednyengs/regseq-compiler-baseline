@@ -42,16 +42,13 @@ use std::cell::RefCell;
 
 use regseq_model::{
     args_key_for_generic_args, AggregateKind, ArmReachability, AssertKind, AtomicElement, AtomicOp,
-    AttrData, BinOp, BlockId, Byte,
-    CallCallee, CastKind, ClockMode, ClockOp, CompletionOpKind, ConfigOp, Const,
-    ConstId, DriverInterrupts, Endian, EnumShape, FetchOp, FieldIdx, FieldPath, FloatKind,
-    GenericArg, InstanceId, InstanceKind,
-    InstanceRef, InterruptForm, IntKind, IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel,
-    MatchEntry, MmioOp, NonDivergingIntrinsic,
-    Operand, PinctrlOp, Place, PlaceElem, PointerCoercion, RegseqModel, Rvalue, StatementKind,
-    SwitchTargets,
-    SyncKind, SyntheticItemKind, TagEncoding, TerminatorKind, TriggerPolarity, TriggerType, Ty,
-    TyId, UintKind, UnOp, VariantIdx, VariantLayout,
+    AttrData, BinOp, BlockId, Byte, CallCallee, CastKind, ClockMode, ClockOp, CompletionOpKind,
+    ConfigOp, Const, ConstId, DriverInterrupts, Endian, EnumShape, FetchOp, FieldIdx, FieldPath,
+    FloatKind, GenericArg, InstanceId, InstanceKind, InstanceRef, IntKind, InterruptForm,
+    IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel, MatchEntry, MmioOp,
+    NonDivergingIntrinsic, Operand, PinctrlOp, Place, PlaceElem, PointerCoercion, RegseqModel,
+    Rvalue, StatementKind, SwitchTargets, SyncKind, SyntheticItemKind, TagEncoding, TerminatorKind,
+    TriggerPolarity, TriggerType, Ty, TyId, UintKind, UnOp, VariantIdx, VariantLayout,
 };
 
 use crate::interrupt_order::{irq_steps_for, IrqPhase, IrqStep};
@@ -2340,6 +2337,9 @@ impl BodyEmit<'_> {
             ) {
                 return self.emit_command_transport_submit(callee, args, destination, target);
             }
+            if let Some(op) = descriptor_dma_buffer_op(self.model, *inst) {
+                return self.emit_descriptor_dma_buffer_op(op, callee, args, destination, target);
+            }
             // (Device-lifecycle is no longer call-intercepted: the harness verbs
             // were removed, RD-1; the synthesized `main` drives the lifecycle —
             // see `emit_lifecycle_synthesis`.)
@@ -2445,9 +2445,7 @@ impl BodyEmit<'_> {
         destination: &Place,
         target: Option<regseq_model::BlockId>,
     ) -> Result<String, EmitError> {
-        let target = target.ok_or(EmitError::Unsupported(
-            "diverging command-transport submit",
-        ))?;
+        let target = target.ok_or(EmitError::Unsupported("diverging command-transport submit"))?;
         if args.len() != 2 {
             return Err(EmitError::Unsupported(
                 "command-transport submit without endpoint and payload",
@@ -2455,12 +2453,21 @@ impl BodyEmit<'_> {
         }
         let params = super::callee_param_tys(self.model, self.body, callee);
         let endpoint = self.operand_expr(&args[0], params.first().copied())?;
-        let payload = self.operand_expr(&args[1], params.get(1).copied())?;
+        let authored_payload = self.operand_expr(&args[1], params.get(1).copied())?;
+        // Descriptor commands carry a stack pointer as their opaque payload.
+        // Preserve evaluation but normalize the host-only trace value so ASLR
+        // cannot make the committed oracle nondeterministic. Other DCT models
+        // retain their authored payload verbatim (the locked admission suite).
+        let payload = if model_has_descriptor_dma_oracle(self.model) {
+            format!("((void)({authored_payload}), 0u)")
+        } else {
+            authored_payload
+        };
         let dst = self.place_lvalue(destination)?;
         let dst_ty = self.place_ty(destination);
-        let shape = enum_emit::enum_shape(self.model, dst_ty).ok_or(
-            EmitError::Unsupported("command-transport outcome is not an enum"),
-        )?;
+        let shape = enum_emit::enum_shape(self.model, dst_ty).ok_or(EmitError::Unsupported(
+            "command-transport outcome is not an enum",
+        ))?;
         let EnumShape::Multiple {
             encoding: TagEncoding::Direct,
             variants,
@@ -2476,8 +2483,12 @@ impl BodyEmit<'_> {
                 "command-transport outcome layout does not match Accepted/Rejected(isize)",
             ));
         }
-        let accepted = self.emit_set_discriminant(&dst, shape, 0)?.unwrap_or_default();
-        let rejected = self.emit_set_discriminant(&dst, shape, 1)?.unwrap_or_default();
+        let accepted = self
+            .emit_set_discriminant(&dst, shape, 0)?
+            .unwrap_or_default();
+        let rejected = self
+            .emit_set_discriminant(&dst, shape, 1)?
+            .unwrap_or_default();
         let reason_ty = variants[1].fields[0].ty;
         let reason_cty = types::c_type(self.model, self.names, reason_ty);
         let tmp = self.fresh_temp_name("_dct_reason");
@@ -2487,6 +2498,118 @@ impl BodyEmit<'_> {
              {dst}.u._v1._0 = ({reason_cty}){tmp}; }} }} goto bb_{};",
             target.as_u32()
         ))
+    }
+
+    /// Lower the composed rich-E1000 buffer operations to the deterministic
+    /// generic-C descriptor-DMA host model. This is intentionally narrower than
+    /// the locked DMA surface: ordinary DMA fixtures continue to execute their
+    /// authored bodies, while the native descriptor-ring composition gets the
+    /// same target-supplied ownership/address seam as Linux and Zephyr.
+    fn emit_descriptor_dma_buffer_op(
+        &self,
+        op: &'static str,
+        callee: &CallCallee,
+        args: &[Operand],
+        destination: &Place,
+        target: Option<regseq_model::BlockId>,
+    ) -> Result<String, EmitError> {
+        let target = target.ok_or(EmitError::Unsupported(
+            "diverging descriptor DMA buffer operation",
+        ))?;
+        let params = super::callee_param_tys(self.model, self.body, callee);
+        let arg = |this: &Self, index: usize| -> Result<String, EmitError> {
+            let operand = args.get(index).ok_or(EmitError::Unsupported(
+                "descriptor DMA buffer operation missing an argument",
+            ))?;
+            this.operand_expr(operand, params.get(index).copied())
+        };
+        let dst = self.place_lvalue(destination)?;
+        let stmt = match op {
+            "allocate" => {
+                let request = arg(self, 1)?;
+                format!(
+                    "memset(&{dst}, 0, sizeof({dst})); {dst}.identity = \
+                     regseq_descriptor_dma_allocate(({request}).size, ({request}).alignment, \
+                     ({request}).boundary, ({request}).zero);"
+                )
+            }
+            "free" => {
+                let buffer = arg(self, 1)?;
+                format!("regseq_descriptor_dma_free(({buffer}).identity);")
+            }
+            "cpu_address" => {
+                let buffer = arg(self, 1)?;
+                format!("{dst} = regseq_descriptor_dma_cpu_address(({buffer}).identity);")
+            }
+            "length" => {
+                let buffer = arg(self, 1)?;
+                format!("{dst} = regseq_descriptor_dma_length(({buffer}).identity);")
+            }
+            "transfer_address" => {
+                let receiver = arg(self, 0)?;
+                let buffer = arg(self, 1)?;
+                let receiver_ty = params
+                    .first()
+                    .and_then(|ty| match self.model.types[*ty] {
+                        Ty::Ref(pointee, _) => Some(pointee),
+                        _ => None,
+                    })
+                    .ok_or(EmitError::Unsupported(
+                        "descriptor DMA transfer address receiver is not a reference",
+                    ))?;
+                let receiver_cty = types::c_type(self.model, self.names, receiver_ty);
+                let dst_ty = self.place_ty(destination);
+                let shape =
+                    enum_emit::enum_shape(self.model, dst_ty).ok_or(EmitError::Unsupported(
+                        "descriptor DMA transfer address does not return Option<u64>",
+                    ))?;
+                let EnumShape::Multiple { variants, .. } = shape else {
+                    return Err(EmitError::Unsupported(
+                        "descriptor DMA transfer address does not return Option<u64>",
+                    ));
+                };
+                let none = variants
+                    .iter()
+                    .position(|variant| self.model.strings.resolve(variant.name) == "None")
+                    .ok_or(EmitError::Unsupported(
+                        "descriptor DMA transfer address Option lacks None",
+                    ))?;
+                let some = variants
+                    .iter()
+                    .position(|variant| self.model.strings.resolve(variant.name) == "Some")
+                    .ok_or(EmitError::Unsupported(
+                        "descriptor DMA transfer address Option lacks Some",
+                    ))?;
+                let none_tag = self
+                    .emit_set_discriminant(&dst, shape, none)?
+                    .unwrap_or_default();
+                let some_tag = self
+                    .emit_set_discriminant(&dst, shape, some)?
+                    .unwrap_or_default();
+                let (some_field, some_ty) = enum_emit::enum_variant_field(
+                    self.model, dst_ty, some, 0,
+                )
+                .ok_or(EmitError::Unsupported(
+                    "descriptor DMA transfer address Some payload is absent",
+                ))?;
+                let some_cty = types::c_type(self.model, self.names, some_ty);
+                let address = self.fresh_temp_name("_dma_address");
+                format!(
+                    "{{ uint64_t {address} = regseq_descriptor_dma_transfer_address(\
+                     ({buffer}).identity); memset(&{dst}, 0, sizeof({dst})); \
+                     if ({address} != 0u) {{ {some_tag} {dst}.{some_field} = \
+                     ({some_cty}){address}; (({receiver_cty} *)(uintptr_t)({receiver}))->\
+                     dma_address_shadow = {address}; }} \
+                     else {{ {none_tag} }} }}"
+                )
+            }
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "unknown descriptor DMA buffer operation",
+                ))
+            }
+        };
+        Ok(format!("{stmt} goto bb_{};", target.as_u32()))
     }
 
     /// Timed-CPU-delay-and-sleep lowering (TCD construct): lower a
@@ -2513,7 +2636,11 @@ impl BodyEmit<'_> {
             IntrinsicKind::BusyWait => "regseq_delay_busy_wait_ns",
             IntrinsicKind::Sleep => "regseq_delay_sleep_ns",
             // The interception only routes the two delay kinds here.
-            _ => return Err(EmitError::Unsupported("emit_delay on a non-delay intrinsic")),
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "emit_delay on a non-delay intrinsic",
+                ))
+            }
         };
         let arg = args.first().ok_or(EmitError::Unsupported(
             "delay intrinsic call without a Duration argument",
@@ -2656,14 +2783,17 @@ impl BodyEmit<'_> {
                 let fail = self.atomic_ordering(args, 4)?;
                 let dst = self.place_lvalue(destination)?;
                 let dst_ty = self.place_ty(destination);
-                let shape = enum_emit::enum_shape(self.model, dst_ty).ok_or(
-                    EmitError::Unsupported(
+                let shape =
+                    enum_emit::enum_shape(self.model, dst_ty).ok_or(EmitError::Unsupported(
                         "compare_exchange destination is not an enum (expected Result<T, T>)",
-                    ),
-                )?;
+                    ))?;
                 // Ok=0 / Err=1 tag writes + payload field paths.
-                let ok_tag = self.emit_set_discriminant(&dst, shape, 0)?.unwrap_or_default();
-                let err_tag = self.emit_set_discriminant(&dst, shape, 1)?.unwrap_or_default();
+                let ok_tag = self
+                    .emit_set_discriminant(&dst, shape, 0)?
+                    .unwrap_or_default();
+                let err_tag = self
+                    .emit_set_discriminant(&dst, shape, 1)?
+                    .unwrap_or_default();
                 let (ok_field, ok_fty) = enum_emit::enum_variant_field(self.model, dst_ty, 0, 0)
                     .ok_or(EmitError::Unsupported(
                         "compare_exchange Result Ok payload field navigation failed",
@@ -2694,9 +2824,9 @@ impl BodyEmit<'_> {
     /// C06); a non-const operand is a frontend bug (it should have been rejected
     /// with `ATOMIC-ERR-ORDERING-NONCONST`), so fail loud rather than guess.
     fn atomic_ordering(&self, args: &[Operand], i: usize) -> Result<u32, EmitError> {
-        let op = args
-            .get(i)
-            .ok_or(EmitError::Unsupported("atomic call missing the Ordering argument"))?;
+        let op = args.get(i).ok_or(EmitError::Unsupported(
+            "atomic call missing the Ordering argument",
+        ))?;
         self.model
             .resolve_operand_enum_variant(self.body, op)
             .ok_or(EmitError::Unsupported(
@@ -2921,12 +3051,13 @@ impl BodyEmit<'_> {
                 // Linux `devm_clk_get`/`PTR_ERR` concern, T14).
                 let dst = self.place_lvalue(destination)?;
                 let dst_ty = self.place_ty(destination);
-                let shape = enum_emit::enum_shape(self.model, dst_ty).ok_or(
-                    EmitError::Unsupported(
-                        "clock enable destination is not an enum (expected Result<(), RegseqError>)",
-                    ),
-                )?;
-                let ok_tag = self.emit_set_discriminant(&dst, shape, 0)?.unwrap_or_default();
+                let shape = enum_emit::enum_shape(self.model, dst_ty)
+                    .ok_or(EmitError::Unsupported(
+                    "clock enable destination is not an enum (expected Result<(), RegseqError>)",
+                ))?;
+                let ok_tag = self
+                    .emit_set_discriminant(&dst, shape, 0)?
+                    .unwrap_or_default();
                 if is_static {
                     // static: no-op enable → Ok(()).
                     ok_tag
@@ -3018,11 +3149,9 @@ impl BodyEmit<'_> {
                 PlaceElem::Field(idx, field_ty) => {
                     let item = match &self.model.types[ty] {
                         Ty::Struct { item, .. } => *item,
-                        _ => {
-                            return Err(EmitError::Unsupported(
-                                "deferred-work submit receiver field projection of a non-struct type",
-                            ))
-                        }
+                        _ => return Err(EmitError::Unsupported(
+                            "deferred-work submit receiver field projection of a non-struct type",
+                        )),
                     };
                     field_path = Some(FieldPath {
                         item,
@@ -3053,7 +3182,6 @@ impl BodyEmit<'_> {
         )
     }
 
-
     /// Pin-controller-and-GPIO-configuration receiver recovery (pinctrl
     /// construct): chase the `apply::<S>()` receiver `args[0]` to the single
     /// `PinCtrl`/`Option<PinCtrl>` field it borrows and read the resolved L1 `id`
@@ -3069,12 +3197,12 @@ impl BodyEmit<'_> {
         &self,
         recv: &Operand,
     ) -> Result<(String, regseq_model::PinctrlBinding), EmitError> {
-        let (_item, pinctrl_id, binding) =
-            regseq_model::recover_pinctrl_receiver(self.model, self.body, recv).ok_or(
-                EmitError::Unsupported(
-                    "pinctrl receiver does not resolve to a single PinCtrl resource field",
-                ),
-            )?;
+        let (_item, pinctrl_id, binding) = regseq_model::recover_pinctrl_receiver(
+            self.model, self.body, recv,
+        )
+        .ok_or(EmitError::Unsupported(
+            "pinctrl receiver does not resolve to a single PinCtrl resource field",
+        ))?;
         let id = self.model.strings.resolve(pinctrl_id).to_string();
         Ok((id, binding))
     }
@@ -3154,12 +3282,13 @@ impl BodyEmit<'_> {
                 // for a bound resource — the apply-error rc→Err mapping is post-M1).
                 let dst = self.place_lvalue(destination)?;
                 let dst_ty = self.place_ty(destination);
-                let shape = enum_emit::enum_shape(self.model, dst_ty).ok_or(
-                    EmitError::Unsupported(
-                        "pinctrl apply destination is not an enum (expected Result<(), RegseqError>)",
-                    ),
-                )?;
-                let ok_tag = self.emit_set_discriminant(&dst, shape, 0)?.unwrap_or_default();
+                let shape = enum_emit::enum_shape(self.model, dst_ty)
+                    .ok_or(EmitError::Unsupported(
+                    "pinctrl apply destination is not an enum (expected Result<(), RegseqError>)",
+                ))?;
+                let ok_tag = self
+                    .emit_set_discriminant(&dst, shape, 0)?
+                    .unwrap_or_default();
                 format!("(void)regseq_pinctrl_apply({id_lit}, {state_lit}); {ok_tag}")
             }
         };
@@ -3318,9 +3447,7 @@ impl BodyEmit<'_> {
                 // bits outside the mask are 0 (the locked `write_field` semantics),
                 // independent of how the `FieldValue` was constructed.
                 let fv = arg(self, 1)?;
-                format!(
-                    "{write_fn}({offset}, {width}, (uint64_t)(({fv}).value & ({fv}).mask));"
-                )
+                format!("{write_fn}({offset}, {width}, (uint64_t)(({fv}).value & ({fv}).mask));")
             }
             MmioOp::Read => {
                 // Whole-register raw read.
@@ -3384,9 +3511,9 @@ impl BodyEmit<'_> {
         // the same recovery `emit_mmio` / the ordinary-call path use for a
         // descriptor / substituted argument.
         let param_tys = super::callee_param_tys(self.model, self.body, callee);
-        let off_arg = args
-            .first()
-            .ok_or(EmitError::Unsupported("config call with no offset argument"))?;
+        let off_arg = args.first().ok_or(EmitError::Unsupported(
+            "config call with no offset argument",
+        ))?;
         let off = self.operand_expr(off_arg, param_tys.first().copied())?;
         let stmt = match op {
             ConfigOp::Read => {
@@ -3397,23 +3524,23 @@ impl BodyEmit<'_> {
                 let width = self.config_access_width(ty)?;
                 let dst = self.place_lvalue(destination)?;
                 let dst_cty = types::c_type(self.model, self.names, ty);
-                format!(
-                    "{dst} = ({dst_cty})regseq_bus_on_config_read((uint32_t)({off}), {width});"
-                )
+                format!("{dst} = ({dst_cty})regseq_bus_on_config_read((uint32_t)({off}), {width});")
             }
             ConfigOp::Write => {
                 // Width = size_of::<T>(), the value argument's type's size. Take
                 // the type from the callee's 2nd parameter (recoverable even for a
                 // constant value, which `operand_ty` cannot type); fall back to the
                 // value's own place type for a non-constant value.
-                let val_arg = args
-                    .get(1)
-                    .ok_or(EmitError::Unsupported("write_config with no value argument"))?;
+                let val_arg = args.get(1).ok_or(EmitError::Unsupported(
+                    "write_config with no value argument",
+                ))?;
                 let val_ty = param_tys
                     .get(1)
                     .copied()
                     .or_else(|| self.operand_ty(val_arg))
-                    .ok_or(EmitError::Unsupported("write_config value has no recoverable type"))?;
+                    .ok_or(EmitError::Unsupported(
+                        "write_config value has no recoverable type",
+                    ))?;
                 let width = self.config_access_width(val_ty)?;
                 let val = self.operand_expr(val_arg, param_tys.get(1).copied())?;
                 format!(
@@ -3600,9 +3727,9 @@ impl BodyEmit<'_> {
         // a field or an array index): use it. The chain walk in `recover_register`
         // validates the full projection.
         match place.projection.last() {
-            Some(
-                PlaceElem::Field(..) | PlaceElem::Index(..) | PlaceElem::ConstantIndex { .. },
-            ) => return Ok(place.clone()),
+            Some(PlaceElem::Field(..) | PlaceElem::Index(..) | PlaceElem::ConstantIndex { .. }) => {
+                return Ok(place.clone())
+            }
             // Bare local: find its unique definition (the hoisted borrow) below.
             None => {}
             Some(_) => {
@@ -6083,11 +6210,12 @@ pub(crate) const LIFECYCLE_RUNNER_SYMBOL: &str = "__rseq_lc_run";
 /// (`regseq_mmio_read/write`, unchanged) and emits no `BUS_RESOURCE_HELPERS`
 /// block, so existing register-access goldens do not churn.
 pub(crate) fn model_has_bus_binding(model: &RegseqModel) -> bool {
-    model
-        .device_lifecycle
-        .drivers
-        .values()
-        .any(|d| d.handle.resource_fields.iter().any(|r| r.binding.is_resolved()))
+    model.device_lifecycle.drivers.values().any(|d| {
+        d.handle
+            .resource_fields
+            .iter()
+            .any(|r| r.binding.is_resolved())
+    })
 }
 
 /// Whether any device-lifecycle driver declares a `bus` (`bus_type.is_some()`)
@@ -6115,9 +6243,12 @@ pub(crate) fn model_has_bus_type(model: &RegseqModel) -> bool {
 /// committed golden.
 pub(crate) fn model_has_config_intrinsic(model: &RegseqModel) -> bool {
     model.domain_attrs.item_attrs.iter().any(|attrs| {
-        attrs
-            .iter()
-            .any(|a| matches!(a, regseq_model::AttrData::Intrinsic(IntrinsicKind::Config(_))))
+        attrs.iter().any(|a| {
+            matches!(
+                a,
+                regseq_model::AttrData::Intrinsic(IntrinsicKind::Config(_))
+            )
+        })
     })
 }
 
@@ -6134,6 +6265,60 @@ pub(crate) fn model_has_command_transport_submit(model: &RegseqModel) -> bool {
     })
 }
 
+/// Whether `driver` is the composed descriptor-DMA model whose authored buffer
+/// methods are target seams rather than a generic-C fallback. The identity and
+/// structural gates mirror the native E1000 descriptor-datapath lowering: the
+/// exact rich-E1000 lifecycle driver must own a network interface and DMA
+/// buffer and must use the command-transport descriptor admission intrinsic.
+pub(crate) fn is_descriptor_dma_oracle_driver(model: &RegseqModel, driver: ItemId) -> bool {
+    model
+        .device_lifecycle
+        .drivers
+        .get(&driver)
+        .is_some_and(|lifecycle| model.strings.resolve(lifecycle.descriptor.name) == "rich-e1000")
+        && model.network_interface.drivers.contains_key(&driver)
+        && model.dma.drivers.get(&driver).is_some_and(|dma| {
+            dma.buffer
+                .as_ref()
+                .is_some_and(|buffer| buffer.ops.transfer_address.is_some())
+        })
+        && model_has_command_transport_submit(model)
+}
+
+/// Demand gate for the deterministic rich-E1000 descriptor-DMA host model.
+pub(crate) fn model_has_descriptor_dma_oracle(model: &RegseqModel) -> bool {
+    model
+        .dma
+        .drivers
+        .keys()
+        .copied()
+        .any(|driver| is_descriptor_dma_oracle_driver(model, driver))
+}
+
+/// Resolve a direct call instance to one of the rich-E1000 DmaBuffer operations
+/// handled by the oracle model. Other DMA models deliberately return `None` and
+/// continue through the ordinary authored-body path.
+fn descriptor_dma_buffer_op(model: &RegseqModel, instance: InstanceId) -> Option<&'static str> {
+    for (driver, dma) in &model.dma.drivers {
+        if !is_descriptor_dma_oracle_driver(model, *driver) {
+            continue;
+        }
+        let ops = &dma.buffer.as_ref()?.ops;
+        for (name, reference) in [
+            ("allocate", ops.allocate),
+            ("free", ops.free),
+            ("cpu_address", ops.cpu_address),
+            ("length", ops.length),
+            ("transfer_address", ops.transfer_address),
+        ] {
+            if reference.is_some_and(|reference| model.instance_ref_of(instance) == reference) {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
 /// Whether the model contains a `busy_wait`/`sleep` intrinsic
 /// (timed-cpu-delay-and-sleep construct) — the demand gate for emitting the
 /// [`super::prelude::DELAY_HOOKS`] extern declarations. A delay call lowers
@@ -6146,9 +6331,7 @@ pub(crate) fn model_has_delay_intrinsic(model: &RegseqModel) -> bool {
         attrs.iter().any(|a| {
             matches!(
                 a,
-                regseq_model::AttrData::Intrinsic(
-                    IntrinsicKind::BusyWait | IntrinsicKind::Sleep
-                )
+                regseq_model::AttrData::Intrinsic(IntrinsicKind::BusyWait | IntrinsicKind::Sleep)
             )
         })
     })
@@ -6239,7 +6422,6 @@ pub(crate) fn deferred_work_slot_index(
     }
     None
 }
-
 
 /// Whether the model has at least one **resolved** pinctrl resource (pinctrl
 /// state-selection construct). This is the demand gate for the `PINCTRL_HELPERS`
@@ -6477,7 +6659,6 @@ fn prepare_deferred_work_emission(
     })
 }
 
-
 struct IrqEmission {
     /// Per resource (declaration order): the `[interrupt.<id>] irq_number`
     /// line (required for the generic-c target, R10).
@@ -6536,6 +6717,7 @@ impl IrqEmission {
         interrupts: &DriverInterrupts,
         options: &BackendOptions,
         with_fires: bool,
+        implicit_cause: Option<(u32, u32)>,
         indent: &str,
     ) -> String {
         let mut out = String::new();
@@ -6561,6 +6743,20 @@ impl IrqEmission {
                         out.push_str(&format!("{indent}regseq_irq_fire({line}u);\n"));
                     }
                     IrqFireStep::PreInit | IrqFireStep::PostDeinit => {}
+                }
+            }
+            // The composed descriptor-DMA oracle must exercise the same
+            // interrupt-to-work path as the native products, but its locked
+            // fixture has no authored harness fire script. Supply exactly one
+            // deterministic device-model cause only when no explicit script is
+            // present. This is not a device ICS write: the host model latches
+            // ICR out of band, then the enabled line invokes the authored ISR.
+            if options.irq_fire().is_empty() {
+                if let Some((offset, value)) = implicit_cause {
+                    out.push_str(&format!(
+                        "{indent}regseq_irq_dev_poke(0x{offset:x}u, 0x{value:x}u);\n"
+                    ));
+                    out.push_str(&format!("{indent}regseq_irq_fire({line}u);\n"));
                 }
             }
         }
@@ -6744,9 +6940,12 @@ fn build_on_init_capture(
         "device-lifecycle on_init InstanceRef does not resolve",
     ))?;
     let sym = syms.symbol(id).to_string();
-    let data = model.instances[id].kind.as_function().ok_or(EmitError::Unsupported(
-        "device-lifecycle on_init instance is not a function",
-    ))?;
+    let data = model.instances[id]
+        .kind
+        .as_function()
+        .ok_or(EmitError::Unsupported(
+            "device-lifecycle on_init instance is not a function",
+        ))?;
     let result_ty = model.sigs.resolve(data.fn_sig).output;
 
     let result_shape = enum_emit::enum_shape(model, result_ty).ok_or(EmitError::Unsupported(
@@ -7167,6 +7366,8 @@ pub(crate) fn emit_lifecycle_synthesis(
 
             // The interrupt view threaded into the scenario emission.
             let irq_view = irq.as_ref().map(|(i, e)| (*i, e));
+            let implicit_irq_cause = is_descriptor_dma_oracle_driver(model, *driver_item)
+                .then_some((0x00c0, 0x00000001));
 
             // Synchronization destroy_primitives lines (C05): reverse of init, so
             // id `base+(n-1)` … `base+0`. Empty for a lock-less driver.
@@ -7218,6 +7419,7 @@ pub(crate) fn emit_lifecycle_synthesis(
                         irq_view,
                         options,
                         true,
+                        implicit_irq_cause,
                         &mut out,
                     );
                     // Deferred-work-item-scheduling harness drive (GRILL T10/D09):
@@ -7286,6 +7488,7 @@ pub(crate) fn emit_lifecycle_synthesis(
                         irq_view,
                         options,
                         false,
+                        None,
                         &mut out,
                     );
                     let irq_teardown = irq_view
@@ -7345,6 +7548,7 @@ pub(crate) fn emit_lifecycle_synthesis(
                         irq_view,
                         options,
                         false,
+                        None,
                         &mut out,
                     );
                     if let Some(sym) = &on_system_shutdown_sym {
@@ -7545,28 +7749,26 @@ fn pinctrl_some_materialization_block(
             .ok_or(EmitError::Unsupported(
                 "pinctrl Some-materialization: resource field not found in the driver layout",
             ))?;
-        let (fname, fty) = layout_emit::field_c_name_ty(model, driver_ty, idx).ok_or(
-            EmitError::Unsupported(
+        let (fname, fty) =
+            layout_emit::field_c_name_ty(model, driver_ty, idx).ok_or(EmitError::Unsupported(
                 "pinctrl Some-materialization: field name/type navigation failed",
-            ),
-        )?;
+            ))?;
         let shape = enum_emit::enum_shape(model, fty).ok_or(EmitError::Unsupported(
             "pinctrl Some-materialization: the optional field is not an Option enum",
         ))?;
         // The `Some` variant BY NAME (Option is None=0/Some=1, but never assume).
-        let some_idx = match shape {
-            EnumShape::Multiple { variants, .. } => variants
-                .iter()
-                .position(|v| model.strings.resolve(v.name) == "Some")
-                .ok_or(EmitError::Unsupported(
-                    "pinctrl Some-materialization: Option has no `Some` variant",
-                ))?,
-            _ => {
-                return Err(EmitError::Unsupported(
+        let some_idx =
+            match shape {
+                EnumShape::Multiple { variants, .. } => variants
+                    .iter()
+                    .position(|v| model.strings.resolve(v.name) == "Some")
+                    .ok_or(EmitError::Unsupported(
+                        "pinctrl Some-materialization: Option has no `Some` variant",
+                    ))?,
+                _ => return Err(EmitError::Unsupported(
                     "pinctrl Some-materialization: the optional field is not a multi-variant enum",
-                ))
-            }
-        };
+                )),
+            };
         let lvalue = format!("inst.inner.{fname}");
         if let Some(stmt) = set_enum_discriminant(model, names, &lvalue, shape, some_idx)? {
             let id = model.strings.resolve(res.pinctrl_id);
@@ -7656,6 +7858,7 @@ fn emit_on_init_invocation(
     irq: Option<(&DriverInterrupts, &IrqEmission)>,
     options: &BackendOptions,
     with_fires: bool,
+    implicit_cause: Option<(u32, u32)>,
     out: &mut String,
 ) {
     match (on_init_sym, irq) {
@@ -7669,12 +7872,18 @@ fn emit_on_init_invocation(
                 .expect("an overridden on_init always builds a capture");
             out.push_str(capture);
             out.push_str(&format!("    if (__disc == {ok}) {{\n"));
-            out.push_str(&e.enable_block(interrupts, options, with_fires, "        "));
+            out.push_str(&e.enable_block(
+                interrupts,
+                options,
+                with_fires,
+                implicit_cause,
+                "        ",
+            ));
             out.push_str("    }\n");
         }
         (None, Some((interrupts, e))) => {
             // The trait-default on_init cannot fail: enable unconditionally.
-            out.push_str(&e.enable_block(interrupts, options, with_fires, "    "));
+            out.push_str(&e.enable_block(interrupts, options, with_fires, implicit_cause, "    "));
         }
     }
 }
@@ -7707,7 +7916,7 @@ fn emit_init_fail_body(
 ) {
     let Some((capture, ok_disc_render)) = on_init_capture else {
         if let Some((interrupts, e)) = irq {
-            out.push_str(&e.enable_block(interrupts, options, false, "    "));
+            out.push_str(&e.enable_block(interrupts, options, false, None, "    "));
         }
         return;
     };
@@ -7728,7 +7937,7 @@ fn emit_init_fail_body(
             out.push_str(&e.unwind_block(interrupts, "        "));
             out.push_str(clock_teardown);
             out.push_str("    } else {\n");
-            out.push_str(&e.enable_block(interrupts, options, false, "        "));
+            out.push_str(&e.enable_block(interrupts, options, false, None, "        "));
             out.push_str("    }\n");
         }
         None => {

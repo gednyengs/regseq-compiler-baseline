@@ -19,8 +19,8 @@
 //! `release` are synthesized downstream from the recognized field (D05).
 
 use regseq_model::{
-    AttrData, ClockResource, DriverClocks, FieldIdx, FieldPath, IntrinsicKind, ItemId,
-    StringId, SyntheticItemKind, VariantIdx,
+    AttrData, ClockResource, DriverClocks, FieldIdx, FieldPath, IntrinsicKind, ItemId, StringId,
+    SyntheticItemKind, VariantIdx,
 };
 use rustc_ast::token::{Delimiter, LitKind as TokenLitKind, TokenKind};
 use rustc_ast::tokenstream::TokenTree;
@@ -162,7 +162,9 @@ fn parse_clock_field_attr(tcx: TyCtxt<'_>, def_id: DefId) -> ClockAttr {
         };
         match iter.next() {
             Some(TokenTree::Token(tok, _)) if matches!(tok.kind, TokenKind::Eq) => {}
-            _ => return ClockAttr::Malformed(format!("key `{key}` is missing its `= \"…\"` value")),
+            _ => {
+                return ClockAttr::Malformed(format!("key `{key}` is missing its `= \"…\"` value"))
+            }
         }
         let value = iter.next();
         let key_str = key.as_str();
@@ -376,10 +378,12 @@ pub(crate) fn validate_clock_signatures(cx: &mut BridgeCtxt<'_>) -> Result<(), B
                 .first()
                 .map(|t| t.to_string())
                 .unwrap_or_else(|| "<no receiver>".to_string());
-            return Err(BridgeError::ClockValidation(ClockDiagnostic::SpoofedReceiver {
-                method: method_name,
-                receiver,
-            }));
+            return Err(BridgeError::ClockValidation(
+                ClockDiagnostic::SpoofedReceiver {
+                    method: method_name,
+                    receiver,
+                },
+            ));
         }
     }
     Ok(())

@@ -155,7 +155,12 @@ fn zephyr_build_gate_over_the_e1000_goldens() {
     let fixtures = manifest::discover(&composed_corpus()).expect("discover composed corpus");
     for (name, driver_name, compatible, device_id) in [
         ("e1000-composed", "e1000", "regseq,e1000", 0x100e_u16),
-        ("e1000-initfail", "e1000fail", "regseq,e1000fail", 0x100e_u16),
+        (
+            "e1000-initfail",
+            "e1000fail",
+            "regseq,e1000fail",
+            0x100e_u16,
+        ),
     ] {
         let fixture = fixtures
             .iter()

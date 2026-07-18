@@ -50,8 +50,8 @@ fn deferred_work_reset_smoke() {
         &context,
     )
     .expect("emit must succeed");
-    let run = toolchain::compile_and_run(&emit.tu, &emit.shim, cc())
-        .expect("compile + run must succeed");
+    let run =
+        toolchain::compile_and_run(&emit.tu, &emit.shim, cc()).expect("compile + run must succeed");
     let stdout = run.stdout;
 
     // The WRK trace oracle: init -> (on_init: submit) -> drain⇒dispatch -> cancel.

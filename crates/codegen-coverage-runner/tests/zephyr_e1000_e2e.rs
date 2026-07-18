@@ -114,7 +114,10 @@ fn zephyr_e1000_snapshot_and_l0_structure() {
     // cross-check (the binding requires no `reg`; base/size dead, A-10(a)).
     assert!(!tu.contains("DEVICE_MMIO_MAP"), "no DT map on the PCIe arm");
     assert!(!tu.contains("DEVICE_MMIO_ROM_INIT"), "no DT reg capture");
-    assert!(!tu.contains("DT_REG_ADDR"), "no A-1 cross-check (dead literals)");
+    assert!(
+        !tu.contains("DT_REG_ADDR"),
+        "no A-1 cross-check (dead literals)"
+    );
     pos("\"TU-static MMIO base and __rseq_pcie carrier require a single status-okay instance\"");
 
     // -- config-space (C02/C03): both word-0 reads hit the id cache (zero
@@ -178,7 +181,10 @@ fn zephyr_e1000_snapshot_and_l0_structure() {
     let yaml = std::fs::read_to_string(pipeline::zephyr_binding_path(fixture))
         .expect("read golden.zephyr.binding.yaml");
     assert!(yaml.contains("compatible: \"regseq,e1000\""), "{yaml}");
-    assert!(yaml.contains("include: [base.yaml, pcie-device.yaml]"), "{yaml}");
+    assert!(
+        yaml.contains("include: [base.yaml, pcie-device.yaml]"),
+        "{yaml}"
+    );
     assert!(yaml.contains("vendor-id:\n    required: true"), "{yaml}");
     assert!(yaml.contains("device-id:\n    required: true"), "{yaml}");
     assert!(!yaml.contains("reg:"), "no reg requirement (D10):\n{yaml}");
@@ -193,7 +199,10 @@ fn zephyr_e1000_snapshot_and_l0_structure() {
     //    the wildcard row, ignored = both Pci rows, the C06 note.
     let conf = std::fs::read_to_string(pipeline::zephyr_conformance_path(fixture))
         .expect("read conformance.zephyr.json");
-    assert!(conf.contains("{\"slot\": \"on_init\", \"row\": null}"), "{conf}");
+    assert!(
+        conf.contains("{\"slot\": \"on_init\", \"row\": null}"),
+        "{conf}"
+    );
     assert!(
         conf.contains("{\"slot\": \"on_init_failure\", \"row\": null}"),
         "{conf}"

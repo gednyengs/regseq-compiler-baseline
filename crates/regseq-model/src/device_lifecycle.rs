@@ -28,6 +28,37 @@ pub struct DeviceLifecycleTables {
     /// Recognized drivers, keyed by the driver-struct Item.
     #[serde(with = "ordered_driver_map")]
     pub drivers: BTreeMap<ItemId, DriverLifecycle>,
+    /// Optional L2 platform-instance binding identity. This remains separate
+    /// from each driver's authored device-wide match descriptor so backends can
+    /// override only the identity consumed by their ratified registration form.
+    #[serde(default, skip_serializing_if = "PlatformBindingIdentity::is_empty")]
+    pub platform_binding: PlatformBindingIdentity,
+}
+
+/// The platform instance's AMBA identity, joined from `[binding.amba]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmbaPlatformBinding {
+    /// PrimeCell peripheral id of the bound instance.
+    pub periphid: u32,
+    /// Bits significant for matching the peripheral id.
+    pub mask: u32,
+}
+
+/// L2 instance binding identities, separate from the authored device match
+/// set. Each backend consumes only the form native to its registration path.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlatformBindingIdentity {
+    /// AMBA periphid/mask override for an `amba_driver` registration.
+    pub amba: Option<AmbaPlatformBinding>,
+    /// Devicetree compatible override for a static-DT registration.
+    pub devicetree_compatible: Option<StringId>,
+}
+
+impl PlatformBindingIdentity {
+    /// Whether no registration form has an L2 instance override.
+    pub fn is_empty(&self) -> bool {
+        self.amba.is_none() && self.devicetree_compatible.is_none()
+    }
 }
 
 /// One recognized device-lifecycle driver: its descriptor, handle, and the
@@ -249,8 +280,8 @@ pub enum ResourceKind {
 }
 
 /// A non-resource user-data field, classified per `user-data-initialization.md`
-/// (GRILL C10). Build-now is scalar-only; non-scalar shapes are rejected at
-/// construction (diagnostic), so they never reach this table this stage.
+/// (GRILL C10). Build-now admits scalar fields and recursively zero-initializable
+/// POD structs; other non-scalar shapes are rejected at construction.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserDataField {
     /// The struct field name.
@@ -277,7 +308,10 @@ mod ordered_driver_map {
     use super::*;
     use serde::{Deserializer, Serializer};
 
-    pub fn serialize<S>(map: &BTreeMap<ItemId, DriverLifecycle>, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(
+        map: &BTreeMap<ItemId, DriverLifecycle>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
@@ -285,7 +319,9 @@ mod ordered_driver_map {
         entries.serialize(serializer)
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<BTreeMap<ItemId, DriverLifecycle>, D::Error>
+    pub fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<BTreeMap<ItemId, DriverLifecycle>, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -328,9 +364,7 @@ mod tests {
 
     #[test]
     fn match_entry_variants_round_trip() {
-        round_trip(MatchEntry::Devicetree {
-            compatible: sid(1),
-        });
+        round_trip(MatchEntry::Devicetree { compatible: sid(1) });
         round_trip(MatchEntry::Pci {
             vendor: 0x8086,
             device: 0x100E,
@@ -361,9 +395,7 @@ mod tests {
             DriverLifecycle {
                 descriptor: DriverDescriptor {
                     name: sid(2),
-                    match_set: vec![MatchEntry::Devicetree {
-                        compatible: sid(1),
-                    }],
+                    match_set: vec![MatchEntry::Devicetree { compatible: sid(1) }],
                     device_class: ClassTag::Generic,
                     bus_type: Some(BusType::Pci),
                 },

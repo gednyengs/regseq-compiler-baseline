@@ -133,10 +133,9 @@ pub fn kbuild_with_kdir(
             cmd.arg(format!("{var}={}", v.to_string_lossy()));
         }
     }
-    let output = cmd.output()
-        .map_err(|err| {
-            KbuildError::InvalidKdir(format!("`make` is not runnable: {err}"))
-        })?;
+    let output = cmd
+        .output()
+        .map_err(|err| KbuildError::InvalidKdir(format!("`make` is not runnable: {err}")))?;
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     if !output.status.success() {
         return Err(KbuildError::CompileFailed { stderr });
@@ -219,18 +218,16 @@ mod tests {
     fn compile_error_fails_with_make_stderr() {
         // A fake tree whose Makefile errors: classification must be
         // CompileFailed carrying the stderr verbatim.
-        let dir = std::env::temp_dir().join(format!(
-            "rseq-kbuild-test-make-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("rseq-kbuild-test-make-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("Makefile"),
             "modules:\n\t@echo \"fake-tree: no such config\" 1>&2; exit 2\n",
         )
         .unwrap();
-        let err = kbuild_with_kdir(Some(dir.clone()), "int x;\n", "obj-m += x.o\n", "x")
-            .unwrap_err();
+        let err =
+            kbuild_with_kdir(Some(dir.clone()), "int x;\n", "obj-m += x.o\n", "x").unwrap_err();
         std::fs::remove_dir_all(&dir).ok();
         let KbuildError::CompileFailed { stderr } = err else {
             panic!("a failing make must classify as CompileFailed, got {err:?}");
