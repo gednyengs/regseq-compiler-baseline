@@ -52,7 +52,9 @@ impl LifecycleScenario {
     }
 
     fn from_token(token: &str) -> Option<LifecycleScenario> {
-        LifecycleScenario::ALL.into_iter().find(|s| s.token() == token)
+        LifecycleScenario::ALL
+            .into_iter()
+            .find(|s| s.token() == token)
     }
 
     /// A C-identifier-safe label (the synthesized scenario-helper fn name embeds
@@ -312,8 +314,9 @@ mod tests {
     #[test]
     fn explicit_subset_parses_in_canonical_order() {
         // CSV order is intentionally non-canonical; emission must not depend on it.
-        let opts = BackendOptions::from_backend_params([("lifecycle.scenario", "shutdown,orderly")])
-            .unwrap();
+        let opts =
+            BackendOptions::from_backend_params([("lifecycle.scenario", "shutdown,orderly")])
+                .unwrap();
         assert_eq!(
             opts.lifecycle_scenarios(),
             &[LifecycleScenario::Orderly, LifecycleScenario::Shutdown]
@@ -322,9 +325,11 @@ mod tests {
 
     #[test]
     fn duplicate_and_whitespace_tokens_are_normalized() {
-        let opts =
-            BackendOptions::from_backend_params([("lifecycle.scenario", " orderly , orderly ,surprise ")])
-                .unwrap();
+        let opts = BackendOptions::from_backend_params([(
+            "lifecycle.scenario",
+            " orderly , orderly ,surprise ",
+        )])
+        .unwrap();
         assert_eq!(
             opts.lifecycle_scenarios(),
             &[LifecycleScenario::Orderly, LifecycleScenario::Surprise]
@@ -334,7 +339,10 @@ mod tests {
     #[test]
     fn empty_value_keeps_all() {
         let opts = BackendOptions::from_backend_params([("lifecycle.scenario", "")]).unwrap();
-        assert_eq!(opts.lifecycle_scenarios(), LifecycleScenario::ALL.as_slice());
+        assert_eq!(
+            opts.lifecycle_scenarios(),
+            LifecycleScenario::ALL.as_slice()
+        );
     }
 
     #[test]
@@ -405,7 +413,8 @@ mod tests {
 
     #[test]
     fn backend_context_exposes_options_and_platform() {
-        let opts = BackendOptions::from_backend_params([("lifecycle.scenario", "orderly")]).unwrap();
+        let opts =
+            BackendOptions::from_backend_params([("lifecycle.scenario", "orderly")]).unwrap();
         let platform = PlatformIdentity {
             board: Some("qemu-pc".to_string()),
             ..PlatformIdentity::default()

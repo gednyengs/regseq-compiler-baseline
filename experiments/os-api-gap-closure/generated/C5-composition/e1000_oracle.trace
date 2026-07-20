@@ -1,0 +1,320 @@
+LC register rich-e1000 match=pci:0x8086:0x100e
+BUS register_driver path=pci binding=bound
+LC create
+LC associate
+LC preamble regs
+BUS enable_device
+BUS claim_regions bar=0
+BUS get_handle
+BUS map base=0xf0000000 size=0x20000 bar=0
+IRQ register line=16
+IRQ binding line=16 trigger_type=level trigger_polarity=active_low shared=1 priority=-1
+WRK init 0
+LC call on_init
+BUS config_read off=0x0 width=2 = 0x0
+BUS config_read off=0x2 width=2 = 0x0
+BUS config_write off=0xc width=1 val=0x10
+W32 @0xf00000d8 = 0xffffffff
+W32 @0xf0003804 = 0x00000000
+W32 @0xf0003800 = 0x00100000
+W32 @0xf0003808 = 0x00001000
+W32 @0xf0003810 = 0x00000000
+W32 @0xf0003818 = 0x00000000
+W32 @0xf0002804 = 0x00000000
+W32 @0xf0002800 = 0x00101000
+W32 @0xf0002808 = 0x00001000
+W32 @0xf0002810 = 0x00000000
+W32 @0xf0002818 = 0x00000000
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+DCT admission accepted endpoint=1 payload=0
+W32 @0xf0002818 = 0x000000ff
+R32 @0xf0005400 = 0x12005452
+R32 @0xf0005404 = 0x80005634
+R32 @0xf0000000 = 0x00000000
+W32 @0xf0000000 = 0x00000040
+W32 @0xf00000c4 = 0x000000c3
+W32 @0xf0002820 = 0x00000000
+W32 @0xf000282c = 0x00000010
+W32 @0xf0003820 = 0x00000008
+W32 @0xf000382c = 0x00000020
+R32 @0xf0000008 = 0x00000002
+W32 @0xf0000400 = 0x0000000a
+W32 @0xf0000100 = 0x04008002
+W32 @0xf00000d0 = 0x000000d5
+IRQ enable line=16
+IRQ poke @0x0c0 = 0x00000001
+IRQ fire line=16
+R32 @0xf00000c0 = 0x00000001
+W32 @0xf00000d8 = 0xffffffff
+WRK submit 0
+IRQ result=Handled
+WRK drain
+WRK dispatch 0
+R32 @0xf0000008 = 0x00000002
+DCT admission accepted endpoint=1 payload=0
+W32 @0xf00000d0 = 0x000000d5
+LC teardown present=1
+LC call on_deinit
+W32 @0xf00000d8 = 0xffffffff
+W32 @0xf0000100 = 0x04008000
+W32 @0xf0000400 = 0x00000000
+IRQ disable line=16
+IRQ unregister line=16
+WRK cancel 0
+LC postamble regs
+WRK submit 0
+WRK drain

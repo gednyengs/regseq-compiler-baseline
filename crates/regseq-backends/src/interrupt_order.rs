@@ -175,7 +175,10 @@ mod tests {
         );
         assert_eq!(
             irq_steps_for(&d, IrqPhase::AfterOnInitOk),
-            vec![IrqStep::Enable { resource: 0 }, IrqStep::Enable { resource: 1 }]
+            vec![
+                IrqStep::Enable { resource: 0 },
+                IrqStep::Enable { resource: 1 }
+            ]
         );
         assert_eq!(
             irq_steps_for(&d, IrqPhase::InitErrUnwind),

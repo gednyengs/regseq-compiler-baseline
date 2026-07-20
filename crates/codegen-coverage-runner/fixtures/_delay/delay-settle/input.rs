@@ -30,7 +30,7 @@ impl Duration {
     // Plain multiplication (not the canonical saturating ctors): this fixture
     // is a host-compiled test double for the delay LOWERING, and its tiny
     // values never overflow. The saturating-constructor semantics are proven
-    // separately by the pl011-full-spec compile-time conformance assertion (T01).
+    // separately by a compile-time conformance assertion elsewhere (T01).
     pub const fn from_us(us: u64) -> Self {
         Self { ns: us * 1_000 }
     }

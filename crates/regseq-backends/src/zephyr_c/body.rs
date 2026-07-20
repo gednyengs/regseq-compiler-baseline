@@ -17,8 +17,9 @@
 //!
 //! Structural sibling of `linux_c::body` (F-1: the lowering MECHANISM —
 //! reaching-def receiver chase, descriptor const-folding, opaque enum
-//! carriers — is the certified shape; no code is shared, and every
-//! OS-facing bank is Zephyr-native: `sys_read*`/`sys_write*` value-first
+//! carriers — is the certified shape; only core-shim classification is
+//! shared, and every OS-facing bank is Zephyr-native:
+//! `sys_read*`/`sys_write*` value-first
 //! accessors over the TU-static `mm_reg_t` base (A-2), `LOG_*` reassembly,
 //! `k_panic()` traps).
 
@@ -28,8 +29,10 @@ use regseq_model::{
     AggregateKind, AtomicElement, AtomicOp, AttrData, BinOp, CallCallee, CastKind, ClockBinding,
     ClockMode, ClockOp, Const, EnumShape, FetchOp, FieldIdx, FieldPath, InstanceId, InstanceKind,
     IntrinsicKind, ItemId, LayoutKind, LocalId, Operand, Place, PlaceElem, RegseqModel, Rvalue,
-    StatementKind, TerminatorKind, Ty, TyId, UnOp, VariantIdx,
+    StatementKind, TerminatorKind, Ty, TyId, UintKind, UnOp, VariantIdx,
 };
+
+use crate::core_shims::{self, BackendShim};
 
 use super::types::{self, TypeNames};
 use super::EmitError;
@@ -80,6 +83,13 @@ impl<'m> LowerCx<'m> {
     }
 }
 
+fn backend_owned_shim(
+    model: &RegseqModel,
+    id: InstanceId,
+) -> Result<Option<BackendShim>, EmitError> {
+    core_shims::classify(model, id).map_err(|message| EmitError::Unsupported(message.into()))
+}
+
 /// The driver facts the mmio lowering needs, supplied by the TU fold.
 pub(crate) struct DriverFacts {
     /// The driver struct type (the lowered `self` pointee).
@@ -97,6 +107,8 @@ pub(crate) struct DriverFacts {
     /// licensed (C02/C03) and read the TU-static `__rseq_pcie` carrier
     /// (D12); on every other arm they keep the D.2 rejection.
     pub pcie: bool,
+    /// C-sanitized driver name (`struct <drv>_data`).
+    pub drv: String,
 }
 
 /// The `static <ret> <name>(<params>)` head shared by the forward
@@ -110,14 +122,41 @@ pub(crate) fn fn_head(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
             cx.model.strings.resolve(inst.emission_name)
         )));
     };
+    let sig = cx.model.sigs.resolve(data.fn_sig);
+    let c_name = cx.fn_symbols[&instance].clone();
     let Some(body) = &data.body else {
+        if let Some(shim) = backend_owned_shim(cx.model, instance)? {
+            let ret = if types::is_zst(cx.model, sig.output) {
+                "void".to_string()
+            } else {
+                types::c_type(cx.model, &mut cx.names, sig.output)?
+            };
+            let mut params = Vec::new();
+            for (index, ty) in sig.inputs.iter().enumerate() {
+                if types::is_zst(cx.model, *ty) {
+                    continue;
+                }
+                let name = shim
+                    .param_name(index)
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("arg_{index}"));
+                params.push(format!(
+                    "{} {name}",
+                    types::c_type(cx.model, &mut cx.names, *ty)?
+                ));
+            }
+            let params = if params.is_empty() {
+                "void".to_string()
+            } else {
+                params.join(", ")
+            };
+            return Ok(format!("static {ret} {c_name}({params})"));
+        }
         return Err(EmitError::Unsupported(format!(
             "foreign (bodyless) function `{}`",
             cx.model.strings.resolve(inst.emission_name)
         )));
     };
-    let sig = cx.model.sigs.resolve(data.fn_sig);
-    let c_name = cx.fn_symbols[&instance].clone();
 
     // Signature: ZST returns lower to void; ZST params are dropped.
     let ret = if types::is_zst(cx.model, sig.output) {
@@ -207,10 +246,25 @@ pub(crate) fn trivial_accessor_tail(
 /// Emit one lowered function definition.
 pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<String, EmitError> {
     let head = fn_head(cx, instance)?;
+    if let Some(shim) = super::serial::emit_event_shim(cx, instance, &head) {
+        return Ok(shim);
+    }
+    if let Some(shim) = super::dma::emit_buffer_op_shim(cx, instance, &head)? {
+        return Ok(shim);
+    }
     let inst = &cx.model.instances[instance];
     let InstanceKind::Function(data) = &inst.kind else {
         unreachable!("fn_head certified the function shape");
     };
+    if let Some(shim) = backend_owned_shim(cx.model, instance)? {
+        let body = match shim {
+            BackendShim::NullMut | BackendShim::U64Default => "\treturn 0;\n".to_string(),
+            BackendShim::PartialEqNe { eq } => {
+                format!("\treturn !{}(lhs, rhs);\n", cx.fn_symbols[&eq])
+            }
+        };
+        return Ok(format!("{head}\n{{\n{body}}}\n"));
+    }
     let body = data.body.as_ref().expect("fn_head certified a body");
     let sig = cx.model.sigs.resolve(data.fn_sig);
 
@@ -270,7 +324,10 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
             ..
         } = &bb.terminator.kind
         {
-            if matches!(cx.intrinsic_of(*callee), Some(IntrinsicKind::Clock(_))) {
+            if matches!(
+                cx.intrinsic_of(*callee),
+                Some(IntrinsicKind::Clock(_) | IntrinsicKind::DeferredWork(_))
+            ) {
                 if let Some(Operand::Copy(p) | Operand::Move(p)) = args.first() {
                     if p.projection.is_empty() {
                         cx.elided_locals.insert(p.local);
@@ -416,7 +473,7 @@ fn emit_assign(
     let lv = place_lvalue(cx, body, place)?;
     match rvalue {
         Rvalue::Use(op) => {
-            let expr = operand_expr(cx, body, op)?;
+            let expr = operand_expr_typed(cx, body, op, Some(dest_ty))?;
             out.push_str(&format!("\t{lv} = {expr};\n"));
             Ok(())
         }
@@ -451,7 +508,7 @@ fn emit_assign(
         }
         Rvalue::Cast(kind, op, to_ty) => {
             match kind {
-                CastKind::IntToInt => {}
+                CastKind::IntToInt | CastKind::PointerExposeProvenance => {}
                 other => {
                     return Err(EmitError::Unsupported(format!(
                         "cast kind {other:?} (first-light subset)"
@@ -494,9 +551,8 @@ fn emit_assign(
                     )))
                 }
             };
-            let layout = types::layout_of(cx.model, src_ty).ok_or_else(|| {
-                EmitError::Unsupported("discriminant of a non-aggregate".into())
-            })?;
+            let layout = types::layout_of(cx.model, src_ty)
+                .ok_or_else(|| EmitError::Unsupported("discriminant of a non-aggregate".into()))?;
             let LayoutKind::Enum {
                 shape: EnumShape::Multiple { variants, .. },
             } = &layout.kind
@@ -515,7 +571,9 @@ fn emit_assign(
             let is_identity = variants.iter().all(|v| v.tag_value == Some(v.discriminant));
             let to_u64 = |x: u128| -> Result<u64, EmitError> {
                 (x <= u64::MAX as u128).then_some(x as u64).ok_or_else(|| {
-                    EmitError::Unsupported("128-bit enum tag/discriminant (first-light subset)".into())
+                    EmitError::Unsupported(
+                        "128-bit enum tag/discriminant (first-light subset)".into(),
+                    )
                 })
             };
             if is_identity && size == 1 {
@@ -592,12 +650,23 @@ fn bin_op_token(op: &BinOp) -> Result<&'static str, EmitError> {
         BinOp::Le => "<=",
         BinOp::Ge => ">=",
         BinOp::Gt => ">",
+        BinOp::Offset => "+",
         other => {
             return Err(EmitError::Unsupported(format!(
                 "binary op {other:?} (first-light subset)"
             )))
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pointer_offset_uses_c_pointer_arithmetic() {
+        assert_eq!(bin_op_token(&BinOp::Offset).unwrap(), "+");
+    }
 }
 
 /// Aggregate construction. Structs/tuples assign memberwise; enum variants
@@ -624,7 +693,7 @@ fn emit_aggregate(
                     continue;
                 }
                 let fname = super::naming::c_ident(cx.model.strings.resolve(field.name));
-                let expr = operand_expr(cx, body, op)?;
+                let expr = operand_expr_typed(cx, body, op, Some(field.ty))?;
                 out.push_str(&format!("\t{lv}.{fname} = {expr};\n"));
             }
             Ok(())
@@ -651,7 +720,7 @@ fn emit_aggregate(
                 if types::is_zst(cx.model, field.ty) {
                     continue;
                 }
-                let expr = operand_expr(cx, body, op)?;
+                let expr = operand_expr_typed(cx, body, op, Some(field.ty))?;
                 let fty = types::c_type(cx.model, &mut cx.names, field.ty)?;
                 out.push_str(&format!(
                     "\t{{ {fty} __v = {expr}; memcpy(&{lv}._raw[{}], &__v, sizeof(__v)); }}\n",
@@ -900,26 +969,10 @@ fn emit_call(
             IntrinsicKind::Pinctrl(op) => {
                 emit_pinctrl(cx, op, *instance, body, args, destination, out)
             }
-            // DMA-management lowering (dma-management construct) is generic-c only
-            // this cycle (Zephyr lowering is designed-not-built, GRILL I01/Out of
-            // Scope). Route here so the dispatch stays exhaustive; no Zephyr DMA
-            // lowering is invented.
-            IntrinsicKind::Dma(_) => Err(EmitError::Rejected(
-                "dma-management is recognized-not-lowered on Zephyr this cycle \
-                 (generic-c only — GRILL I01/Out of Scope); no Zephyr DMA lowering \
-                 is invented"
-                    .into(),
-            )),
-            // Deferred-work-item-scheduling lowering (deferred-work-item-scheduling
-            // construct): the Zephyr backend leg (`k_work`) is design-in, NOT
-            // built — v1 lowers this construct on the generic-c host oracle only
-            // (GRILL D01). Route here so the dispatch is exhaustive; a real
-            // `Work::submit` reaching the Zephyr backend is rejected.
-            IntrinsicKind::DeferredWork(_) => Err(EmitError::Rejected(
-                "deferred-work-item-scheduling is not lowered on the Zephyr backend \
-                 (generic-c host oracle only in v1; the k_work leg is design-in)"
-                    .into(),
-            )),
+            IntrinsicKind::DeferredWork(_) => emit_deferred_work(cx, body, args, out),
+            IntrinsicKind::CommandTransportSubmit => {
+                emit_command_transport_submit(cx, body, args, destination, out)
+            }
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {
@@ -954,7 +1007,257 @@ fn emit_call(
         let lv = place_lvalue(cx, body, destination)?;
         out.push_str(&format!("\t{lv} = {call};\n"));
     }
+    if let Some(op) = descriptor_network_op(cx.model, *instance) {
+        let recovery = driver_data_recovery(cx, body)?;
+        match op {
+            "report_carrier" => {
+                let present = operand_expr(cx, body, &args[1])?;
+                cx.extra_includes.insert("<zephyr/net/net_if.h>");
+                out.push_str(&format!(
+                    "\t{{ {recovery} if ({present}) net_if_carrier_on(__rseq_data->__rseq_net_iface); else net_if_carrier_off(__rseq_data->__rseq_net_iface); }}\n"
+                ));
+            }
+            "receive" => {
+                let packet = operand_expr(cx, body, &args[1])?;
+                cx.extra_includes.insert("<zephyr/net/net_core.h>");
+                cx.extra_includes.insert("<zephyr/net/net_pkt.h>");
+                out.push_str(&format!(
+                    "\t{{ {recovery} struct net_pkt *__packet = (struct net_pkt *)(uintptr_t)({packet}.identity); if (__packet) (void)net_recv_data(__rseq_data->__rseq_net_iface, __packet); }}\n"
+                ));
+            }
+            _ => {}
+        }
+    }
     Ok(())
+}
+
+fn descriptor_network_op(model: &RegseqModel, instance: InstanceId) -> Option<&'static str> {
+    for (driver, interface) in &model.network_interface.drivers {
+        if !super::dma::descriptor_datapath(model, *driver) {
+            continue;
+        }
+        for (name, reference) in [
+            ("report_carrier", interface.ops.report_carrier),
+            ("receive", interface.ops.receive),
+        ] {
+            if reference.is_some_and(|reference| model.instance_ref_of(instance) == reference) {
+                return Some(name);
+            }
+        }
+    }
+    None
+}
+
+/// Lower the locked command-transport operation to immediate Zephyr mailbox
+/// admission.  Both operands remain opaque words owned by L2: the endpoint is
+/// a pre-resolved `mbox_dt_spec`, and the payload points at the native message.
+fn emit_command_transport_submit(
+    cx: &mut LowerCx<'_>,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    destination: &Place,
+    out: &mut String,
+) -> Result<(), EmitError> {
+    if args.len() != 2 {
+        return Err(EmitError::Unsupported(
+            "command_transport_submit requires endpoint and payload operands".into(),
+        ));
+    }
+    if cx
+        .model
+        .dma
+        .drivers
+        .keys()
+        .copied()
+        .any(|driver| super::dma::descriptor_datapath(cx.model, driver))
+    {
+        return emit_descriptor_transport_submit(cx, body, args, destination, out);
+    }
+    cx.extra_includes.insert("<string.h>");
+    cx.extra_includes.insert("<errno.h>");
+    cx.extra_includes.insert("<zephyr/drivers/mbox.h>");
+
+    let endpoint = operand_expr(cx, body, &args[0])?;
+    let payload = operand_expr(cx, body, &args[1])?;
+    let dst = place_lvalue(cx, body, destination)?;
+    let dst_ty = place_ty(cx.model, body, destination)?;
+
+    out.push_str(&format!(
+        "\t{{ const struct mbox_dt_spec *__endpoint = (const struct mbox_dt_spec *)(uintptr_t)({endpoint});\n\t  int __reason = __endpoint &&\n\t\t((uintptr_t)__endpoint % _Alignof(struct mbox_dt_spec)) == 0 &&\n\t\t__endpoint->dev\n\t\t? mbox_send(__endpoint->dev, __endpoint->channel_id, (const struct mbox_msg *)(uintptr_t)({payload}))\n\t\t: -EINVAL;\n\t  if (__reason == 0) {{\n"
+    ));
+    out.push_str(&format!("\t\tmemset(&{dst}, 0, sizeof({dst}));\n"));
+    emit_enum_tag_write(cx, dst_ty, &dst, VariantIdx::from_u32(0), out)?;
+    out.push_str("\t  } else {\n");
+    cx_emit_cas_result(cx, &dst, dst_ty, 1, "__reason", out)?;
+    out.push_str("\t  } }\n");
+    Ok(())
+}
+
+/// The E1000 device-class DCT seam: L1 supplies the operation and ring slot;
+/// Zephyr owns native packet copies while the DMA construct owns the exact
+/// coherent descriptor rings programmed through TDBA/RDBA.
+fn emit_descriptor_transport_submit(
+    cx: &mut LowerCx<'_>,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    destination: &Place,
+    out: &mut String,
+) -> Result<(), EmitError> {
+    for include in [
+        "<errno.h>",
+        "<string.h>",
+        "<zephyr/net/net_if.h>",
+        "<zephyr/net/net_pkt.h>",
+        "<zephyr/sys/barrier.h>",
+        "<zephyr/sys/byteorder.h>",
+    ] {
+        cx.extra_includes.insert(include);
+    }
+
+    let endpoint = operand_expr(cx, body, &args[0])?;
+    let payload = operand_expr(cx, body, &args[1])?;
+    let dst = place_lvalue(cx, body, destination)?;
+    let dst_ty = place_ty(cx.model, body, destination)?;
+    let recovery = driver_data_recovery(cx, body)?;
+    let ring_size = super::network::E1000_DESCRIPTOR_RING_SIZE;
+
+    out.push_str(
+        &format!(
+            r#"\t{{ {recovery}
+\t  struct DescriptorCommand *__command =
+\t\t(struct DescriptorCommand *)(uintptr_t)({payload});
+\t  int __reason = -EINVAL;
+\t  if (({endpoint}) == 1 && __command &&
+\t      ((uintptr_t)__command % _Alignof(struct DescriptorCommand)) == 0 &&
+\t      __command->slot < {ring_size}) {{
+\t\tunsigned int __slot = __command->slot;
+\t\tif (__command->operation == 1) {{
+\t\t\tstruct net_pkt *__packet =
+\t\t\t\t(struct net_pkt *)(uintptr_t)__command->packet_identity;
+\t\t\tstruct rich_e1000_legacy_tx_descriptor *__ring =
+\t\t\t\t(struct rich_e1000_legacy_tx_descriptor *)__rseq_data->__rseq_dma_cpu[0];
+\t\t\tsize_t __length = __packet ? net_pkt_get_len(__packet) : 0;
+\t\t\tuint64_t __address =
+\t\t\t\t(uint64_t)(uintptr_t)&__rseq_data->__rseq_tx_buffers[__slot][0];
+\t\t\tif (!__packet || !__ring || !__length || __length > 2048 ||
+\t\t\t    __rseq_data->__rseq_tx_lengths[__slot]) {{
+\t\t\t\t__reason = -EBUSY;
+\t\t\t}} else {{
+\t\t\t\tnet_pkt_cursor_init(__packet);
+\t\t\t\tif (net_pkt_read(__packet,
+\t\t\t\t\t    __rseq_data->__rseq_tx_buffers[__slot], __length)) {{
+\t\t\t\t\t__reason = -EIO;
+\t\t\t\t}} else {{
+\t\t\t\t\t__rseq_data->__rseq_tx_lengths[__slot] = __length;
+\t\t\t\t\t__ring[__slot].buffer_address = sys_cpu_to_le64(__address);
+\t\t\t\t\t__ring[__slot].length = sys_cpu_to_le16(__length);
+\t\t\t\t\t__ring[__slot].checksum_offset = 0;
+\t\t\t\t\t__ring[__slot].command = 0x0b; /* EOP | IFCS | RS */
+\t\t\t\t\t__ring[__slot].status = 0;
+\t\t\t\t\t__ring[__slot].checksum_start = 0;
+\t\t\t\t\t__ring[__slot].special = 0;
+\t\t\t\t\t__command->length = __length;
+\t\t\t\t\tbarrier_dmem_fence_full();
+\t\t\t\t\t__reason = 0;
+\t\t\t\t}}
+\t\t\t}}
+\t\t}} else if (__command->operation == 2) {{
+\t\t\tstruct rich_e1000_legacy_tx_descriptor *__ring =
+\t\t\t\t(struct rich_e1000_legacy_tx_descriptor *)__rseq_data->__rseq_dma_cpu[0];
+\t\t\tsize_t __length = __rseq_data->__rseq_tx_lengths[__slot];
+\t\t\tif (!__ring || !__length) {{
+\t\t\t\t__reason = -EAGAIN;
+\t\t\t}} else {{
+\t\t\t\tbarrier_dmem_fence_full();
+\t\t\t\tif (!(__ring[__slot].status & 0x01)) {{
+\t\t\t\t\t__reason = -EAGAIN;
+\t\t\t\t}} else {{
+\t\t\t\t\t__command->length = __length;
+\t\t\t\t\t__command->descriptor_status = __ring[__slot].status;
+\t\t\t\t\t__rseq_data->__rseq_tx_lengths[__slot] = 0;
+\t\t\t\t\tmemset(&__ring[__slot], 0, sizeof(__ring[__slot]));
+\t\t\t\t\t__reason = 0;
+\t\t\t\t}}
+\t\t\t}}
+\t\t}} else if (__command->operation == 3) {{
+\t\t\tstruct rich_e1000_legacy_rx_descriptor *__ring =
+\t\t\t\t(struct rich_e1000_legacy_rx_descriptor *)__rseq_data->__rseq_dma_cpu[1];
+\t\t\tuint64_t __address =
+\t\t\t\t(uint64_t)(uintptr_t)&__rseq_data->__rseq_rx_buffers[__slot][0];
+\t\t\tif (!__ring || __ring[__slot].buffer_address) {{
+\t\t\t\t__reason = -EBUSY;
+\t\t\t}} else {{
+\t\t\t\tmemset(&__ring[__slot], 0, sizeof(__ring[__slot]));
+\t\t\t\t__ring[__slot].buffer_address = sys_cpu_to_le64(__address);
+\t\t\t\tbarrier_dmem_fence_full();
+\t\t\t\t__reason = 0;
+\t\t\t}}
+\t\t}} else if (__command->operation == 4) {{
+\t\t\tstruct rich_e1000_legacy_rx_descriptor *__ring =
+\t\t\t\t(struct rich_e1000_legacy_rx_descriptor *)__rseq_data->__rseq_dma_cpu[1];
+\t\t\tif (!__ring) {{
+\t\t\t\t__reason = -EAGAIN;
+\t\t\t}} else {{
+\t\t\t\tbarrier_dmem_fence_full();
+\t\t\t\tif (!(__ring[__slot].status & 0x01)) {{
+\t\t\t\t\t__reason = -EAGAIN;
+\t\t\t\t}} else {{
+\t\t\t\t\tuint16_t __length = sys_le16_to_cpu(__ring[__slot].length);
+\t\t\t\t\tstruct net_pkt *__packet = NULL;
+\t\t\t\t\t__command->length = __length;
+\t\t\t\t\t__command->descriptor_status = __ring[__slot].status;
+\t\t\t\t\tif ((__ring[__slot].status & 0x03) == 0x03 &&
+\t\t\t\t\t    __ring[__slot].errors == 0 && __length <= 2048) {{
+\t\t\t\t\t\t__packet = net_pkt_rx_alloc_with_buffer(
+\t\t\t\t\t\t\t__rseq_data->__rseq_net_iface, __length,
+\t\t\t\t\t\t\tNET_AF_UNSPEC, 0, K_NO_WAIT);
+\t\t\t\t\t\tif (__packet && net_pkt_write(__packet,
+\t\t\t\t\t\t\t    __rseq_data->__rseq_rx_buffers[__slot], __length)) {{
+\t\t\t\t\t\t\tnet_pkt_unref(__packet);
+\t\t\t\t\t\t\t__packet = NULL;
+\t\t\t\t\t\t}}
+\t\t\t\t\t}}
+\t\t\t\t\t__command->packet_identity = (size_t)(uintptr_t)__packet;
+\t\t\t\t\tmemset(&__ring[__slot], 0, sizeof(__ring[__slot]));
+\t\t\t\t\t__reason = 0;
+\t\t\t\t}}
+\t\t\t}}
+\t\t}}
+\t  }}
+\t  if (__reason == 0) {{
+"#
+        )
+        .replace(r"\t", "\t"),
+    );
+    out.push_str(&format!("\t\tmemset(&{dst}, 0, sizeof({dst}));\n"));
+    emit_enum_tag_write(cx, dst_ty, &dst, VariantIdx::from_u32(0), out)?;
+    out.push_str("\t  } else {\n");
+    cx_emit_cas_result(cx, &dst, dst_ty, 1, "__reason", out)?;
+    out.push_str("\t  } }\n");
+    Ok(())
+}
+
+fn driver_data_recovery(cx: &LowerCx<'_>, body: &regseq_model::Body) -> Result<String, EmitError> {
+    let recv = body
+        .arg_locals()
+        .next()
+        .filter(|local| {
+            matches!(
+                &cx.model.types[body.local_decls[*local].ty],
+                Ty::Ref(pointee, _) if *pointee == cx.driver.driver_ty
+            )
+        })
+        .ok_or_else(|| {
+            EmitError::Unsupported(
+                "descriptor datapath operation in a body whose receiver is not the driver type"
+                    .into(),
+            )
+        })?;
+    let recv_name = local_name(cx.model, body, recv);
+    let drv = &cx.driver.drv;
+    Ok(format!(
+        "struct {drv}_data *__rseq_data = CONTAINER_OF({recv_name}, struct {drv}_data, inner);"
+    ))
 }
 
 fn operand_is_zst(model: &RegseqModel, body: &regseq_model::Body, op: &Operand) -> bool {
@@ -1050,7 +1353,9 @@ fn recover_clock(
             })
         })
         .ok_or_else(|| {
-            EmitError::Unsupported("clock receiver field has no recorded ClockResource marker".into())
+            EmitError::Unsupported(
+                "clock receiver field has no recorded ClockResource marker".into(),
+            )
         })?;
     cx.model
         .clock
@@ -1064,8 +1369,112 @@ fn recover_clock(
                 .map(|(i, r)| (r.binding.clone(), i))
         })
         .ok_or_else(|| {
-            EmitError::Unsupported("clock receiver field has no resolved ClockResource binding".into())
+            EmitError::Unsupported(
+                "clock receiver field has no resolved ClockResource binding".into(),
+            )
         })
+}
+
+fn recover_deferred_work(
+    cx: &LowerCx<'_>,
+    body: &regseq_model::Body,
+    recv: &Operand,
+) -> Result<(usize, Place), EmitError> {
+    let src = cx.resolve_receiver_src(body, recv, 0)?;
+    let mut ty = body.local_decls[src.local].ty;
+    let mut field = None;
+    for elem in src.projection.iter() {
+        match elem {
+            PlaceElem::Deref => {
+                ty = match &cx.model.types[ty] {
+                    Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                    _ => {
+                        return Err(EmitError::Unsupported(
+                            "deferred-work receiver deref of a non-pointer type".into(),
+                        ))
+                    }
+                };
+            }
+            PlaceElem::Field(idx, fty) => {
+                if let Ty::Struct { item, .. } = &cx.model.types[ty] {
+                    field = Some((*item, *idx));
+                }
+                ty = *fty;
+            }
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "deferred-work receiver has an unsupported projection".into(),
+                ))
+            }
+        }
+    }
+    let (item, field) = field.ok_or_else(|| {
+        EmitError::Unsupported("deferred-work receiver does not resolve to a driver field".into())
+    })?;
+    let idx = cx
+        .model
+        .deferred_work
+        .drivers
+        .get(&item)
+        .and_then(|d| d.resources.iter().position(|r| r.field == field))
+        .ok_or_else(|| {
+            EmitError::Unsupported(
+                "deferred-work receiver field is not a recognized Work resource".into(),
+            )
+        })?;
+    let parent = Place {
+        local: src.local,
+        projection: src.projection[..src.projection.len() - 1]
+            .to_vec()
+            .into_boxed_slice(),
+    };
+    Ok((idx, parent))
+}
+
+fn emit_deferred_work(
+    cx: &mut LowerCx<'_>,
+    body: &regseq_model::Body,
+    args: &[Operand],
+    out: &mut String,
+) -> Result<(), EmitError> {
+    let recv = args
+        .first()
+        .ok_or_else(|| EmitError::Unsupported("deferred-work submit without a receiver".into()))?;
+    let (idx, driver) = recover_deferred_work(cx, body, recv)?;
+    let driver = place_lvalue(cx, body, &driver)?;
+    let driver_item = match &cx.model.types[cx.driver.driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => return Err(EmitError::Driver("driver type is not a struct".into())),
+    };
+    if super::dma::descriptor_datapath(cx.model, driver_item) {
+        let harvest_tx = cx
+            .fn_symbols
+            .values()
+            .find(|symbol| symbol.ends_with("_harvest_tx"))
+            .cloned()
+            .ok_or_else(|| EmitError::Driver("descriptor TX harvest is unavailable".into()))?;
+        let harvest_rx = cx
+            .fn_symbols
+            .values()
+            .find(|symbol| symbol.ends_with("_harvest_rx"))
+            .cloned()
+            .ok_or_else(|| EmitError::Driver("descriptor RX harvest is unavailable".into()))?;
+        // Stock eth_e1000.c:189-205 drains RX synchronously in the ISR and
+        // leaves interrupts enabled. Preserve the authored TX reclamation
+        // before that drain, but omit the deferred service wrapper's link
+        // poll, adaptive moderation, and interrupt re-arm on this target.
+        out.push_str(&format!(
+            "\t{{ struct {}_data *__rseq_data = CONTAINER_OF(&{}, struct {}_data, inner);\n\t  (void){}(&__rseq_data->inner, 64u);\n\t  (void){}(&__rseq_data->inner, 64u); }}\n",
+            cx.driver.drv, driver, cx.driver.drv, harvest_tx, harvest_rx
+        ));
+        return Ok(());
+    }
+    cx.extra_includes.insert("<zephyr/kernel.h>");
+    out.push_str(&format!(
+        "\t{{ struct {}_data *__rseq_data = CONTAINER_OF(&{}, struct {}_data, inner);\n\t  (void)k_work_submit(&__rseq_data->__rseq_work_{}); }}\n",
+        cx.driver.drv, driver, cx.driver.drv, idx
+    ));
+    Ok(())
 }
 
 /// Peripheral-clock-management author-op lowering for zephyr_c (clock construct,
@@ -1112,7 +1521,9 @@ fn emit_clock(
                 // failure to `RegseqError`'s first variant (→ -EIO); `memset`
                 // zeroes the niche-encoded carrier to `Err(<first>)`.
                 cx.extra_includes.insert("<string.h>");
-                out.push_str(&format!("\tif (clock_control_on({ctlr}, {subsys}) != 0) {{\n"));
+                out.push_str(&format!(
+                    "\tif (clock_control_on({ctlr}, {subsys}) != 0) {{\n"
+                ));
                 out.push_str(&format!("\t\tmemset(&{dst}, 0, sizeof({dst}));\n"));
                 emit_enum_tag_write(cx, dst_ty, &dst, VariantIdx::from_u32(1), out)?;
                 out.push_str("\t} else {\n");
@@ -1301,7 +1712,9 @@ fn emit_pinctrl_absent_fold(
             EmitError::Unsupported("pinctrl absent fold: RegseqError has no layout".into())
         })?;
         let LayoutKind::Enum {
-            shape: EnumShape::Multiple { variants: re_vars, .. },
+            shape: EnumShape::Multiple {
+                variants: re_vars, ..
+            },
         } = &re_layout.kind
         else {
             return Err(EmitError::Unsupported(
@@ -1384,7 +1797,9 @@ pub(crate) fn operand_expr_typed(
                 place_lvalue(cx, body, place)
             }
         }
-        Operand::Constant(id) => const_expr(cx, *id, consumer),
+        Operand::Constant(id) => descriptor_geometry_constant(cx, body, *id)
+            .map(Ok)
+            .unwrap_or_else(|| const_expr(cx, *id, consumer)),
     }
 }
 
@@ -1476,6 +1891,58 @@ fn operand_expr(
     operand_expr_typed(cx, body, op, None)
 }
 
+/// Specialize the shared rich-e1000 producer's logical ring geometry for the
+/// stock-shaped Zephyr descriptor datapath. The shared producer stays at 256
+/// entries for Linux, and its 4096-byte allocation request remains untouched;
+/// only the ring-control bodies consume this target-owned geometry.
+fn descriptor_geometry_constant(
+    cx: &LowerCx<'_>,
+    body: &regseq_model::Body,
+    id: regseq_model::ConstId,
+) -> Option<String> {
+    let Ty::Struct { item: driver, .. } = &cx.model.types[cx.driver.driver_ty] else {
+        return None;
+    };
+    if !super::dma::descriptor_datapath(cx.model, *driver) {
+        return None;
+    }
+    let symbol = cx.fn_symbols.iter().find_map(|(instance, symbol)| {
+        match &cx.model.instances[*instance].kind {
+            InstanceKind::Function(data)
+                if data
+                    .body
+                    .as_ref()
+                    .is_some_and(|candidate| std::ptr::eq(candidate, body)) =>
+            {
+                Some(symbol.as_str())
+            }
+            _ => None,
+        }
+    })?;
+    match &cx.model.consts[id] {
+        Const::Uint(UintKind::U32, 256)
+            if [
+                "_post_receive_ring",
+                "_harvest_tx",
+                "_harvest_rx",
+                "_transmit",
+            ]
+            .iter()
+            .any(|suffix| symbol.ends_with(suffix)) =>
+        {
+            Some(format!(
+                "{:#x}u",
+                super::network::E1000_DESCRIPTOR_RING_SIZE
+            ))
+        }
+        Const::Uint(UintKind::Usize, 4096) if symbol.ends_with("_program_rings") => Some(format!(
+            "{:#x}ull",
+            super::network::E1000_DESCRIPTOR_RING_BYTES
+        )),
+        _ => None,
+    }
+}
+
 /// Timed-cpu-delay-and-sleep lowering (TCD construct): lower a `busy_wait`/
 /// `sleep` Call to a call to the per-TU helper carrying the `Duration`
 /// argument's u64 nanoseconds (`regseq_zephyr_busy_wait_ns` /
@@ -1559,7 +2026,11 @@ fn recover_atomic_field(
             PlaceElem::Deref => {
                 ty = match &cx.model.types[ty] {
                     Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
-                    _ => return Err(EmitError::Unsupported("atomic receiver deref of non-pointer".into())),
+                    _ => {
+                        return Err(EmitError::Unsupported(
+                            "atomic receiver deref of non-pointer".into(),
+                        ))
+                    }
                 };
             }
             PlaceElem::Field(idx, fty) => {
@@ -1571,11 +2042,19 @@ fn recover_atomic_field(
             PlaceElem::Index(_) | PlaceElem::ConstantIndex { .. } => {
                 ty = match &cx.model.types[ty] {
                     Ty::Array(elem, _) => *elem,
-                    _ => return Err(EmitError::Unsupported("atomic receiver index of non-array".into())),
+                    _ => {
+                        return Err(EmitError::Unsupported(
+                            "atomic receiver index of non-array".into(),
+                        ))
+                    }
                 };
                 field = None;
             }
-            _ => return Err(EmitError::Unsupported("atomic receiver unsupported projection".into())),
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "atomic receiver unsupported projection".into(),
+                ))
+            }
         }
     }
     let (item, fidx) = field.ok_or_else(|| {
@@ -1609,12 +2088,14 @@ fn atomic_ordering(
     args: &[Operand],
     i: usize,
 ) -> Result<u32, EmitError> {
-    let op = args
-        .get(i)
-        .ok_or_else(|| EmitError::Unsupported("atomic call missing the Ordering argument".into()))?;
+    let op = args.get(i).ok_or_else(|| {
+        EmitError::Unsupported("atomic call missing the Ordering argument".into())
+    })?;
     cx.model
         .resolve_operand_enum_variant(body, op)
-        .ok_or_else(|| EmitError::Unsupported("atomic Ordering is not a compile-time constant".into()))
+        .ok_or_else(|| {
+            EmitError::Unsupported("atomic Ordering is not a compile-time constant".into())
+        })
 }
 
 /// Atomic-memory-access-and-ordering lowering (atomicity construct) — Zephyr via
@@ -1634,7 +2115,10 @@ fn emit_atomic(
     // `atomic::fence` — free fn, no receiver; order at args[0].
     if matches!(op, AtomicOp::Fence) {
         let v = atomic_ordering(cx, body, args, 0)?;
-        out.push_str(&format!("\t__atomic_thread_fence({});\n", zephyr_memorder(v)));
+        out.push_str(&format!(
+            "\t__atomic_thread_fence({});\n",
+            zephyr_memorder(v)
+        ));
         return Ok(());
     }
     let recv = args
@@ -1651,12 +2135,16 @@ fn emit_atomic(
             let mo = zephyr_memorder(atomic_ordering(cx, body, args, 1)?);
             let dst = place_lvalue(cx, body, destination)?;
             let dcty = dst_cty(cx)?;
-            out.push_str(&format!("\t{dst} = ({dcty})__atomic_load_n({faddr}, {mo});\n"));
+            out.push_str(&format!(
+                "\t{dst} = ({dcty})__atomic_load_n({faddr}, {mo});\n"
+            ));
         }
         AtomicOp::Store => {
             let mo = zephyr_memorder(atomic_ordering(cx, body, args, 2)?);
             let val = operand_expr(cx, body, &args[1])?;
-            out.push_str(&format!("\t__atomic_store_n({faddr}, ({cty})({val}), {mo});\n"));
+            out.push_str(&format!(
+                "\t__atomic_store_n({faddr}, ({cty})({val}), {mo});\n"
+            ));
         }
         AtomicOp::FetchModify(fop) => {
             let mo = zephyr_memorder(atomic_ordering(cx, body, args, 2)?);
@@ -1733,8 +2221,9 @@ fn cx_emit_cas_result(
     let variant = VariantIdx::from_u32(variant_idx);
     out.push_str(&format!("\t\tmemset(&{dst}, 0, sizeof({dst}));\n"));
     emit_enum_tag_write(cx, dst_ty, dst, variant, out)?;
-    let layout = types::layout_of(cx.model, dst_ty)
-        .ok_or_else(|| EmitError::Unsupported("compare_exchange destination has no layout".into()))?;
+    let layout = types::layout_of(cx.model, dst_ty).ok_or_else(|| {
+        EmitError::Unsupported("compare_exchange destination has no layout".into())
+    })?;
     let LayoutKind::Enum {
         shape: EnumShape::Multiple { variants, .. },
     } = &layout.kind
@@ -1791,57 +2280,83 @@ fn const_expr(
     id: regseq_model::ConstId,
     consumer: Option<TyId>,
 ) -> Result<String, EmitError> {
+    let value = cx.model.consts[id].clone();
     // A struct-typed byte image renders as a compound literal against the
     // consumer type's layout (the const-propagated FieldValue shape).
-    if let (Const::Bytes(bytes), Some(cty)) = (&cx.model.consts[id], consumer) {
+    if let (Const::Bytes(bytes), Some(cty)) = (&value, consumer) {
         if let Some(layout) = types::layout_of(cx.model, cty) {
-            if let LayoutKind::Struct { fields } = &layout.kind {
-                let cname = types::c_type(cx.model, &mut cx.names, cty)?;
-                let mut members = Vec::new();
-                for f in fields {
-                    if types::is_zst(cx.model, f.ty) {
-                        continue;
+            match &layout.kind {
+                LayoutKind::Struct { fields } => {
+                    let cname = types::c_type(cx.model, &mut cx.names, cty)?;
+                    let mut members = Vec::new();
+                    for f in fields {
+                        if types::is_zst(cx.model, f.ty) {
+                            continue;
+                        }
+                        let size = types::layout_of(cx.model, f.ty)
+                            .map(|l| l.size)
+                            .unwrap_or_else(|| scalar_size(cx.model, f.ty));
+                        let mut v: u64 = 0;
+                        for i in 0..size {
+                            match bytes.get((f.offset + i) as usize) {
+                                Some(regseq_model::Byte::Value(b)) => v |= (*b as u64) << (8 * i),
+                                _ => {
+                                    return Err(EmitError::Unsupported(
+                                        "byte-image constant with non-value bytes".into(),
+                                    ))
+                                }
+                            }
+                        }
+                        members.push(format!(
+                            ".{} = {v:#x}",
+                            super::naming::c_ident(cx.model.strings.resolve(f.name))
+                        ));
                     }
-                    let size = types::layout_of(cx.model, f.ty)
-                        .map(|l| l.size)
-                        .unwrap_or_else(|| scalar_size(cx.model, f.ty));
-                    let mut v: u64 = 0;
-                    for i in 0..size {
-                        match bytes.get((f.offset + i) as usize) {
-                            Some(regseq_model::Byte::Value(b)) => v |= (*b as u64) << (8 * i),
-                            _ => {
+                    return Ok(format!("({cname}){{ {} }}", members.join(", ")));
+                }
+                LayoutKind::Enum { .. } => {
+                    let cname = types::c_type(cx.model, &mut cx.names, cty)?;
+                    let mut members = Vec::new();
+                    for (offset, byte) in bytes.iter().enumerate() {
+                        match byte {
+                            regseq_model::Byte::Value(value) if *value != 0 => {
+                                members.push(format!("._raw[{offset}] = {value:#x}"));
+                            }
+                            regseq_model::Byte::Value(_) | regseq_model::Byte::Uninit => {}
+                            regseq_model::Byte::Reloc(_) => {
                                 return Err(EmitError::Unsupported(
-                                    "byte-image constant with non-value bytes".into(),
+                                    "enum byte-image constant with a relocation".into(),
                                 ))
                             }
                         }
                     }
-                    members.push(format!(
-                        ".{} = {v:#x}",
-                        super::naming::c_ident(cx.model.strings.resolve(f.name))
-                    ));
+                    return Ok(if members.is_empty() {
+                        format!("({cname}){{0}}")
+                    } else {
+                        format!("({cname}){{ {} }}", members.join(", "))
+                    });
                 }
-                return Ok(format!("({cname}){{ {} }}", members.join(", ")));
+                _ => {}
             }
         }
     }
-    match &cx.model.consts[id] {
-        Const::Bool(b) => Ok(if *b { "true" } else { "false" }.into()),
+    match value {
+        Const::Bool(b) => Ok(if b { "true" } else { "false" }.into()),
         Const::Uint(kind, bits) => {
-            if *bits > u64::MAX as u128 {
+            if bits > u64::MAX as u128 {
                 return Err(EmitError::Unsupported(
                     "128-bit constant (first-light subset)".into(),
                 ));
             }
             let suffix = match kind {
-                regseq_model::UintKind::U64 | regseq_model::UintKind::Usize => "ull",
+                UintKind::U64 | UintKind::Usize => "ull",
                 _ => "u",
             };
-            Ok(format!("{:#x}{suffix}", *bits as u64))
+            Ok(format!("{:#x}{suffix}", bits as u64))
         }
         Const::Int(_, bits) => {
             // Sign-extended storage; render through the signed reinterpretation.
-            let v = *bits as i128;
+            let v = bits as i128;
             if v > i64::MAX as i128 || v < i64::MIN as i128 {
                 return Err(EmitError::Unsupported(
                     "128-bit constant (first-light subset)".into(),
@@ -1849,10 +2364,204 @@ fn const_expr(
             }
             Ok(format!("{}", v as i64))
         }
+        Const::Char(value) => Ok(format!("{value:#x}u")),
+        Const::ZST => Ok("0".into()),
+        Const::NullPtr(_) => {
+            let ty = consumer.ok_or_else(|| {
+                EmitError::Unsupported("null pointer constant without a consumer type".into())
+            })?;
+            Ok(format!(
+                "(({})0)",
+                types::c_type(cx.model, &mut cx.names, ty)?
+            ))
+        }
+        Const::Aggregate(children) => aggregate_const_expr(cx, &children, consumer),
+        Const::EnumValue {
+            variant_idx,
+            payload,
+        } => enum_const_expr(cx, consumer, variant_idx, &payload),
         other => Err(EmitError::Unsupported(format!(
             "constant {other:?} (first-light subset)"
         ))),
     }
+}
+
+/// Render an enum const through the same opaque, layout-faithful carrier used
+/// by runtime aggregate construction. A GNU statement expression lets the
+/// value remain usable in assignments and call arguments while payload bytes
+/// are copied at their resolved offsets.
+fn enum_const_expr(
+    cx: &mut LowerCx<'_>,
+    consumer: Option<TyId>,
+    variant: VariantIdx,
+    payload: &[regseq_model::ConstId],
+) -> Result<String, EmitError> {
+    let ty = consumer
+        .ok_or_else(|| EmitError::Unsupported("enum constant without a consumer type".into()))?;
+    let fields = match &types::layout_of(cx.model, ty)
+        .ok_or_else(|| EmitError::Unsupported("enum constant without layout".into()))?
+        .kind
+    {
+        LayoutKind::Enum {
+            shape: EnumShape::Multiple { variants, .. },
+        } => variants
+            .get(variant.as_u32() as usize)
+            .ok_or_else(|| EmitError::Unsupported("enum constant variant out of range".into()))?
+            .fields
+            .clone(),
+        _ => {
+            return Err(EmitError::Unsupported(
+                "enum constant with unsupported layout".into(),
+            ))
+        }
+    };
+    if payload.len() != fields.len() {
+        return Err(EmitError::Unsupported(
+            "enum constant payload count does not match field count".into(),
+        ));
+    }
+    let cname = types::c_type(cx.model, &mut cx.names, ty)?;
+    if payload.is_empty() {
+        let tag = match &types::layout_of(cx.model, ty)
+            .expect("layout checked above")
+            .kind
+        {
+            LayoutKind::Enum {
+                shape: EnumShape::Multiple { variants, .. },
+            } => variants[variant.as_u32() as usize].tag_value,
+            _ => unreachable!("layout checked above"),
+        };
+        match tag {
+            None => return Ok(format!("({cname}){{0}}")),
+            Some(tag) if tag <= u8::MAX as u128 => {
+                let (offset, size) = types::enum_tag_cell(cx.model, ty)?;
+                if size == 1 {
+                    return Ok(format!("({cname}){{ ._raw[{offset}] = {tag:#x} }}"));
+                }
+            }
+            Some(_) => {}
+        }
+    }
+    let mut statements = String::new();
+    emit_enum_tag_write(cx, ty, "__c", variant, &mut statements)?;
+    for (child, field) in payload.iter().zip(fields) {
+        if types::is_zst(cx.model, field.ty) {
+            continue;
+        }
+        let fty = types::c_type(cx.model, &mut cx.names, field.ty)?;
+        let expr = const_expr(cx, *child, Some(field.ty))?;
+        statements.push_str(&format!(
+            "\t{{ {fty} __v = {expr}; memcpy(&__c._raw[{}], &__v, sizeof(__v)); }}\n",
+            field.offset
+        ));
+    }
+    cx.extra_includes.insert("<string.h>");
+    Ok(format!("({{ {cname} __c = {{0}}; {statements}__c; }})"))
+}
+
+/// Render the layout-driven aggregate const forms used by authored rich
+/// bodies. This mirrors generic_c's typed-valtree pairing: every child is
+/// lowered against its consumer field type, and ZST fields are omitted.
+fn aggregate_const_expr(
+    cx: &mut LowerCx<'_>,
+    children: &[regseq_model::ConstId],
+    consumer: Option<TyId>,
+) -> Result<String, EmitError> {
+    let ty = consumer.ok_or_else(|| {
+        EmitError::Unsupported("aggregate constant without a consumer type".into())
+    })?;
+    if let Ty::Ref(pointee, _) = cx.model.types[ty].clone() {
+        if children.len() != 2 {
+            return Err(EmitError::Unsupported(
+                "reference-carrier aggregate with unexpected child count".into(),
+            ));
+        }
+        let target = match &cx.model.consts[children[0]] {
+            Const::Reloc(target) => *target,
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "reference-carrier aggregate without a leading relocation".into(),
+                ))
+            }
+        };
+        if !matches!(
+            &cx.model.consts[children[1]],
+            Const::Uint(UintKind::Usize, _)
+        ) {
+            return Err(EmitError::Unsupported(
+                "reference-carrier aggregate metadata is not a usize".into(),
+            ));
+        }
+        if matches!(
+            cx.model.types[pointee],
+            Ty::Str | Ty::Slice(_) | Ty::Dynamic { .. }
+        ) {
+            return Err(EmitError::Unsupported(
+                "unsized reference-carrier aggregate (first-light subset)".into(),
+            ));
+        }
+        let instance = (0..cx.model.instances.len())
+            .map(|index| InstanceId::from_u32(index as u32))
+            .find(|id| cx.model.instance_ref_of(*id) == target)
+            .ok_or_else(|| {
+                EmitError::Unsupported(
+                    "reference-carrier relocation does not resolve to an instance".into(),
+                )
+            })?;
+        let init = match &cx.model.instances[instance].kind {
+            // Promoted constants are carried by bridge-owned byte-storage
+            // statics. Reconstruct that initializer at the reference's
+            // pointee type; the static's storage type is intentionally not
+            // the semantic pointee type.
+            InstanceKind::Static {
+                init: Some(init), ..
+            } => *init,
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "reference-carrier relocation is not an initialized static".into(),
+                ))
+            }
+        };
+        let init = const_expr(cx, init, Some(pointee))?;
+        return Ok(format!("&({init})"));
+    }
+    if !matches!(&cx.model.types[ty], Ty::Struct { .. } | Ty::Tuple { .. }) {
+        return Err(EmitError::Unsupported(format!(
+            "aggregate constant for consumer {:?} (first-light subset)",
+            cx.model.types[ty]
+        )));
+    }
+    let fields = match &types::layout_of(cx.model, ty)
+        .ok_or_else(|| EmitError::Unsupported("aggregate constant without layout".into()))?
+        .kind
+    {
+        LayoutKind::Struct { fields } => fields.clone(),
+        _ => {
+            return Err(EmitError::Unsupported(
+                "aggregate constant with non-struct layout".into(),
+            ))
+        }
+    };
+    if children.len() != fields.len() {
+        return Err(EmitError::Unsupported(
+            "aggregate constant child count does not match field count".into(),
+        ));
+    }
+    let cname = types::c_type(cx.model, &mut cx.names, ty)?;
+    let mut members = Vec::new();
+    for (child, field) in children.iter().zip(fields) {
+        if types::is_zst(cx.model, field.ty) {
+            continue;
+        }
+        let expr = const_expr(cx, *child, Some(field.ty))?;
+        let name = super::naming::c_ident(cx.model.strings.resolve(field.name));
+        members.push(format!(".{name} = {expr}"));
+    }
+    Ok(if members.is_empty() {
+        format!("({cname}){{0}}")
+    } else {
+        format!("({cname}){{ {} }}", members.join(", "))
+    })
 }
 
 /// Render a place as a C lvalue, walking the projection chain.
@@ -1973,6 +2682,40 @@ impl LowerCx<'_> {
             .first()
             .ok_or_else(|| EmitError::Unsupported("mmio call with no receiver".into()))?;
         let (base, offset, runtime, width) = self.recover_register(body, recv)?;
+        let descriptor_isr = match &self.model.types[self.driver.driver_ty] {
+            Ty::Struct { item, .. } if super::dma::descriptor_datapath(self.model, *item) => self
+                .fn_symbols
+                .iter()
+                .find_map(
+                    |(instance, symbol)| match &self.model.instances[*instance].kind {
+                        InstanceKind::Function(data)
+                            if data
+                                .body
+                                .as_ref()
+                                .is_some_and(|candidate| std::ptr::eq(candidate, body)) =>
+                        {
+                            Some(symbol.ends_with("_handle_irq"))
+                        }
+                        _ => None,
+                    },
+                )
+                .unwrap_or(false),
+            _ => false,
+        };
+        let register = self
+            .driver
+            .reg_macros
+            .iter()
+            .find_map(|(name, candidate)| (*candidate == offset).then_some(name.as_str()));
+        if descriptor_isr
+            && register.is_some_and(|name| name.ends_with("_IMC"))
+            && matches!(op, MmioOp::Write | MmioOp::WriteField)
+        {
+            // Stock eth_e1000.c:189-208 reads the clear-on-read ICR and drains
+            // RX without masking/re-arming the device interrupt around the
+            // synchronous handler.
+            return Ok(());
+        }
         self.extra_includes.insert("<zephyr/sys/sys_io.h>");
         let (read_fn, write_fn, cast) = match width {
             1 => ("sys_read8", "sys_write8", "uint8_t"),

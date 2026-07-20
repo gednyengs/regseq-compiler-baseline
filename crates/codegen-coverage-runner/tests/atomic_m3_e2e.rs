@@ -103,7 +103,8 @@ fn atomic_m3_heavy_ops_six_stage_oracle() {
                 BridgeOutcome::Ok(m) => m,
                 other => panic!("[{name}] bless bridge failed: {other:?}"),
             };
-            let identity = pipeline::bind_l2_platform(&mut model, fixture).expect("L2 bind (no-op)");
+            let identity =
+                pipeline::bind_l2_platform(&mut model, fixture).expect("L2 bind (no-op)");
             let context = regseq_backends::BackendContext::new(options, identity);
             let emit = regseq_backends::emit_generic_c_for_entry_with_context(
                 &model,
@@ -127,9 +128,13 @@ fn atomic_m3_heavy_ops_six_stage_oracle() {
 
         let golden = std::fs::read_to_string(&fixture.golden_c).expect("read golden.c");
         for needle in &golden_gates {
-            assert!(golden.contains(needle), "[{name}] golden must contain `{needle}`");
+            assert!(
+                golden.contains(needle),
+                "[{name}] golden must contain `{needle}`"
+            );
         }
-        let stdout = std::fs::read_to_string(&fixture.expected_stdout).expect("read expected.stdout");
+        let stdout =
+            std::fs::read_to_string(&fixture.expected_stdout).expect("read expected.stdout");
         for line in &stdout_gates {
             assert!(
                 stdout.contains(line),
@@ -139,7 +144,11 @@ fn atomic_m3_heavy_ops_six_stage_oracle() {
         // Fence placement (T13): the fences sit between the store and the load,
         // and after the load — an ordering assertion beyond mere presence.
         if name == "atomic-fence" {
-            let pos = |s: &str| stdout.find(s).unwrap_or_else(|| panic!("[{name}] missing `{s}`"));
+            let pos = |s: &str| {
+                stdout
+                    .find(s)
+                    .unwrap_or_else(|| panic!("[{name}] missing `{s}`"))
+            };
             assert!(
                 pos("ATM store cell=0 w=32 ord=Relaxed val=0x1")
                     < pos("ATM fence ord=Release")

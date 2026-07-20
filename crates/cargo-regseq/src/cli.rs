@@ -3,8 +3,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use regseq_config::{
-    validate_dotted_ident, ColorChoice, CompilerOptions, DumpStage, EmitSpec, LogLevel,
-    RegseqParam,
+    validate_dotted_ident, ColorChoice, CompilerOptions, DumpStage, EmitSpec, LogLevel, RegseqParam,
 };
 
 use crate::Error;

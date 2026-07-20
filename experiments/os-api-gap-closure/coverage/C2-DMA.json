@@ -1,0 +1,22 @@
+{
+  "schema": "gap-closure-stage-coverage/1",
+  "stage": "C2-DMA",
+  "authority": "freeze/GAP-LEDGER.json G-dma-management-01..15 plus locked addendum/dma-management.md",
+  "rows": [
+    {"id":"G-dma-management-01","owner":"dma-management","check":"DmaBuffer exposes CPU address, capability-gated transfer address, and length without fusing a transfer lifetime"},
+    {"id":"G-dma-management-02","owner":"device-class","check":"typed descriptor access remains ordinary CPU memory/device-class logic; DMA owns only the buffer and addresses"},
+    {"id":"G-dma-management-03","owner":"device-class","check":"descriptor unions and reinterpretation are absent from the DMA IR and backends"},
+    {"id":"G-dma-management-04","owner":"dma-management","check":"PL011-shaped AsyncTransferChannel fixture proves exclusive acquire/configure/prepare/submit/activate/terminate/synchronize/release while serial policy stays separate"},
+    {"id":"G-dma-management-05","owner":"l2-binding","check":"segment limits and allocation constraints are not standalone L1 elements"},
+    {"id":"G-dma-management-06","owner":"dma-management","check":"frontend recognizes exactly DmaBuffer and AsyncTransferChannel and rejects historical trait planes"},
+    {"id":"G-dma-management-07","owner":"dma-management","check":"completion is optional and termination does not fabricate canceled/error/aborted callback delivery"},
+    {"id":"G-dma-management-08","owner":"dma-management","check":"runtime status/residue is optional: the PL011 channel exercises native status in generic-C/Linux/Zephyr while the independent-lifetimes fixture preserves absence"},
+    {"id":"G-dma-management-09","owner":"dma-management","check":"pause/resume/suspend/reload/terminate/reclaim are independent optional capabilities; unsupported paths remain absent"},
+    {"id":"G-dma-management-10","owner":"compiler-lowering","check":"generic-C behavior, Linux buffer/channel shape, Zephyr channel shape, Zephyr buffer rejection, and both real-header gates"},
+    {"id":"G-dma-management-11","owner":"joint-spec-compiler","check":"address-mask enforcement is not fabricated by L1; Linux transfer address remains dma_addr_t and binding/enforcement remains an explicit residual"},
+    {"id":"G-dma-management-12","owner":"other-construct","check":"packet/RX pool allocation and streaming map are absent from the two-element DMA L1"},
+    {"id":"G-dma-management-13","owner":"dma-management","check":"channel transfer direction is a named enum; the excluded streaming-map plane is not revived"},
+    {"id":"G-dma-management-14","owner":"dma-management","check":"capability-gated transfer_address returns Option<u64>; the E1000 fixture proves Some(address) while absence remains None"},
+    {"id":"G-dma-management-15","owner":"joint-dma-transport-compiler","check":"buffer length is exposed, while ring/shadow cardinality coupling and descriptor layout remain outside DMA ownership"}
+  ]
+}

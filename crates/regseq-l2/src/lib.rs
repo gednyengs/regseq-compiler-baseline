@@ -24,10 +24,11 @@
 
 pub mod bus_resource;
 pub mod clock;
-pub mod dma;
+pub mod device_binding;
 mod error;
 pub mod interrupt;
 pub mod pinctrl;
+pub mod serial_hardware_ops;
 
 pub use error::{L2Error, PlatformIdentityError};
 
@@ -60,11 +61,12 @@ pub trait L2Binder: Sync {
 /// allocation). `device-interrupt` binds after `bus-resource` (it reads no
 /// bus state today; the order is pinned for determinism).
 const REGISTRY: &[&dyn L2Binder] = &[
+    &device_binding::DeviceBindingBinder,
     &bus_resource::BusResourceBinder,
     &interrupt::InterruptBinder,
     &clock::ClockBinder,
     &pinctrl::PinctrlBinder,
-    &dma::DmaBinder,
+    &serial_hardware_ops::SerialHardwareOpsBinder,
 ];
 
 /// Bind every tenant's platform metadata into `model`. This is the production
@@ -97,15 +99,16 @@ pub fn validate_l2_surface(model: &RegseqModel) -> Result<(), L2Error> {
 pub fn resolve_platform_identity(
     raw: &PlatformIdentityRaw,
 ) -> Result<PlatformIdentity, PlatformIdentityError> {
-    let os = match raw.os.as_deref() {
-        None => None,
-        Some(token) => Some(TargetOs::from_token(token).ok_or_else(|| {
-            PlatformIdentityError::UnknownOs {
-                token: token.to_string(),
-                expected: TargetOs::EXPECTED,
-            }
-        })?),
-    };
+    let os =
+        match raw.os.as_deref() {
+            None => None,
+            Some(token) => Some(TargetOs::from_token(token).ok_or_else(|| {
+                PlatformIdentityError::UnknownOs {
+                    token: token.to_string(),
+                    expected: TargetOs::EXPECTED,
+                }
+            })?),
+        };
     Ok(PlatformIdentity {
         os,
         board: raw.board.clone(),

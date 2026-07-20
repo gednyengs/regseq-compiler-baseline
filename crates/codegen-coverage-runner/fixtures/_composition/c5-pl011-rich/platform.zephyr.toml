@@ -1,0 +1,23 @@
+version = "1"
+
+[platform]
+os = "zephyr"
+board = "qemu_cortex_a53"
+arch = "aarch64"
+
+[binding.devicetree]
+compatible = "regseq,serialpl011"
+
+[mmio.regs]
+base = 0x09040000
+size = 0x1000
+
+[interrupt.irq]
+irq_number = 34
+trigger_type = "level"
+trigger_polarity = "active_high"
+shared = false
+
+[clock.uartclk]
+mode = "static"
+default_frequency = 24000000

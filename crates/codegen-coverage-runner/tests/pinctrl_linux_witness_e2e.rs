@@ -78,7 +78,10 @@ fn linux_optional_present_pm_helpers() {
     // by the required fixture's devm_pinctrl_get).
     let map = pos("devm_ioremap_resource(&adev->dev, &adev->res)");
     let acquire = pos("OPTIONAL pin controller");
-    assert!(map < acquire, "pinctrl acquire must follow the region map (C07)");
+    assert!(
+        map < acquire,
+        "pinctrl acquire must follow the region map (C07)"
+    );
 }
 
 #[test]
@@ -96,7 +99,10 @@ fn linux_required_present_handle_path_and_acquire_failure() {
     // (pins-before-clock, C07).
     let map = pos("devm_ioremap_resource(&adev->dev, &adev->res)");
     let acquire = pos("priv->inner.pins = devm_pinctrl_get(&adev->dev);");
-    assert!(map < acquire, "pinctrl acquire must follow the region map (C07)");
+    assert!(
+        map < acquire,
+        "pinctrl acquire must follow the region map (C07)"
+    );
     // T22 — required-acquire-failure: the acquire hard-fails (a get ERR_PTR / a
     // lookup ERR_PTR / a nonzero select rc aborts probe before on_init, I02), the
     // native errno propagated (PTR_ERR preserves -EPROBE_DEFER; the select rc is

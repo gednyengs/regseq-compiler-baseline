@@ -229,7 +229,6 @@ __attribute__((unused)) static void regseq_bus_register_driver(const char *sel, 
  * §5: generic-c `enable_device`/`set_bus_master` "record in the host bus
  * model"). Inspectable so a fixture can witness that bring-up ran. */
 static int regseq_bus_enabled __attribute__((unused)) = 0;
-static int regseq_bus_mastered __attribute__((unused)) = 0;
 /* `enable_device` (construct #3 M3): PCI-capable bus only (default-on on
  * platform, so not emitted there). Records "enabled" in the host bus model. */
 __attribute__((unused)) static void regseq_bus_enable_device(void) {
@@ -245,14 +244,6 @@ __attribute__((unused)) static void regseq_bus_enable_device(void) {
  * claim (the region is resolved/sized, not reserved). */
 __attribute__((unused)) static void regseq_bus_claim_regions(int64_t bar) {
     printf("BUS claim_regions bar=%lld\n", (long long)bar);
-}
-/* `set_bus_master` (construct #3 M3): PCI-capable bus AND DMA-Management
- * surface present (design §3; DMA-presence is GRILL O2, the DMA construct's
- * fact). Defaults absent today, so this is emitted by no fixture yet. Records
- * "master" in the host bus model. */
-__attribute__((unused)) static void regseq_bus_set_master(void) {
-    regseq_bus_mastered = 1;
-    printf("BUS set_master\n");
 }
 __attribute__((unused)) static void *regseq_bus_get_handle(void) {
     printf("BUS get_handle\n");

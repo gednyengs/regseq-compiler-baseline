@@ -8,6 +8,8 @@ kind   = "rust"
 # D10/I02 -- UNLIKE the four glued callbacks). The golden's ABSENCE of any
 # on_system_shutdown slot is the 5-negative. covers the registration (LC-1), the
 # AMBA match (LC-4), and the shutdown-omit (LC-8).
+# The empty `SerialPort` impl satisfies the locked serial-class invariant while
+# preserving every serial capability as absent; this remains a lifecycle gate.
 lifecycle_scenario = "shutdown"
 covers = ["LC-1", "LC-4", "LC-8"]
 expect = "pass"

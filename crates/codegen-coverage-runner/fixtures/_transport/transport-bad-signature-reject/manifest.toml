@@ -1,0 +1,8 @@
+name = "transport-bad-signature-reject"
+kind = "rust"
+covers = ["G-device-command-transport-06"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "DCT-ERR-BAD-SIGNATURE"

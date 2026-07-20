@@ -1,0 +1,7 @@
+name = "serial-raw-flags-reject"
+kind = "rust"
+covers = []
+expect = "reject"
+[expected]
+stage = "acquire"
+diagnostic = "SERIAL-ERR-BAD-SIGNATURE"

@@ -1,0 +1,5 @@
+name = "dma-buffer-e1000"
+kind = "rust"
+lifecycle_scenario = "orderly"
+covers = ["DMA-BUFFER", "DMA-BUFFER-ADDRESS", "DMA-BUFFER-LIFETIME"]
+expect = "pass"

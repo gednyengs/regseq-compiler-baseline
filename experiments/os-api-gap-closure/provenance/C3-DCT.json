@@ -1,0 +1,90 @@
+{
+  "schema": "gap-closure-provenance/1",
+  "stage": "C3-DCT",
+  "authority": "addendum/epochs/epoch-2/device-command-transport.md (locked), convergence/device-command-transport-DIFF.md, reuse/TRANSPLANT-PLAN.md",
+  "fixture_first_record": {
+    "status": "established-before-historical-matching",
+    "fixtures": [
+      "crates/codegen-coverage-runner/fixtures/_transport/transport-admission",
+      "crates/codegen-coverage-runner/fixtures/_transport/transport-discarded-outcome-reject",
+      "crates/codegen-coverage-runner/fixtures/_transport/transport-bad-signature-reject"
+    ],
+    "behavior": "The submit-only facade, synchronous admission behavior, discarded-outcome rejection, generic-C no-event oracle, and native OS assertions were authored before reading any staged historical DCT fixture or test."
+  },
+  "source_snapshots": [
+    {
+      "commit": "e3c9efe61b3495f50c56b71f1e34c17bf54e9689",
+      "root": "/home/nyengele/regseq-eval-worktrees/regseq-gap-closure/docs/experiments/os-api-gap-closure/convergence/branch-snapshots/e3c9efe61b3495f50c56b71f1e34c17bf54e9689",
+      "sha256": "2c9c7ebc612532ca69521d782204447d7bd61e3d75e694fe6314b745d5dc61b2"
+    }
+  ],
+  "transplants": [],
+  "oracle_only": [
+    {
+      "asset_id": "DCT-FIXTURES",
+      "source_object": "e3c9efe61b3495f50c56b71f1e34c17bf54e9689",
+      "source_path": "crates/codegen-coverage-runner/fixtures/_transport/transport_e1000_queue/input.rs; crates/codegen-coverage-runner/fixtures/_transport/transport-slot-no-escape-witness/input.rs; crates/codegen-coverage-runner/tests/transport_slot_witness_e2e.rs",
+      "old_semantics": "A descriptor WorkQueue reserves and publishes slots, exposes producer state, then harvests owned cookie/status completion values while preventing reclaimed slot references from escaping.",
+      "new_semantics": "A caller-owned opaque payload word is handed to a pre-resolved endpoint for immediate admission only; L1 acquires no slot, storage, queue, completion, status, or correlation ownership.",
+      "behavior_delta": "Only the lifetime boundary was used as a comparison oracle: the new compiler retains the payload solely as a call operand and acceptance is not treated as reclamation or completion. No fixture DSL, descriptor layout, queue state, cookie/status, golden C, or historical IR was copied.",
+      "tests": [
+        "transport_locked_fixtures::locked_transport_positive_frontend",
+        "transport_locked_fixtures::locked_transport_generic_c_admission_has_no_terminal_event"
+      ],
+      "destination": "crates/codegen-coverage-runner/tests/transport_locked_fixtures.rs"
+    },
+    {
+      "asset_id": "DCT-NEGATIVES-TESTS",
+      "source_object": "e3c9efe61b3495f50c56b71f1e34c17bf54e9689",
+      "source_path": "crates/codegen-coverage-runner/fixtures/_transport/transport-discarded-result-reject/**; crates/codegen-coverage-runner/fixtures/_transport/transport-os-edge-reject/**; crates/codegen-coverage-runner/tests/transport_reject_e2e.rs",
+      "old_semantics": "The old suite rejected discarded queue publication results and OS-edge or wire/queue declarations coupled to the rich WorkQueue IR.",
+      "new_semantics": "The fresh suite independently rejects a discarded synchronous admission verdict and a malformed submit facade; OS endpoints remain opaque L2 operands and no wire or queue schema exists to annotate.",
+      "behavior_delta": "The result-consumption principle was independently re-proven. Old queue binding, wire attributes, vocabulary serialization, diagnostics, and coverage were excluded.",
+      "tests": [
+        "transport_locked_fixtures::locked_transport_negative_frontend",
+        "transport_os_lowering_e2e::transport_linux_is_nonblocking_native_admission",
+        "transport_os_lowering_e2e::transport_zephyr_is_native_admission_only"
+      ],
+      "destination": "crates/regseq-driver/src/bridge/transport.rs; crates/codegen-coverage-runner/fixtures/_transport/*; crates/codegen-coverage-runner/tests/transport_{locked_fixtures,os_lowering_e2e}.rs"
+    }
+  ],
+  "rejected_assets": [
+    {
+      "asset_id": "DCT-MODEL-BRIDGE",
+      "source_object": "e3c9efe61b3495f50c56b71f1e34c17bf54e9689",
+      "source_path": "crates/regseq-model/src/transport.rs; crates/regseq-driver/src/bridge/transport/**; crates/regseq-driver/tests/bridge_transport_recognition.rs",
+      "destination": "none",
+      "old_semantics": "WorkQueue reserve/publish/harvest plus cursor, cookie, completion, DMA, and register-edge ownership.",
+      "new_semantics": "One intrinsic tag and fresh signature/result-use validation.",
+      "behavior_delta": "All historical model and recognition hunks are rejected.",
+      "tests": ["post-implementation forbidden-symbol scan"]
+    },
+    {
+      "asset_id": "DCT-GC",
+      "source_object": "e3c9efe61b3495f50c56b71f1e34c17bf54e9689",
+      "source_path": "crates/regseq-backends/src/generic_c/{body_emit.rs,mod.rs,mod_tests.rs,prelude.rs}#transport hunks",
+      "destination": "none",
+      "old_semantics": "Rich queue runtime with reservation, publication, harvesting, ownership, completion, and correlation.",
+      "new_semantics": "Fresh synchronous admission oracle that stores neither operand and emits no later event.",
+      "behavior_delta": "The historical helper ABI and output assertions are rejected in full.",
+      "tests": ["transport_locked_fixtures::locked_transport_generic_c_admission_has_no_terminal_event"]
+    },
+    {
+      "asset_id": "DCT-GLUE-DOC",
+      "source_object": "e3c9efe61b3495f50c56b71f1e34c17bf54e9689",
+      "source_path": "crates/{bridge-coverage-runner,regseq-model,regseq-driver,regseq-backends}/**#transport shared hunks; docs/discussions/generic-c-backend/phase-1/01-construct-surface-and-matrix.md#transport hunk",
+      "destination": "none",
+      "old_semantics": "Shared wiring for the old transport table and its maturity claim.",
+      "new_semantics": "Fresh minimal intrinsic wiring plus frozen-ledger coverage.",
+      "behavior_delta": "No shared historical hunk or maturity claim was imported.",
+      "tests": ["cargo test --workspace", "post-implementation forbidden-symbol scan"]
+    }
+  ],
+  "excluded_collateral": [
+    "WorkQueue, slot reservation, publish, harvest, producer/consumer cursors, and ring invariants",
+    "descriptor layout, doorbells, DMA mappings, payload storage, and host shadow state",
+    "completion/status objects, cookie/generation correlation, and cancellation",
+    "old generic-C queue helper ABI, generated C, diagnostics, and coverage claims",
+    "whole-branch restore, merge, or cherry-pick"
+  ]
+}

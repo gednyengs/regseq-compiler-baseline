@@ -158,7 +158,6 @@ fn driver_into(
                 match_set,
                 device_class: ClassTag::Generic,
                 bus_type: bus,
-                dma_present: false,
             },
             handle,
             ops,
@@ -621,9 +620,9 @@ fn pcie_mixed_match_triple_renders_each_pci_row() {
     // struct values.
     assert_eq!(emit.conformance.ignored_match_entries.len(), 2);
     assert!(
-        emit.conformance.summary_line().contains(
-            "ignored=[pci vendor=0x8086 device=0x100e;pci vendor=0x8086 device=0x100f]"
-        ),
+        emit.conformance
+            .summary_line()
+            .contains("ignored=[pci vendor=0x8086 device=0x100e;pci vendor=0x8086 device=0x100f]"),
         "{}",
         emit.conformance.summary_line()
     );
@@ -639,10 +638,16 @@ fn pcie_mixed_match_triple_renders_each_pci_row() {
         yaml.contains("# RSEQ-IGNORED-MATCH: pci vendor=0x8086 device=0x100f"),
         "{yaml}"
     );
-    assert!(yaml.contains("include: [base.yaml, pcie-device.yaml]"), "{yaml}");
+    assert!(
+        yaml.contains("include: [base.yaml, pcie-device.yaml]"),
+        "{yaml}"
+    );
     assert!(yaml.contains("vendor-id:\n    required: true"), "{yaml}");
     assert!(yaml.contains("device-id:\n    required: true"), "{yaml}");
-    assert!(!yaml.contains("reg:"), "no reg requirement on the PCIe form:\n{yaml}");
+    assert!(
+        !yaml.contains("reg:"),
+        "no reg requirement on the PCIe form:\n{yaml}"
+    );
     // The yaml audit comments sit adjacent to (above) the consumed
     // `compatible:` surface — the yaml analog of the C-block/pin adjacency.
     let ya = yaml.find("# RSEQ-IGNORED-MATCH").unwrap();
@@ -732,6 +737,27 @@ fn platform_binding_yaml_is_byte_frozen() {
 }
 
 #[test]
+fn l2_devicetree_binding_overrides_device_compatible_only_at_registration() {
+    let mut m = minimal_dt_model();
+    let compatible = m.strings.intern("regseq,serialpl011");
+    m.device_lifecycle.platform_binding.devicetree_compatible = Some(compatible);
+
+    let emit = emit_zephyr_c(&m).expect("L2-bound DT emit");
+    assert!(
+        emit.tu.contains("#define DT_DRV_COMPAT regseq_serialpl011"),
+        "{}",
+        emit.tu
+    );
+    assert!(
+        emit.binding_yaml
+            .contains("compatible: \"regseq,serialpl011\""),
+        "{}",
+        emit.binding_yaml
+    );
+    assert!(!emit.binding_yaml.contains("compatible: \"regseq,pl011\""));
+}
+
+#[test]
 fn other_class_tag_renders_its_carried_name() {
     let mut m = minimal_dt_model();
     let tag = m.strings.intern("quantum");
@@ -813,7 +839,10 @@ fn mixed_match_set_is_audited_at_the_dt_compat_surface() {
         .find("/* RSEQ-IGNORED-MATCH: amba id=0x00041011 mask=0x000fffff")
         .unwrap_or_else(|| panic!("audit block present:\n{tu}"));
     let pin = tu.find("#define DT_DRV_COMPAT").expect("compat pin");
-    assert!(block < pin, "audit block adjacent to the DT_DRV_COMPAT pin (A1)");
+    assert!(
+        block < pin,
+        "audit block adjacent to the DT_DRV_COMPAT pin (A1)"
+    );
     assert!(
         tu[block..pin].len() < 400,
         "the block sits AT the pin, not floated to the header"
@@ -953,7 +982,10 @@ fn authored_on_deinit_lowers_the_full_c04_shape() {
         .iter()
         .find(|e| e.slot == "on_deinit")
         .expect("on_deinit in delivered_slots");
-    assert_eq!(entry.row.as_deref(), Some(capability::CAP_ZEPHYR_DT_DEINIT_1.id));
+    assert_eq!(
+        entry.row.as_deref(),
+        Some(capability::CAP_ZEPHYR_DT_DEINIT_1.id)
+    );
     assert!(
         emit.conformance
             .summary_line()
@@ -1348,7 +1380,6 @@ fn option_copy_within_the_zero_image_passes_through() {
                 match_set,
                 device_class: ClassTag::Generic,
                 bus_type: None,
-                dma_present: false,
             },
             handle: regseq_model::DriverHandle {
                 resource_fields: vec![],
@@ -1519,7 +1550,9 @@ fn pcie_config_read_tu(ret_kind: UintKind, off: u128) -> String {
     );
     let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
     driver.ops.on_init = Some(on_init);
-    emit_zephyr_c(&m).expect("licensed config read must emit").tu
+    emit_zephyr_c(&m)
+        .expect("licensed config read must emit")
+        .tu
 }
 
 /// A PCIe model whose on_init performs one config WRITE of `val_kind` at
@@ -1560,12 +1593,18 @@ fn config_word0_reads_are_served_from_the_id_cache() {
     let tu = pcie_config_read_tu(UintKind::U16, 0x00);
     assert!(tu.contains("uint32_t __cw = __rseq_pcie->id;"), "{tu}");
     assert!(tu.contains("(uint16_t)((__cw >> 0u) & 0xffffu)"), "{tu}");
-    assert!(!tu.contains("pcie_conf_read"), "zero bus traffic (D06):\n{tu}");
+    assert!(
+        !tu.contains("pcie_conf_read"),
+        "zero bus traffic (D06):\n{tu}"
+    );
 
     let tu = pcie_config_read_tu(UintKind::U16, 0x02);
     assert!(tu.contains("uint32_t __cw = __rseq_pcie->id;"), "{tu}");
     assert!(tu.contains("(uint16_t)((__cw >> 16u) & 0xffffu)"), "{tu}");
-    assert!(!tu.contains("pcie_conf_read"), "zero bus traffic (D06):\n{tu}");
+    assert!(
+        !tu.contains("pcie_conf_read"),
+        "zero bus traffic (D06):\n{tu}"
+    );
 }
 
 #[test]
@@ -1583,7 +1622,10 @@ fn config_reads_beyond_word0_issue_one_live_word_read() {
         tu.contains("uint32_t __cw = pcie_conf_read(__rseq_pcie->bdf, 4u);"),
         "{tu}"
     );
-    assert!(tu.contains("(uint32_t)((__cw >> 0u) & 0xffffffffu)"), "{tu}");
+    assert!(
+        tu.contains("(uint32_t)((__cw >> 0u) & 0xffffffffu)"),
+        "{tu}"
+    );
 }
 
 #[test]
@@ -1593,7 +1635,10 @@ fn config_write_width4_is_a_single_native_word_write() {
         tu.contains("pcie_conf_write(__rseq_pcie->bdf, 1u, (uint32_t)("),
         "{tu}"
     );
-    assert!(!tu.contains("RSEQ-RMW"), "no RMW on the native width:\n{tu}");
+    assert!(
+        !tu.contains("RSEQ-RMW"),
+        "no RMW on the native width:\n{tu}"
+    );
 }
 
 #[test]
@@ -1608,9 +1653,11 @@ fn config_write_subword_lowers_to_the_audited_c02_rmw() {
     pos("[license: backend-zephyr-c-e1000 GRILL D05]");
     let p_read = pos("uint32_t __cur = pcie_conf_read(__rseq_pcie->bdf, __w);");
     let p_mask = pos("uint32_t __msk = 0xFFu << __sh;");
-    let p_write =
-        pos("pcie_conf_write(__rseq_pcie->bdf, __w, (__cur & ~__msk) | (((uint32_t)(");
-    assert!(p_audit < p_read && p_read < p_mask && p_mask < p_write, "RMW order");
+    let p_write = pos("pcie_conf_write(__rseq_pcie->bdf, __w, (__cur & ~__msk) | (((uint32_t)(");
+    assert!(
+        p_audit < p_read && p_read < p_mask && p_mask < p_write,
+        "RMW order"
+    );
     // Halfword lane mask for a u16 write.
     let tu = pcie_config_write_emit(UintKind::U16, 0x0E, 0xBEEF).expect("u16 write emits via RMW");
     assert!(tu.contains("uint32_t __msk = 0xFFFFu << __sh;"), "{tu}");
@@ -2513,6 +2560,7 @@ fn lower_cx<'m>(m: &'m RegseqModel, driver_ty: TyId, resolved: bool) -> LowerCx<
             reg_macros: vec![("MMIODRIVER_CR".to_string(), 0x30)],
             base_symbol: "mmiodriver_mmio_base".to_string(),
             pcie: false,
+            drv: "mmiodriver".to_string(),
         },
         width8_used: false,
         uses_log: false,

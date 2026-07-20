@@ -1,0 +1,7 @@
+name = "serial-wrong-class-reject"
+kind = "rust"
+covers = []
+expect = "reject"
+[expected]
+stage = "acquire"
+diagnostic = "SERIAL-ERR-WRONG-CLASS"

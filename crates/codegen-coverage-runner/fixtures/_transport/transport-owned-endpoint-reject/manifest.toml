@@ -1,0 +1,8 @@
+name = "transport-owned-endpoint-reject"
+kind = "rust"
+covers = ["G-device-command-transport-02", "G-device-command-transport-06"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "DCT-ERR-BAD-SIGNATURE"

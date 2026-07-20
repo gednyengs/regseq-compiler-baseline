@@ -127,12 +127,6 @@ pub struct RegseqModel {
     #[serde(default)]
     pub interrupt: crate::interrupt::InterruptTables,
 
-    /// Serial device-class sibling table (construct #7), keyed by the
-    /// `#[rseq::driver]` struct's Item. `#[serde(default)]` keeps models
-    /// serialized before the construct existed deserializable.
-    #[serde(default)]
-    pub serial: crate::serial::SerialTables,
-
     /// Synchronization (locks) sibling table, keyed by the `#[rseq::driver]`
     /// struct's Item. `#[serde(default)]` keeps models serialized before the
     /// construct existed deserializable.
@@ -156,15 +150,6 @@ pub struct RegseqModel {
     #[serde(default)]
     pub pinctrl: crate::pinctrl::PinctrlTables,
 
-    /// DMA-management sibling table (dma-management construct), keyed by the
-    /// `#[rseq::driver]` struct's Item. A DMA region/channel is a capability
-    /// layered on the device (memory it shares / a transport engine it drives),
-    /// so it gets its own top-level table rather than living on `DriverHandle`
-    /// (GRILL C09). `#[serde(default)]` keeps models serialized before the
-    /// construct existed deserializable (R15).
-    #[serde(default)]
-    pub dma: crate::dma::DmaTables,
-
     /// Deferred-work-item-scheduling sibling table, keyed by the
     /// `#[rseq::driver]` struct's Item. A `Work` item is a capability layered on
     /// the device (a sleepable-context callback the driver schedules), so it gets
@@ -174,6 +159,18 @@ pub struct RegseqModel {
     /// construct existed deserializable (I06).
     #[serde(default)]
     pub deferred_work: crate::deferred_work::DeferredWorkTables,
+
+    /// One capability-gated serial port per serial-class driver.
+    #[serde(default)]
+    pub serial_port: crate::serial::SerialPortTables,
+
+    /// Independent owned DMA buffer and asynchronous-channel elements.
+    #[serde(default)]
+    pub dma: crate::dma::DmaTables,
+
+    /// One full, capability-gated network interface per network-class driver.
+    #[serde(default)]
+    pub network_interface: crate::network::NetworkInterfaceTables,
 }
 
 #[cfg(test)]
@@ -1132,12 +1129,13 @@ impl RegseqModel {
             domain_attrs: DomainAttrTables::default(),
             device_lifecycle: crate::device_lifecycle::DeviceLifecycleTables::default(),
             interrupt: crate::interrupt::InterruptTables::default(),
-            serial: crate::serial::SerialTables::default(),
             synchronization: crate::synchronization::SynchronizationTables::default(),
             clock: crate::clock::ClockTables::default(),
             pinctrl: crate::pinctrl::PinctrlTables::default(),
-            dma: crate::dma::DmaTables::default(),
             deferred_work: crate::deferred_work::DeferredWorkTables::default(),
+            serial_port: crate::serial::SerialPortTables::default(),
+            dma: crate::dma::DmaTables::default(),
+            network_interface: crate::network::NetworkInterfaceTables::default(),
         }
     }
 
@@ -1433,17 +1431,6 @@ impl RegseqModel {
             self.interrupt.drivers.insert(new_id, driver);
         }
 
-        // `serial.drivers` is keyed by the same driver-struct `ItemId`. Its
-        // values carry only `InstanceRef` (content-addressed) + `TyId`/
-        // `VariantIdx`/`StringId` (stable across the F4 item sort — it permutes
-        // `items`, not the `TyInterner`, and remaps `ItemId`s *inside* `Ty`
-        // entries transparently), so re-keying by the driver `ItemId` is the
-        // only patch needed, like `interrupt`/`device_lifecycle`.
-        let old_serial = std::mem::take(&mut self.serial.drivers);
-        for (old_id, driver) in old_serial {
-            let new_id = remap[old_id.index()];
-            self.serial.drivers.insert(new_id, driver);
-        }
         // `synchronization.drivers` is keyed by the same driver-struct `ItemId`
         // (its values carry no `ItemId` references — StringId/TyId/InstanceRef/
         // BlockId/LocalId only), so re-key it by the same remap, exactly like
@@ -1474,22 +1461,6 @@ impl RegseqModel {
             self.pinctrl.drivers.insert(new_id, driver);
         }
 
-        // `dma.drivers` is keyed by the same driver-struct `ItemId`, so re-key
-        // it by the same remap, exactly like `clock`/`pinctrl`. The M1 region
-        // facts carry NO `ItemId` references (StringId/u64/Span only), so
-        // re-keying the map key is the only patch needed this cycle. (The M2
-        // `CompletionBinding.handler` is an `ItemId` that lives *inside* the
-        // value and is NOT visited by `for_each_item_id_mut`; when M2 lands it
-        // must be remapped here too — TODO M2.) Without this re-key a TU that
-        // runs the F4 item sort would leave `dma.drivers` keyed by stale ItemIds
-        // and the post-sort `element_access` site recognition (+ the backend's
-        // `Ty::Struct { item }` lookup) would not find the region.
-        let old_dma = std::mem::take(&mut self.dma.drivers);
-        for (old_id, driver) in old_dma {
-            let new_id = remap[old_id.index()];
-            self.dma.drivers.insert(new_id, driver);
-        }
-
         // `deferred_work.drivers` is keyed by the same driver-struct `ItemId`
         // (its values carry no `ItemId` references — StringId/FieldIdx/bool/u64/
         // InstanceRef/SubmitVariant only, all stable across the F4 item sort), so
@@ -1501,6 +1472,22 @@ impl RegseqModel {
         for (old_id, driver) in old_deferred_work {
             let new_id = remap[old_id.index()];
             self.deferred_work.drivers.insert(new_id, driver);
+        }
+
+        let old_serial_ports = std::mem::take(&mut self.serial_port.drivers);
+        for (old_id, driver) in old_serial_ports {
+            let new_id = remap[old_id.index()];
+            self.serial_port.drivers.insert(new_id, driver);
+        }
+        let old_dma = std::mem::take(&mut self.dma.drivers);
+        for (old_id, driver) in old_dma {
+            let new_id = remap[old_id.index()];
+            self.dma.drivers.insert(new_id, driver);
+        }
+        let old_network = std::mem::take(&mut self.network_interface.drivers);
+        for (old_id, driver) in old_network {
+            let new_id = remap[old_id.index()];
+            self.network_interface.drivers.insert(new_id, driver);
         }
 
         #[cfg(debug_assertions)]
@@ -1714,6 +1701,24 @@ impl RegseqModel {
         for (old_id, driver) in old_deferred_work {
             if let Some(new_id) = remap[old_id.index()] {
                 self.deferred_work.drivers.insert(new_id, driver);
+            }
+        }
+        let old_serial_ports = std::mem::take(&mut self.serial_port.drivers);
+        for (old_id, driver) in old_serial_ports {
+            if let Some(new_id) = remap[old_id.index()] {
+                self.serial_port.drivers.insert(new_id, driver);
+            }
+        }
+        let old_dma = std::mem::take(&mut self.dma.drivers);
+        for (old_id, driver) in old_dma {
+            if let Some(new_id) = remap[old_id.index()] {
+                self.dma.drivers.insert(new_id, driver);
+            }
+        }
+        let old_network = std::mem::take(&mut self.network_interface.drivers);
+        for (old_id, driver) in old_network {
+            if let Some(new_id) = remap[old_id.index()] {
+                self.network_interface.drivers.insert(new_id, driver);
             }
         }
         remap

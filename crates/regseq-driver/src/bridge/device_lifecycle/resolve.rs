@@ -32,7 +32,7 @@ use regseq_model::{
 };
 use rustc_hir::def::DefKind;
 use rustc_middle::ty::{self, Ty, TyCtxt, TyKind, UintTy};
-use rustc_span::def_id::DefId;
+use rustc_span::{def_id::DefId, Symbol as RustcSymbol};
 
 use super::super::const_::instance_ref_for_function_provenance;
 use super::super::framework_type::recover_source_def_id;
@@ -188,9 +188,10 @@ fn assign_callback_slot(ops: &mut LifecycleOps, name: &str, iref: InstanceRef) {
 /// that order). Each non-resource field is classified into its user-data init
 /// rule ([`classify_user_data`]); a field that is neither Rule-1 nor Rule-2 is
 /// rejected as the D3 diagnostic — the rejection is decided BEFORE [`translate_ty`]
-/// so a bad field is a clean D3, not a generic type-translator error. Build-now is
-/// scalar-only (C10). Runs for EVERY driver, impl or not (B1/RD-3); a fieldless
-/// driver yields an empty handle.
+/// so a bad field is a clean D3, not a generic type-translator error. Build-now
+/// admits the scalar rules plus recursively zero-initializable POD structs. Runs
+/// for EVERY driver, impl or not (B1/RD-3); a fieldless driver yields an empty
+/// handle.
 fn classify_fields(
     cx: &mut BridgeCtxt<'_>,
     d_def_id: DefId,
@@ -247,23 +248,6 @@ fn classify_fields(
             if crate::bridge::pinctrl::is_pinctrl_field(tcx, field_ty) {
                 continue;
             }
-            // DMA-management coherent-region fields (dma-management construct) are
-            // compiler-bound resources owned by `bridge::dma` (recognized in its
-            // Phase-4 pass) — route them away from the user-data classifier, whose
-            // D3 would otherwise reject the methodless `DmaRegion<T>` shell. They
-            // are not `ResourceField`s either: the `alloc_coherent` preamble's
-            // position is derived downstream from `model.dma` (GRILL C07/C09).
-            if crate::bridge::dma::is_dma_region_field(tcx, field_ty) {
-                continue;
-            }
-            // DMA-management slave `DmaChannel` fields (dma-management construct,
-            // M2/T07) are compiler-bound resources owned by `bridge::dma` — route
-            // them away from the user-data classifier (whose D3 would reject the
-            // methodless `DmaChannel` shell). The `request_channel`/`release`
-            // lifecycle is synthesized from `model.dma` downstream (T14).
-            if crate::bridge::dma::is_dma_channel_field(tcx, field_ty) {
-                continue;
-            }
             // Deferred-work-item-scheduling fields (deferred-work-item-scheduling
             // construct) are compiler-bound resources owned by
             // `bridge::deferred_work` (recognized in its Phase-4 pass) — route
@@ -277,6 +261,21 @@ fn classify_fields(
                 continue;
             }
             if is_mmio_resource(tcx, field_ty) {
+                // The canonical register-access facade lives at
+                // `regseq::Mmio<T>`. Its extraction contract requires `T` to be
+                // an explicit `#[rseq::register_block]` type. Legacy inline
+                // fixtures use a crate-root `Mmio<T>` and remain on their
+                // existing compatibility path; the canonical path never falls
+                // back to accepting an unmarked lookalike block.
+                if let Some(block_ty) = canonical_mmio_block_ty(tcx, field_ty) {
+                    if !is_register_block_type(tcx, block_ty) {
+                        return Err(BridgeError::RegisterAccessValidation {
+                            driver: driver_name.to_string(),
+                            field: field.name.to_string(),
+                            block_type: block_ty.to_string(),
+                        });
+                    }
+                }
                 // Recognize the bus-resource-management L1 facts on the shared
                 // `#[rseq::mmio(...)]` field attribute (construct #3, T03): the
                 // `id` join key + the optional `bar`/`type`. `(base, size)` /
@@ -322,10 +321,10 @@ fn classify_fields(
 
 /// Classify a non-resource driver field's type into its user-data init rule, or
 /// `None` if it is neither (→ the D3 diagnostic). Rule-2: `Option<T: Copy>` →
-/// [`UserDataKind::OptionCopy`]. Rule-1 (scalar zero-init whitelist):
-/// `bool`/`u8`/`u16`/`u32`/`u64` → [`UserDataKind::ZeroInit`]. Build-now is
-/// scalar-only (C10): arrays, structs, signed/`u128`/`usize` ints, and non-`Copy`
-/// types are rejected.
+/// [`UserDataKind::OptionCopy`]. Rule-1 (zero-init):
+/// `bool`/`u8`/`u16`/`u32`/`u64`, or a [`zero_initializable_pod_struct`], →
+/// [`UserDataKind::ZeroInit`]. Arrays, signed/`u128`/`usize` ints, references,
+/// resources, unions, and non-POD aggregates remain rejected.
 fn classify_user_data<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<UserDataKind> {
     // Rule-2: `Option<T: Copy>` — `None` is the unseeded state.
     if let TyKind::Adt(adt, args) = ty.kind() {
@@ -337,14 +336,74 @@ fn classify_user_data<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<UserDataK
                 .then_some(UserDataKind::OptionCopy);
         }
     }
-    // Rule-1: the scalar zero-init whitelist (these are inherently `Copy`).
+    // Rule-1: the scalar zero-init whitelist (these are inherently `Copy`) or
+    // the scoped recursively zero-initializable POD-struct extension.
     match ty.kind() {
         TyKind::Bool => Some(UserDataKind::ZeroInit),
         TyKind::Uint(UintTy::U8 | UintTy::U16 | UintTy::U32 | UintTy::U64) => {
             Some(UserDataKind::ZeroInit)
         }
+        TyKind::Adt(adt, _) if adt.is_struct() && zero_initializable_pod_struct(tcx, ty) => {
+            Some(UserDataKind::ZeroInit)
+        }
         _ => None,
     }
+}
+
+/// Whether `ty` is a Copy, non-dropping struct whose all-zero image recursively
+/// denotes a valid value. This is intentionally narrower than Rust's general
+/// aggregate/type admissibility: only the existing Rule-1 scalars, nested POD
+/// structs, and fieldless scalar enums with a zero discriminant are members.
+/// Compiler-managed resources are rejected even if their Rust representation
+/// happens to be composed from scalar storage.
+fn zero_initializable_pod_struct<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    let TyKind::Adt(adt, args) = ty.kind() else {
+        return false;
+    };
+    if !adt.is_struct() || compiler_managed_resource(tcx, ty) {
+        return false;
+    }
+
+    let typing_env = ty::TypingEnv::fully_monomorphized();
+    if !tcx.type_is_copy_modulo_regions(typing_env, ty) || ty.needs_drop(tcx, typing_env) {
+        return false;
+    }
+
+    let fields = &adt.non_enum_variant().fields;
+    !fields.is_empty()
+        && fields
+            .iter()
+            .all(|field| zero_initializable_pod_member(tcx, field.ty(tcx, args)))
+}
+
+fn zero_initializable_pod_member<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    match ty.kind() {
+        TyKind::Bool | TyKind::Uint(UintTy::U8 | UintTy::U16 | UintTy::U32 | UintTy::U64) => true,
+        TyKind::Adt(adt, _) if adt.is_struct() => zero_initializable_pod_struct(tcx, ty),
+        TyKind::Adt(adt, _) if adt.is_enum() => {
+            let typing_env = ty::TypingEnv::fully_monomorphized();
+            tcx.type_is_copy_modulo_regions(typing_env, ty)
+                && !ty.needs_drop(tcx, typing_env)
+                && adt
+                    .variants()
+                    .iter()
+                    .all(|variant| variant.fields.is_empty())
+                && adt
+                    .discriminants(tcx)
+                    .any(|(_, discriminant)| discriminant.val == 0)
+        }
+        _ => false,
+    }
+}
+
+fn compiler_managed_resource<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    is_mmio_resource(tcx, ty)
+        || crate::bridge::interrupt::is_interrupt_field(tcx, ty)
+        || crate::bridge::atomic::is_atomic_field(tcx, ty)
+        || crate::bridge::synchronization::is_sync_field(tcx, ty)
+        || crate::bridge::clock::is_clock_field(tcx, ty)
+        || crate::bridge::pinctrl::is_pinctrl_field(tcx, ty)
+        || crate::bridge::deferred_work::is_work_field(tcx, ty)
 }
 
 /// Is `ty` a register-access `Mmio<T>` resource? Detected by the wrapper struct
@@ -353,4 +412,32 @@ fn classify_user_data<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<UserDataK
 fn is_mmio_resource(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {
     ty.ty_adt_def()
         .is_some_and(|adt| tcx.item_name(adt.did()).as_str() == "Mmio")
+}
+
+/// Return the `T` in the canonical `regseq::Mmio<T>` facade path. Name-only,
+/// crate-root `Mmio<T>` shells predate the register-access facade and are kept
+/// distinct so locked inline fixtures do not masquerade as canonical resources.
+fn canonical_mmio_block_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+    let TyKind::Adt(adt, args) = ty.kind() else {
+        return None;
+    };
+    if tcx.item_name(adt.did()).as_str() != "Mmio"
+        || tcx.item_name(tcx.parent(adt.did())).as_str() != "regseq"
+    {
+        return None;
+    }
+    args.types().next()
+}
+
+/// The canonical L1 register-block marker consumed by extraction.
+fn is_register_block_type(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {
+    let Some(adt) = ty.ty_adt_def() else {
+        return false;
+    };
+    let path = [
+        RustcSymbol::intern("rseq"),
+        RustcSymbol::intern("register_block"),
+    ];
+    let present = tcx.get_attrs_by_path(adt.did(), &path).next().is_some();
+    present
 }

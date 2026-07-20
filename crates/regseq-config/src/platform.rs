@@ -9,7 +9,8 @@
 //! and runs the `BRM-005/006` validation. This module does **not** validate the
 //! binding-pair or resolve effective BARs — it only deserializes the keys.
 //!
-//! Three sections are parsed (in one pass — [`parse_platform_file_str`]): the
+//! The parsed sections include (in one pass — [`parse_platform_file_str`]) the
+//! `[binding.amba]` / `[binding.devicetree]` instance identity, the
 //! `[mmio.<id>]` bindings above, the `[interrupt.<id>]` bindings of the
 //! device-interrupt construct (#6, contract C03 — structural only; the
 //! canonical-spelling validation of `trigger_type`/`trigger_polarity` is the
@@ -22,6 +23,37 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+
+/// One `[binding.amba]` instance identity. `periphid` and `mask` are the
+/// platform-specific AMBA match consumed by a Linux `amba_driver`; they are
+/// deliberately separate from the reusable device identity authored in the
+/// Rust spec.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AmbaBindingSpec {
+    /// The platform instance's PrimeCell peripheral id.
+    pub periphid: u32,
+    /// Bits significant when matching `periphid`.
+    pub mask: u32,
+}
+
+/// One `[binding.devicetree]` instance identity. This is consumed by targets
+/// whose ratified registration form binds through a devicetree compatible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevicetreeBindingSpec {
+    /// The platform instance's compatible string.
+    pub compatible: String,
+}
+
+/// Optional platform-instance binding identities, one per ratified
+/// registration form. An absent form means the backend falls back to the
+/// device-derived match identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeviceBindingSpec {
+    /// `[binding.amba]`, when this integration binds through AMBA periphid.
+    pub amba: Option<AmbaBindingSpec>,
+    /// `[binding.devicetree]`, when this integration binds through DT.
+    pub devicetree: Option<DevicetreeBindingSpec>,
+}
 
 /// One `[mmio.<id>]` binding parsed from a platform file (GRILL C01). Every key
 /// is optional; the join, effective-BAR resolution, and binding-pair / range
@@ -103,42 +135,21 @@ pub struct PinctrlBindingSpec {
     pub pin_states: Vec<String>,
 }
 
-/// One `[dma.<id>]` binding parsed from a platform file (dma-management construct,
-/// contract C02). Structural parse only: every key is captured as a typed scalar;
-/// the presence/consistency checks (the `region_cache_maintenance` vocabulary, the
-/// capability `present|absent|unknown` vocabulary, and the D07 `absent`-only-in-a-
-/// concrete-binding rule) are the `regseq-l2` dma tenant's. All fields are `Option`
-/// / empty at parse time (mirroring `ClockBindingSpec`).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct DmaBindingSpec {
-    /// `device_address_bits` (was `dma_mask`); the addressable bus-address width.
-    pub device_address_bits: Option<u32>,
-    /// `alignment` in bytes; OMITTED ⇒ `align_of::<T>()` (NOT 1) — the default is
-    /// the dma tenant's / a later layout pass, GRILL C02/D08.
-    pub alignment: Option<u64>,
-    /// `region_cache_maintenance` token, verbatim (`"none"` | `"per_access"`);
-    /// the closed-vocabulary check is the `regseq-l2` dma tenant's (GRILL D03).
-    pub region_cache_maintenance: Option<String>,
-    /// `binding_scope` token, verbatim — the binding's resolution scope (GRILL D07).
-    /// OMITTED ⇒ a CONCRETE binding (a fully-resolved controller/channel). A
-    /// `"template"` / `"family"` / `"conditional"` binding is non-concrete: a
-    /// capability `cap_* = "absent"` is NOT authoritative there (the resolved
-    /// controller is unknown), so the dma tenant rejects an `absent` in a
-    /// non-concrete binding (D07). The vocabulary check is the `regseq-l2` tenant's.
-    pub binding_scope: Option<String>,
-    /// The `cap_<name> = "<value>"` capability flags, captured verbatim, keyed by
-    /// the capability name (e.g. `pause`/`cyclic`). Value vocabulary
-    /// `present | absent | unknown` (GRILL C02/D07) is the `regseq-l2` tenant's; an
-    /// omitted capability is absence in this map (⇒ `unknown`). The capability OPS
-    /// themselves are designed-not-built this cycle; only the L2 `absent`-in-a-
-    /// non-concrete-binding rejection is buildable (PLAN T21).
-    pub capabilities: BTreeMap<String, String>,
+/// Capability gates for the hardware-specific half of a serial binding.
+/// These are L2 integration facts, not author-visible `SerialPort` operations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SerialHardwareOpsBindingSpec {
+    /// Permit the bound serial hardware hook to assert or clear break.
+    pub break_send: bool,
 }
 
-/// The L2 bindings parsed from a platform file: the `[mmio.<id>]` and
-/// `[interrupt.<id>]` sections keyed by resource id.
+/// The L2 bindings parsed from a platform file: instance identity plus the
+/// construct-owned resource sections.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlatformBindings {
+    /// Platform-instance binding identity. Each backend consumes only the form
+    /// native to its ratified registration mechanism.
+    pub device: DeviceBindingSpec,
     /// `[mmio.<id>]` sections, keyed by the resource id (`#[rseq::mmio(id =
     /// "<id>")]`).
     pub mmio: BTreeMap<String, MmioBindingSpec>,
@@ -158,11 +169,8 @@ pub struct PlatformBindings {
     /// for the required `PinCtrl` form a missing section is the L2 tenant's
     /// `PIN-L2-NO-INVENTORY` (C01/D03).
     pub pinctrl: BTreeMap<String, PinctrlBindingSpec>,
-    /// `[dma.<id>]` sections, keyed by the resource id
-    /// (`#[rseq::dma_region(id = "<id>")]`, dma-management construct). An absent
-    /// section leaves the binding unresolved; presence/required-ness is the L2
-    /// tenant's (C02).
-    pub dma: BTreeMap<String, DmaBindingSpec>,
+    /// `[serial-hardware-ops]` backend capability gates.
+    pub serial_hardware_ops: SerialHardwareOpsBindingSpec,
 }
 
 /// The raw, structurally-parsed `[platform]` identity (R5/D8). `regseq-config`
@@ -213,6 +221,14 @@ pub enum PlatformParseError {
     /// not here — R5.)
     #[error("[platform] {key}: {detail}")]
     BadPlatform { key: String, detail: String },
+    /// A `[binding.amba]` or `[binding.devicetree]` section/key has the wrong
+    /// structural shape.
+    #[error("[binding.{form}] {key}: {detail}")]
+    BadBinding {
+        form: String,
+        key: String,
+        detail: String,
+    },
     /// An `[interrupt.<id>]` section or one of its keys has the wrong shape
     /// (device-interrupt construct #6). Distinct from
     /// [`PlatformParseError::BadValue`] so the diagnostic is labelled
@@ -245,16 +261,9 @@ pub enum PlatformParseError {
         key: String,
         detail: String,
     },
-    /// A `[dma.<id>]` section or one of its keys has the wrong shape
-    /// (dma-management construct). Distinct from [`PlatformParseError::BadValue`]
-    /// so the diagnostic is labelled `[dma.…]`, not `[mmio.…]`. The
-    /// `region_cache_maintenance` vocabulary check is the `regseq-l2` tenant's.
-    #[error("[dma.{id}] {key}: {detail}")]
-    BadDma {
-        id: String,
-        key: String,
-        detail: String,
-    },
+    /// The `[serial-hardware-ops]` section has the wrong structural shape.
+    #[error("[serial-hardware-ops] {key}: {detail}")]
+    BadSerialHardwareOps { key: String, detail: String },
 }
 
 /// Parse a platform-file string in a single pass (Codex A1 / R5) into its
@@ -266,6 +275,9 @@ pub fn parse_platform_file_str(input: &str) -> Result<PlatformFile, PlatformPars
     let table: toml::Table = input
         .parse()
         .map_err(|e: toml::de::Error| PlatformParseError::InvalidToml(e.to_string()))?;
+
+    let device = parse_device_binding(&table)?;
+    let serial_hardware_ops = parse_serial_hardware_ops(&table)?;
 
     let mut mmio = BTreeMap::new();
     if let Some(mmio_val) = table.get("mmio") {
@@ -351,39 +363,125 @@ pub fn parse_platform_file_str(input: &str) -> Result<PlatformFile, PlatformPars
         }
     }
 
-    let mut dma = BTreeMap::new();
-    if let Some(dma_val) = table.get("dma") {
-        let toml::Value::Table(dma_tbl) = dma_val else {
-            return Err(PlatformParseError::BadDma {
-                id: "*".to_string(),
-                key: "dma".to_string(),
-                detail: "expected a `[dma.<id>]` table".to_string(),
-            });
-        };
-        for (id, val) in dma_tbl {
-            let toml::Value::Table(section) = val else {
-                return Err(PlatformParseError::BadDma {
-                    id: id.clone(),
-                    key: "<section>".to_string(),
-                    detail: "expected a table".to_string(),
-                });
-            };
-            dma.insert(id.clone(), parse_dma_section(id, section)?);
-        }
-    }
-
     let identity = parse_platform_identity(&table)?;
 
     Ok(PlatformFile {
         bindings: PlatformBindings {
+            device,
             mmio,
             interrupt,
             clock,
             pinctrl,
-            dma,
+            serial_hardware_ops,
         },
         identity,
     })
+}
+
+fn parse_serial_hardware_ops(
+    table: &toml::Table,
+) -> Result<SerialHardwareOpsBindingSpec, PlatformParseError> {
+    let Some(value) = table.get("serial-hardware-ops") else {
+        return Ok(SerialHardwareOpsBindingSpec::default());
+    };
+    let toml::Value::Table(section) = value else {
+        return Err(PlatformParseError::BadSerialHardwareOps {
+            key: "<section>".into(),
+            detail: "expected a table".into(),
+        });
+    };
+    let break_send = match section.get("break-send") {
+        None => false,
+        Some(toml::Value::Boolean(enabled)) => *enabled,
+        Some(_) => {
+            return Err(PlatformParseError::BadSerialHardwareOps {
+                key: "break-send".into(),
+                detail: "expected a boolean".into(),
+            })
+        }
+    };
+    Ok(SerialHardwareOpsBindingSpec { break_send })
+}
+
+/// Parse the optional platform-instance binding forms. Each present form is a
+/// singular table because a platform file describes one integration instance;
+/// device-wide variant sets remain in the Rust match descriptor.
+fn parse_device_binding(table: &toml::Table) -> Result<DeviceBindingSpec, PlatformParseError> {
+    let Some(binding_val) = table.get("binding") else {
+        return Ok(DeviceBindingSpec::default());
+    };
+    let toml::Value::Table(binding) = binding_val else {
+        return Err(bad_binding(
+            "*",
+            "<section>",
+            "expected a `[binding.<form>]` table",
+        ));
+    };
+
+    let amba = match binding.get("amba") {
+        None => None,
+        Some(toml::Value::Table(section)) => {
+            let periphid = binding_u32(
+                "amba",
+                "periphid",
+                required_binding_key("amba", section, "periphid")?,
+            )?;
+            let mask = binding_u32(
+                "amba",
+                "mask",
+                required_binding_key("amba", section, "mask")?,
+            )?;
+            Some(AmbaBindingSpec { periphid, mask })
+        }
+        Some(_) => return Err(bad_binding("amba", "<section>", "expected a table")),
+    };
+
+    let devicetree = match binding.get("devicetree") {
+        None => None,
+        Some(toml::Value::Table(section)) => {
+            let value = required_binding_key("devicetree", section, "compatible")?;
+            let toml::Value::String(compatible) = value else {
+                return Err(bad_binding("devicetree", "compatible", "expected a string"));
+            };
+            Some(DevicetreeBindingSpec {
+                compatible: compatible.clone(),
+            })
+        }
+        Some(_) => return Err(bad_binding("devicetree", "<section>", "expected a table")),
+    };
+
+    Ok(DeviceBindingSpec { amba, devicetree })
+}
+
+fn required_binding_key<'a>(
+    form: &str,
+    section: &'a toml::Table,
+    key: &str,
+) -> Result<&'a toml::Value, PlatformParseError> {
+    section
+        .get(key)
+        .ok_or_else(|| bad_binding(form, key, "required key is missing"))
+}
+
+fn binding_u32(form: &str, key: &str, value: &toml::Value) -> Result<u32, PlatformParseError> {
+    let toml::Value::Integer(n) = value else {
+        return Err(bad_binding(form, key, "expected a non-negative integer"));
+    };
+    u32::try_from(*n).map_err(|_| {
+        bad_binding(
+            form,
+            key,
+            "expected a non-negative integer fitting in 32 bits",
+        )
+    })
+}
+
+fn bad_binding(form: &str, key: &str, detail: &str) -> PlatformParseError {
+    PlatformParseError::BadBinding {
+        form: form.to_string(),
+        key: key.to_string(),
+        detail: detail.to_string(),
+    }
 }
 
 /// Read and parse a platform file at `path` in one pass (see
@@ -412,9 +510,7 @@ pub fn parse_platform_bindings_path(path: &Path) -> Result<PlatformBindings, Pla
 /// Structurally parse the `[platform]` table into [`PlatformIdentityRaw`]. Each
 /// key must be a string when present; the os token is NOT validated here (that
 /// is `regseq-l2`'s job — R5). An absent `[platform]` table yields all-`None`.
-fn parse_platform_identity(
-    table: &toml::Table,
-) -> Result<PlatformIdentityRaw, PlatformParseError> {
+fn parse_platform_identity(table: &toml::Table) -> Result<PlatformIdentityRaw, PlatformParseError> {
     let Some(platform_val) = table.get("platform") else {
         return Ok(PlatformIdentityRaw::default());
     };
@@ -601,85 +697,19 @@ fn parse_pinctrl_section(
         ));
     };
     let toml::Value::Array(entries) = pin_states_val else {
-        return Err(bad("pin_states", "expected an array of strings".to_string()));
+        return Err(bad(
+            "pin_states",
+            "expected an array of strings".to_string(),
+        ));
     };
     let mut pin_states = Vec::with_capacity(entries.len());
     for (idx, entry) in entries.iter().enumerate() {
         let toml::Value::String(s) = entry else {
-            return Err(bad(
-                "pin_states",
-                format!("entry {idx} is not a string"),
-            ));
+            return Err(bad("pin_states", format!("entry {idx} is not a string")));
         };
         pin_states.push(s.clone());
     }
     Ok(PinctrlBindingSpec { pin_states })
-}
-
-/// Parse one `[dma.<id>]` region section's C02 keys (`device_address_bits` /
-/// `alignment` / `region_cache_maintenance`). Unknown keys are ignored
-/// (forward-compat, matching `[clock.<id>]`/`[mmio.<id>]`). Structural checks
-/// only: `device_address_bits` must be a non-negative integer that fits `u32`,
-/// `alignment` a non-negative integer (`u64`), and `region_cache_maintenance` a
-/// string (captured verbatim — the `none | per_access` vocabulary is the
-/// `regseq-l2` dma tenant's, GRILL C02/D03). This is the M1 region subset; the
-/// slave-channel keys are the M2 extension.
-fn parse_dma_section(id: &str, section: &toml::Table) -> Result<DmaBindingSpec, PlatformParseError> {
-    let bad = |key: &str, detail: String| PlatformParseError::BadDma {
-        id: id.to_string(),
-        key: key.to_string(),
-        detail,
-    };
-    let device_address_bits = match section.get("device_address_bits") {
-        None => None,
-        Some(toml::Value::Integer(i)) if *i >= 0 => Some(
-            u32::try_from(*i).map_err(|_| bad("device_address_bits", format!("{i} does not fit u32")))?,
-        ),
-        Some(toml::Value::Integer(_)) => {
-            return Err(bad("device_address_bits", "must be non-negative".to_string()))
-        }
-        Some(_) => return Err(bad("device_address_bits", "expected an integer".to_string())),
-    };
-    let alignment = match section.get("alignment") {
-        None => None,
-        Some(v) => Some(as_u64(id, "alignment", v).map_err(|_| {
-            bad("alignment", "expected a non-negative integer".to_string())
-        })?),
-    };
-    let region_cache_maintenance = match section.get("region_cache_maintenance") {
-        None => None,
-        Some(toml::Value::String(s)) => Some(s.clone()),
-        Some(_) => return Err(bad("region_cache_maintenance", "expected a string".to_string())),
-    };
-    // `binding_scope` (GRILL D07): the binding's resolution scope. A string token,
-    // verbatim; the vocabulary (`concrete`/`template`/`family`/`conditional`) + the
-    // `absent`-only-in-concrete rule are the `regseq-l2` dma tenant's.
-    let binding_scope = match section.get("binding_scope") {
-        None => None,
-        Some(toml::Value::String(s)) => Some(s.clone()),
-        Some(_) => return Err(bad("binding_scope", "expected a string".to_string())),
-    };
-    // `cap_<name> = "<value>"` capability flags (GRILL C02/D07): every key prefixed
-    // `cap_` is captured verbatim under its bare name (`cap_pause` ⇒ `pause`). The
-    // value must be a string (the `present|absent|unknown` vocabulary check is the
-    // dma tenant's).
-    let mut capabilities = BTreeMap::new();
-    for (key, value) in section {
-        let Some(cap_name) = key.strip_prefix("cap_") else {
-            continue;
-        };
-        let toml::Value::String(token) = value else {
-            return Err(bad(key, "a `cap_*` capability flag must be a string".to_string()));
-        };
-        capabilities.insert(cap_name.to_string(), token.clone());
-    }
-    Ok(DmaBindingSpec {
-        device_address_bits,
-        alignment,
-        region_cache_maintenance,
-        binding_scope,
-        capabilities,
-    })
 }
 
 /// Coerce a TOML value to a non-negative `u64`, or a typed error.
@@ -702,6 +732,90 @@ fn as_u64(id: &str, key: &str, v: &toml::Value) -> Result<u64, PlatformParseErro
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_platform_instance_binding_forms() {
+        let input = r#"
+[binding.amba]
+periphid = 0x00abc123
+mask = 0x00ffffff
+
+[binding.devicetree]
+compatible = "regseq,serialpl011"
+"#;
+        let b = parse_platform_bindings_str(input).expect("parse");
+        assert_eq!(
+            b.device.amba,
+            Some(AmbaBindingSpec {
+                periphid: 0x00ab_c123,
+                mask: 0x00ff_ffff,
+            })
+        );
+        assert_eq!(
+            b.device
+                .devicetree
+                .as_ref()
+                .map(|dt| dt.compatible.as_str()),
+            Some("regseq,serialpl011")
+        );
+    }
+
+    #[test]
+    fn absent_platform_instance_binding_preserves_fallback() {
+        let b = parse_platform_bindings_str("[mmio.regs]\nbase = 0\nsize = 16\n").unwrap();
+        assert_eq!(b.device, DeviceBindingSpec::default());
+    }
+
+    #[test]
+    fn parses_serial_hardware_ops_break_send_gate() {
+        let b = parse_platform_bindings_str("[serial-hardware-ops]\nbreak-send = true\n").unwrap();
+        assert!(b.serial_hardware_ops.break_send);
+        assert!(
+            !parse_platform_bindings_str("")
+                .unwrap()
+                .serial_hardware_ops
+                .break_send
+        );
+
+        let err = parse_platform_bindings_str("[serial-hardware-ops]\nbreak-send = \"yes\"\n")
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            PlatformParseError::BadSerialHardwareOps { ref key, .. }
+                if key == "break-send"
+        ));
+    }
+
+    #[test]
+    fn binding_forms_require_complete_typed_identity() {
+        let missing = parse_platform_bindings_str("[binding.amba]\nperiphid = 1\n")
+            .expect_err("mask is required");
+        assert!(matches!(
+            &missing,
+            PlatformParseError::BadBinding { form, key, .. }
+                if form == "amba" && key == "mask"
+        ));
+
+        let oversized = parse_platform_bindings_str(
+            "[binding.amba]\nperiphid = 4294967296\nmask = 4294967295\n",
+        )
+        .expect_err("periphid must fit u32");
+        assert!(matches!(
+            &oversized,
+            PlatformParseError::BadBinding { form, key, .. }
+                if form == "amba" && key == "periphid"
+        ));
+
+        let compatible = parse_platform_bindings_str(
+            "[binding.devicetree]\ncompatible = [\"regseq,serialpl011\"]\n",
+        )
+        .expect_err("compatible is singular");
+        assert!(matches!(
+            &compatible,
+            PlatformParseError::BadBinding { form, key, .. }
+                if form == "devicetree" && key == "compatible"
+        ));
+    }
 
     #[test]
     fn parses_base_size_bar_and_type() {
@@ -768,9 +882,8 @@ bar = 2
     // regseq-l2 interrupt tenant, not here. ---
 
     #[test]
-    fn parses_interrupt_section_pl011_full_spec_shape() {
-        // The aspirational `pl011-full-spec` fixture's section, verbatim
-        // (C03/S05). `trigger_polarity = "high"` is non-canonical and must
+    fn parses_interrupt_section_uart_shape() {
+        // A UART platform-file section (C03/S05). `trigger_polarity = "high"` is non-canonical and must
         // still PARSE here — rejecting it is the L2 binder's job (D10/R12).
         let input = r#"
 version = "1"
@@ -836,10 +949,16 @@ shared = false
     #[test]
     fn interrupt_rejects_negative_and_oversized_integers() {
         let err = parse_platform_bindings_str("[interrupt.a]\nirq_number = -1\n").unwrap_err();
-        assert!(matches!(&err, PlatformParseError::BadInterrupt { .. }), "got {err:?}");
+        assert!(
+            matches!(&err, PlatformParseError::BadInterrupt { .. }),
+            "got {err:?}"
+        );
         let err =
             parse_platform_bindings_str("[interrupt.a]\npriority = 4294967296\n").unwrap_err();
-        assert!(matches!(&err, PlatformParseError::BadInterrupt { .. }), "got {err:?}");
+        assert!(
+            matches!(&err, PlatformParseError::BadInterrupt { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -859,10 +978,7 @@ shared = false
     #[test]
     fn interrupt_error_is_labelled_interrupt_not_mmio() {
         let err = parse_platform_bindings_str("[interrupt.a]\nshared = 3\n").unwrap_err();
-        assert!(
-            err.to_string().starts_with("[interrupt.a]"),
-            "got {err}"
-        );
+        assert!(err.to_string().starts_with("[interrupt.a]"), "got {err}");
     }
 
     // --- [clock.<id>] (peripheral-clock-management construct, C01): structural
@@ -905,8 +1021,9 @@ default_frequency = 48000000
     fn clock_default_frequency_zero_parses_here_rejected_downstream() {
         // 0 is a valid non-negative u32 at parse time; the `> 0` requirement
         // (D15) is the L2 tenant's, not the parser's.
-        let b = parse_platform_bindings_str("[clock.a]\nmode = \"static\"\ndefault_frequency = 0\n")
-            .unwrap();
+        let b =
+            parse_platform_bindings_str("[clock.a]\nmode = \"static\"\ndefault_frequency = 0\n")
+                .unwrap();
         assert_eq!(b.clock.get("a").unwrap().default_frequency, Some(0));
     }
 
@@ -935,10 +1052,16 @@ default_frequency = 48000000
     #[test]
     fn clock_rejects_negative_and_oversized_default_frequency() {
         let err = parse_platform_bindings_str("[clock.a]\ndefault_frequency = -1\n").unwrap_err();
-        assert!(matches!(&err, PlatformParseError::BadClock { .. }), "got {err:?}");
+        assert!(
+            matches!(&err, PlatformParseError::BadClock { .. }),
+            "got {err:?}"
+        );
         let err =
             parse_platform_bindings_str("[clock.a]\ndefault_frequency = 4294967296\n").unwrap_err();
-        assert!(matches!(&err, PlatformParseError::BadClock { .. }), "got {err:?}");
+        assert!(
+            matches!(&err, PlatformParseError::BadClock { .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -965,10 +1088,14 @@ default_frequency = 48000000
     fn duplicate_clock_section_is_a_toml_parse_error() {
         // A duplicate `[clock.<id>]` table is a free TOML parse error (D13/D15,
         // C06 N16) — not a clock-specific reject.
-        let err =
-            parse_platform_bindings_str("[clock.a]\nmode = \"static\"\n[clock.a]\nmode = \"static\"\n")
-                .unwrap_err();
-        assert!(matches!(&err, PlatformParseError::InvalidToml(_)), "got {err:?}");
+        let err = parse_platform_bindings_str(
+            "[clock.a]\nmode = \"static\"\n[clock.a]\nmode = \"static\"\n",
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, PlatformParseError::InvalidToml(_)),
+            "got {err:?}"
+        );
     }
 
     // --- [pinctrl.<id>] (pin-controller-and-GPIO-configuration construct, C01):
@@ -983,7 +1110,10 @@ default_frequency = 48000000
         )
         .unwrap();
         let spec = b.pinctrl.get("uart_pins").expect("uart_pins section");
-        assert_eq!(spec.pin_states, vec!["default".to_string(), "sleep".to_string()]);
+        assert_eq!(
+            spec.pin_states,
+            vec!["default".to_string(), "sleep".to_string()]
+        );
     }
 
     #[test]
@@ -1001,7 +1131,10 @@ default_frequency = 48000000
             "[pinctrl.uart_pins]\npin_states = [\"default\"]\nfuture = 1\n",
         )
         .unwrap();
-        assert_eq!(b.pinctrl.get("uart_pins").unwrap().pin_states, vec!["default".to_string()]);
+        assert_eq!(
+            b.pinctrl.get("uart_pins").unwrap().pin_states,
+            vec!["default".to_string()]
+        );
     }
 
     #[test]
@@ -1017,9 +1150,8 @@ default_frequency = 48000000
 
     #[test]
     fn pinctrl_rejects_non_array_pin_states() {
-        let err =
-            parse_platform_bindings_str("[pinctrl.uart_pins]\npin_states = \"default\"\n")
-                .unwrap_err();
+        let err = parse_platform_bindings_str("[pinctrl.uart_pins]\npin_states = \"default\"\n")
+            .unwrap_err();
         assert!(
             matches!(&err, PlatformParseError::BadPinctrl { key, .. } if key == "pin_states"),
             "got {err:?}"
@@ -1061,7 +1193,10 @@ default_frequency = 48000000
             "[pinctrl.a]\npin_states = [\"default\"]\n[pinctrl.a]\npin_states = [\"default\"]\n",
         )
         .unwrap_err();
-        assert!(matches!(&err, PlatformParseError::InvalidToml(_)), "got {err:?}");
+        assert!(
+            matches!(&err, PlatformParseError::InvalidToml(_)),
+            "got {err:?}"
+        );
     }
 
     // --- [platform] identity (T6b, R5): structural parse only; os vocabulary is
@@ -1081,7 +1216,10 @@ size = 0x20000
 "#;
         let file = parse_platform_file_str(input).expect("parse");
         // Bindings.
-        assert_eq!(file.bindings.mmio.get("regs").unwrap().base, Some(0xf000_0000));
+        assert_eq!(
+            file.bindings.mmio.get("regs").unwrap().base,
+            Some(0xf000_0000)
+        );
         // Raw identity (os kept verbatim as a string — NOT yet typed).
         assert_eq!(file.identity.os.as_deref(), Some("linux"));
         assert_eq!(file.identity.board.as_deref(), Some("qemu-pc"));

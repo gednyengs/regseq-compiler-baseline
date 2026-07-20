@@ -211,7 +211,10 @@ pub(crate) fn build_for_body(
             SyncKind::Mutex => format!("mutex_unlock({obj});"),
             SyncKind::SpinLock => format!("spin_unlock({obj});"),
             SyncKind::IrqSpinLock => {
-                format!("spin_unlock_irqrestore({obj}, {});", state.as_ref().unwrap())
+                format!(
+                    "spin_unlock_irqrestore({obj}, {});",
+                    state.as_ref().unwrap()
+                )
             }
             SyncKind::Completion => unreachable!("guarded above"),
         };

@@ -1,0 +1,12 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "e1000"
+arch = "x86_64"
+
+[interrupt.net_irq]
+irq_number = 11
+trigger_type = "level"
+trigger_polarity = "active_low"
+shared = false

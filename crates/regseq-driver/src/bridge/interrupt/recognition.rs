@@ -77,7 +77,10 @@ pub(crate) fn is_interrupt_field<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool 
 /// frontend error (R01/D08; no field-name fallback). Unknown keys are skipped
 /// (forward-compat, matching `recognise_mmio_field_attr`).
 fn recognise_interrupt_field_attr(tcx: TyCtxt<'_>, def_id: DefId) -> Option<String> {
-    let path = [RustcSymbol::intern("rseq"), RustcSymbol::intern("interrupt")];
+    let path = [
+        RustcSymbol::intern("rseq"),
+        RustcSymbol::intern("interrupt"),
+    ];
     let attr = tcx.get_attrs_by_path(def_id, &path).next()?;
     let Attribute::Unparsed(item) = attr else {
         return None;

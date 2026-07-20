@@ -126,12 +126,18 @@ fn linux_busy_wait_bands_and_msleep_only() {
 
     // The magnitude-dispatch helper, its include, and the three atomic-safe
     // bands with round-up.
-    assert!(tu.contains("#include <linux/delay.h>"), "delay include:\n{tu}");
+    assert!(
+        tu.contains("#include <linux/delay.h>"),
+        "delay include:\n{tu}"
+    );
     assert!(
         tu.contains("static void regseq_linux_busy_wait_ns(uint64_t ns)"),
         "busy_wait helper:\n{tu}"
     );
-    assert!(tu.contains("ndelay((unsigned long)ns)"), "ndelay band:\n{tu}");
+    assert!(
+        tu.contains("ndelay((unsigned long)ns)"),
+        "ndelay band:\n{tu}"
+    );
     assert!(
         tu.contains("udelay((unsigned long)(1ULL + (ns - 1ULL) / 1000ULL))"),
         "udelay round-up:\n{tu}"
@@ -149,7 +155,10 @@ fn linux_busy_wait_bands_and_msleep_only() {
     // ns field. (The const 10us and the runtime eeprom value both lower through
     // the same helper — intent preserved as helper identity.)
     let busy_calls = tu.matches("regseq_linux_busy_wait_ns((uint64_t)").count();
-    assert!(busy_calls >= 2, "two busy_wait call sites, found {busy_calls}:\n{tu}");
+    assert!(
+        busy_calls >= 2,
+        "two busy_wait call sites, found {busy_calls}:\n{tu}"
+    );
     assert!(
         tu.contains("regseq_linux_sleep_ns((uint64_t)"),
         "sleep call site:\n{tu}"
@@ -157,7 +166,10 @@ fn linux_busy_wait_bands_and_msleep_only() {
     // The busy_wait helper never calls a sleeping primitive (I04 intent).
     let busy_helper = &tu[tu.find("regseq_linux_busy_wait_ns(uint64_t ns)").unwrap()..];
     let busy_helper = &busy_helper[..busy_helper.find('}').unwrap()];
-    assert!(!busy_helper.contains("msleep"), "busy helper must not sleep");
+    assert!(
+        !busy_helper.contains("msleep"),
+        "busy helper must not sleep"
+    );
 }
 
 #[test]
@@ -169,7 +181,10 @@ fn zephyr_k_busy_wait_and_k_msleep() {
         .expect("zephyr_c emit must succeed")
         .tu;
 
-    assert!(tu.contains("#include <zephyr/kernel.h>"), "kernel include:\n{tu}");
+    assert!(
+        tu.contains("#include <zephyr/kernel.h>"),
+        "kernel include:\n{tu}"
+    );
     assert!(
         tu.contains("static void regseq_zephyr_busy_wait_ns(uint64_t ns)"),
         "busy_wait helper:\n{tu}"
@@ -180,11 +195,16 @@ fn zephyr_k_busy_wait_and_k_msleep() {
     );
     assert!(
         tu.contains("static void regseq_zephyr_sleep_ns(uint64_t ns)")
-            && tu.contains("k_msleep((int32_t)(ns == 0ULL ? 0ULL : 1ULL + (ns - 1ULL) / 1000000ULL))"),
+            && tu.contains(
+                "k_msleep((int32_t)(ns == 0ULL ? 0ULL : 1ULL + (ns - 1ULL) / 1000000ULL))"
+            ),
         "k_msleep round-up:\n{tu}"
     );
     let busy_calls = tu.matches("regseq_zephyr_busy_wait_ns((uint64_t)").count();
-    assert!(busy_calls >= 2, "two busy_wait call sites, found {busy_calls}:\n{tu}");
+    assert!(
+        busy_calls >= 2,
+        "two busy_wait call sites, found {busy_calls}:\n{tu}"
+    );
     assert!(
         tu.contains("regseq_zephyr_sleep_ns((uint64_t)"),
         "sleep call site:\n{tu}"

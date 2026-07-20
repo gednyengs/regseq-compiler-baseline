@@ -1,0 +1,7 @@
+name = "dma-streaming-map-reject"
+kind = "rust"
+covers = []
+expect = "reject"
+[expected]
+stage = "acquire"
+diagnostic = "DMA-ERR-EXCLUDED-SURFACE"

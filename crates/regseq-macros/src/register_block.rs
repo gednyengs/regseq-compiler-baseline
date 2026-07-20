@@ -280,7 +280,11 @@ fn parse_block_entry(input: ParseStream) -> syn::Result<BlockEntry> {
                 .parse_terminated(parse_sub_register, Token![,])?
                 .into_iter()
                 .collect();
-            return Ok(BlockEntry::StructArray(StructArrayEntry { name, count, subs }));
+            return Ok(BlockEntry::StructArray(StructArrayEntry {
+                name,
+                count,
+                subs,
+            }));
         }
         // Register array: `name[count]: AccessKind { fields }`.
         let (access, fields) = parse_access_and_fields(input)?;

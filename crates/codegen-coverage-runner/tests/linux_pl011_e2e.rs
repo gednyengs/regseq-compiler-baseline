@@ -61,8 +61,8 @@ fn linux_pl011_snapshot_and_l0_structure() {
         result.verdict
     );
 
-    let tu = std::fs::read_to_string(pipeline::linux_golden_path(fixture))
-        .expect("read golden.linux.c");
+    let tu =
+        std::fs::read_to_string(pipeline::linux_golden_path(fixture)).expect("read golden.linux.c");
     let pos = |needle: &str| {
         tu.find(needle)
             .unwrap_or_else(|| panic!("TU must contain `{needle}`"))
@@ -139,7 +139,10 @@ fn linux_pl011_snapshot_and_l0_structure() {
     let table = pos(".id\t= 0x00041011,");
     let second = pos(".id\t= 0x00abc123,");
     let sentinel = pos("{ 0, 0 },");
-    assert!(table < second && second < sentinel, "full multi-row match table");
+    assert!(
+        table < second && second < sentinel,
+        "full multi-row match table"
+    );
     let devtable = pos("MODULE_DEVICE_TABLE(amba, pl011_ids);");
     let macros = pos("module_amba_driver(pl011_driver);");
     assert!(remove < table && table < sentinel && sentinel < devtable && devtable < macros);

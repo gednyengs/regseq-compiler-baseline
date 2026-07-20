@@ -1,0 +1,208 @@
+{
+  "schema": "gap-closure-verification-plan/1",
+  "stage": "C5-composition",
+  "commands": [
+    {
+      "argv": [
+        "bash", "--noprofile", "--norc", "-c",
+        "test \"$(git rev-parse HEAD)\" = 50ffaa61f8fc1369d3d5404d467a1b31678735f3"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "python3", "-c",
+        "import json; a='708f08fcf18f934041d98e23f9811103fca59bea58418680c5395d2201e3bf17'; lock=json.load(open('/home/nyengele/regseq-eval-worktrees/regseq-gap-closure/docs/experiments/os-api-gap-closure/addendum/LOCK.json')); assert lock['schema']=='gap-closure-addendum-lock/1' and lock['sha256']=='52996affe191766dbbae4cd7a1eaa782a829d541f5ea9572af213d10f619c41a'; assert lock['construct_epochs']=={'device-class-serial':1,'device-command-transport':2,'dma-management':1,'network-interface-management':1}; gate=json.load(open('/home/nyengele/regseq-eval-worktrees/regseq-gap-closure/docs/experiments/os-api-gap-closure/wf/runtime/gates/H12-DCT-P1-GREEN.json')); assert gate['ok'] is True and gate['digest']=='edebf47c82a4560b0ee4e2e48ec7a687da35483b30b7f551ee1b715eb245b4c9'; coverage=json.load(open('experiments/os-api-gap-closure/coverage/C5-composition.json')); manifest=json.load(open('experiments/os-api-gap-closure/generated/C5-composition/MANIFEST.json')); assert coverage['compiler_baseline']=='canonical-v3' and coverage['construct_epochs']==lock['construct_epochs']; assert coverage['authority_sha256']==manifest['authority_sha256']==a and coverage['addendum_lock_sha256']==manifest['addendum_lock_sha256']==lock['sha256']"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "bash", "--noprofile", "--norc", "-c",
+        "RSEQ_REGENERATE=1 cargo test -p codegen-coverage-runner --test composition_e2e regenerate_products_and_manifest -- --exact --nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": [
+        "experiments/os-api-gap-closure/generated/C5-composition/pl011_linux.c",
+        "experiments/os-api-gap-closure/generated/C5-composition/pl011_linux_initfail.c",
+        "experiments/os-api-gap-closure/generated/C5-composition/pl011.zephyr.c",
+        "experiments/os-api-gap-closure/generated/C5-composition/pl011_zephyr_initfail.c",
+        "experiments/os-api-gap-closure/generated/C5-composition/pl011_zephyr.binding.yaml",
+        "experiments/os-api-gap-closure/generated/C5-composition/e1000_linux.c",
+        "experiments/os-api-gap-closure/generated/C5-composition/e1000_linux_initfail.c",
+        "experiments/os-api-gap-closure/generated/C5-composition/e1000.zephyr.c",
+        "experiments/os-api-gap-closure/generated/C5-composition/e1000_zephyr_initfail.c",
+        "experiments/os-api-gap-closure/generated/C5-composition/e1000_zephyr.binding.yaml",
+        "experiments/os-api-gap-closure/generated/C5-composition/e1000_zephyr_initfail.binding.yaml",
+        "experiments/os-api-gap-closure/generated/C5-composition/MANIFEST.json"
+      ]
+    },
+    {
+      "argv": ["cargo", "test", "--workspace"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "cargo", "test", "-p", "codegen-coverage-runner", "--test", "composition_e2e",
+        "e1000_carrier_and_receive_are_composed_without_ics_self_kick", "--", "--exact", "--nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "cargo", "test", "-p", "codegen-coverage-runner", "--test", "transport_os_lowering_e2e",
+        "transport_zephyr_is_native_admission_only", "--", "--exact", "--nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "cargo", "test", "-p", "codegen-coverage-runner", "--test", "composition_e2e",
+        "persisted_linux_product_names_are_kbuild_safe", "--", "--exact", "--nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "cargo", "test", "-p", "codegen-coverage-runner", "--test", "composition_e2e",
+        "rich_specs_compile_unchanged_and_keep_scaffold_backend_owned", "--", "--exact", "--nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "cargo", "test", "-p", "codegen-coverage-runner", "--test", "composition_e2e",
+        "regenerate_products_and_manifest", "--", "--exact", "--nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "cargo", "test", "-p", "codegen-coverage-runner", "--test", "composition_e2e",
+        "negative_products_are_unique_and_induced", "--", "--exact", "--nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "cargo", "test", "-p", "codegen-coverage-runner", "--test", "composition_e2e",
+        "full_coverage_and_negative_capability_matrices", "--", "--exact", "--nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "serial_covers", "locked_serial_stage_accounts_for_all_frozen_pl011_rows", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dma_covers", "locked_dma_stage_accounts_for_all_frozen_dma_gap_rows", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "transport_covers", "locked_transport_stage_accounts_for_all_frozen_gap_rows", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "network_covers", "locked_network_stage_accounts_for_all_frozen_gap_rows", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "cargo", "test", "-p", "codegen-coverage-runner", "--test", "serial_reject_e2e",
+        "locked_serial_negative_diagnostics", "--", "--exact", "--nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "cargo", "test", "-p", "codegen-coverage-runner", "--test", "dma_locked_fixtures",
+        "locked_dma_negative_frontend_corpus", "--", "--exact", "--nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "cargo", "test", "-p", "codegen-coverage-runner", "--test", "transport_locked_fixtures",
+        "locked_transport_negative_frontend", "--", "--exact", "--nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "cargo", "test", "-p", "codegen-coverage-runner", "--test", "network_locked_fixtures",
+        "locked_network_negative_frontend_corpus_is_exact", "--", "--exact", "--nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "serial_port_e2e", "serial_capability_absence_has_no_fabricated_event_or_success", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dma_locked_fixtures", "dma_two_owned_lifetimes_and_absences_are_recorded", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "transport_locked_fixtures", "locked_transport_generic_c_admission_has_no_terminal_event", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "network_locked_fixtures", "network_capability_absence_is_data_not_success", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "bash", "--noprofile", "--norc", "-c",
+        "test -n \"${RSEQ_LINUX_KDIR:-}\" && cargo test -p codegen-coverage-runner --test composition_e2e rich_linux_outputs_build_against_real_headers -- --exact --nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "bash", "--noprofile", "--norc", "-c",
+        "test -n \"${RSEQ_ZEPHYR_WORKSPACE:-}\" && cargo test -p codegen-coverage-runner --test composition_e2e rich_zephyr_outputs_build_against_real_headers -- --exact --nocapture"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "bash", "--noprofile", "--norc", "-c",
+        "before=$(sha256sum experiments/os-api-gap-closure/generated/C5-composition/{pl011_linux.c,pl011_linux_initfail.c,pl011.zephyr.c,pl011_zephyr_initfail.c,pl011_zephyr.binding.yaml,e1000_linux.c,e1000_linux_initfail.c,e1000.zephyr.c,e1000_zephyr_initfail.c,e1000_zephyr.binding.yaml,e1000_zephyr_initfail.binding.yaml,MANIFEST.json}); RSEQ_REGENERATE=1 cargo test -p codegen-coverage-runner --test composition_e2e regenerate_products_and_manifest -- --exact --nocapture; after=$(sha256sum experiments/os-api-gap-closure/generated/C5-composition/{pl011_linux.c,pl011_linux_initfail.c,pl011.zephyr.c,pl011_zephyr_initfail.c,pl011_zephyr.binding.yaml,e1000_linux.c,e1000_linux_initfail.c,e1000.zephyr.c,e1000_zephyr_initfail.c,e1000_zephyr.binding.yaml,e1000_zephyr_initfail.binding.yaml,MANIFEST.json}); test \"$before\" = \"$after\""
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": [
+        "python3", "-c",
+        "import json; p=json.load(open('experiments/os-api-gap-closure/verification/C5-composition.json')); assert set(p)=={'schema','stage','commands'}; assert p['schema']=='gap-closure-verification-plan/1' and p['stage']=='C5-composition'; allowed={'cargo','uv','python3','bash','make','cmake','ninja'}; assert p['commands'] and all(set(c)=={'argv','cwd','expected_outputs'} and c['argv'][0] in allowed and isinstance(c['cwd'],str) and isinstance(c['expected_outputs'],list) for c in p['commands'])"
+      ],
+      "cwd": ".",
+      "expected_outputs": []
+    }
+  ]
+}

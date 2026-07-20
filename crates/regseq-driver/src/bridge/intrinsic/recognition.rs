@@ -8,8 +8,8 @@
 //! family-specific logic lives in each construct's bridge module.
 
 use regseq_model::{
-    AtomicOp, AttrData, ClockOp, ConfigOp, DeferredWorkOp, DefPathData, DmaOp, ElementVerb, FetchOp,
-    IntrinsicKind, ItemId, LogLevel, MmioOp, PinctrlOp, RegseqModel,
+    AtomicOp, AttrData, ClockOp, ConfigOp, DefPathData, DeferredWorkOp, FetchOp, IntrinsicKind,
+    ItemId, LogLevel, MmioOp, PinctrlOp, RegseqModel,
 };
 use rustc_span::{def_id::DefId, Symbol as RustcSymbol};
 
@@ -124,33 +124,6 @@ fn intrinsic_kind_for_name(name: &str) -> Option<IntrinsicKind> {
         // `OptionalPinCtrl::apply::<S>()` wrapper method. Keep in sync with
         // `regseq_model::IntrinsicKind::from_name`.
         "pinctrl_apply" => Some(IntrinsicKind::Pinctrl(PinctrlOp::ApplyState)),
-        // DMA-management intrinsics (dma-management construct, T08): the
-        // namespaced `dma_*` attribute strings (the facade tags) map to the DMA
-        // op family. The element-access verbs ride `dma_element_*` so they never
-        // collide with Mmio's bare `read`/`write` in `fn_name_matches_kind` (the
-        // receiver-resource-TYPE disambiguation is in `bridge::dma`). Keep in
-        // sync with `regseq_model::IntrinsicKind::from_name`.
-        "dma_element_read" => Some(IntrinsicKind::Dma(DmaOp::ElementAccess {
-            verb: ElementVerb::Read,
-        })),
-        "dma_element_write" => Some(IntrinsicKind::Dma(DmaOp::ElementAccess {
-            verb: ElementVerb::Write,
-        })),
-        "dma_element_update" => Some(IntrinsicKind::Dma(DmaOp::ElementAccess {
-            verb: ElementVerb::Update,
-        })),
-        "dma_stream" => Some(IntrinsicKind::Dma(DmaOp::StreamMap)),
-        "dma_acquire_from_device" => Some(IntrinsicKind::Dma(DmaOp::StreamAcquireFromDevice)),
-        "dma_release_to_device" => Some(IntrinsicKind::Dma(DmaOp::StreamReleaseToDevice)),
-        "dma_configure" => Some(IntrinsicKind::Dma(DmaOp::ChannelConfigure)),
-        "dma_stage_transfer" => Some(IntrinsicKind::Dma(DmaOp::ChannelStageTransfer)),
-        "dma_start_transfer" => Some(IntrinsicKind::Dma(DmaOp::ChannelStartTransfer)),
-        "dma_stop" => Some(IntrinsicKind::Dma(DmaOp::ChannelStop)),
-        "dma_remaining_bytes" => Some(IntrinsicKind::Dma(DmaOp::ChannelRemainingBytes)),
-        "dma_region_span" => Some(IntrinsicKind::Dma(DmaOp::RegionSpan)),
-        "dma_device_addr" => Some(IntrinsicKind::Dma(DmaOp::DeviceAddr)),
-        "dma_device_addr_of" => Some(IntrinsicKind::Dma(DmaOp::DeviceAddrOf)),
-        "dma_element_count" => Some(IntrinsicKind::Dma(DmaOp::ElementCount)),
         // Deferred-work-item-scheduling intrinsic (deferred-work-item-scheduling
         // construct): the `Work::submit()` wrapper method. Keep in sync with
         // `regseq_model::IntrinsicKind::from_name`. (Codex pre-finalize
@@ -158,6 +131,7 @@ fn intrinsic_kind_for_name(name: &str) -> Option<IntrinsicKind> {
         // what `materialise_intrinsics` keys on, so without it `Work::submit`
         // stays untagged and never reaches `emit_deferred_work`.)
         "deferred_work_submit" => Some(IntrinsicKind::DeferredWork(DeferredWorkOp::Submit)),
+        "command_transport_submit" => Some(IntrinsicKind::CommandTransportSubmit),
         _ => None,
     }
 }
@@ -228,37 +202,6 @@ fn fn_name_matches_kind(name: &str, kind: &IntrinsicKind) -> bool {
         IntrinsicKind::Pinctrl(op) => match op {
             PinctrlOp::ApplyState => name == "apply",
         },
-        // DMA-management ops (dma-management construct). The
-        // `#[rseq::intrinsic("dma_*")]` attribute is the authority; the leaf
-        // method/fn name is a redundant gate (the leaf is the short surface form).
-        // NOTE: the element-access verbs `read`/`write`/`update` are GENERIC and
-        // also used by `Mmio<T>`, so the real DMA `element_access` disambiguation
-        // is by RECEIVER RESOURCE TYPE at recognition time (a later chunk, PLAN
-        // T06/T08), NOT by this redundant name gate. This arm only confirms a
-        // leaf name once the kind is already resolved via the attribute.
-        IntrinsicKind::Dma(op) => match op {
-            DmaOp::ElementAccess {
-                verb: ElementVerb::Read,
-            } => name == "read",
-            DmaOp::ElementAccess {
-                verb: ElementVerb::Write,
-            } => name == "write",
-            DmaOp::ElementAccess {
-                verb: ElementVerb::Update,
-            } => name == "update",
-            DmaOp::StreamMap => name == "stream",
-            DmaOp::StreamAcquireFromDevice => name == "acquire_from_device",
-            DmaOp::StreamReleaseToDevice => name == "release_to_device",
-            DmaOp::ChannelConfigure => name == "configure",
-            DmaOp::ChannelStageTransfer => name == "stage_transfer",
-            DmaOp::ChannelStartTransfer => name == "start_transfer",
-            DmaOp::ChannelStop => name == "stop",
-            DmaOp::ChannelRemainingBytes => name == "remaining_bytes",
-            DmaOp::RegionSpan => name == "span",
-            DmaOp::DeviceAddr => name == "device_addr",
-            DmaOp::DeviceAddrOf => name == "device_addr_of",
-            DmaOp::ElementCount => name == "element_count",
-        },
         // The `Work::submit()` wrapper method (deferred-work-item-scheduling
         // construct). The `#[rseq::intrinsic("deferred_work_submit")]` attribute
         // is the authority; the leaf method name is a redundant gate (the leaf is
@@ -266,6 +209,7 @@ fn fn_name_matches_kind(name: &str, kind: &IntrinsicKind) -> bool {
         IntrinsicKind::DeferredWork(op) => match op {
             DeferredWorkOp::Submit => name == "submit",
         },
+        IntrinsicKind::CommandTransportSubmit => name == "submit",
     }
 }
 
@@ -338,8 +282,14 @@ mod tests {
         // `write_config` free functions map to `IntrinsicKind::Config(op)` and the
         // redundant fn-name gate accepts them.
         for (leaf, kind) in [
-            ("read_config", IntrinsicKind::Config(regseq_model::ConfigOp::Read)),
-            ("write_config", IntrinsicKind::Config(regseq_model::ConfigOp::Write)),
+            (
+                "read_config",
+                IntrinsicKind::Config(regseq_model::ConfigOp::Read),
+            ),
+            (
+                "write_config",
+                IntrinsicKind::Config(regseq_model::ConfigOp::Write),
+            ),
         ] {
             assert_eq!(intrinsic_kind_for_name(leaf), Some(kind.clone()));
             let mut model = model_with_item_attrs(1);
@@ -413,7 +363,11 @@ mod tests {
         ];
         for (tag, leaf, op) in cases {
             let kind = IntrinsicKind::Atomic(op);
-            assert_eq!(intrinsic_kind_for_name(tag), Some(kind.clone()), "tag {tag}");
+            assert_eq!(
+                intrinsic_kind_for_name(tag),
+                Some(kind.clone()),
+                "tag {tag}"
+            );
             let mut model = model_with_item_attrs(1);
             let def_path = def_path(&mut model, leaf);
             assert!(
@@ -444,7 +398,10 @@ mod tests {
         // driver-side vocabulary `materialise_intrinsics` keys on (Codex
         // BLOCKING-1) — without it `Work::submit` never reaches lowering.
         let kind = IntrinsicKind::DeferredWork(DeferredWorkOp::Submit);
-        assert_eq!(intrinsic_kind_for_name("deferred_work_submit"), Some(kind.clone()));
+        assert_eq!(
+            intrinsic_kind_for_name("deferred_work_submit"),
+            Some(kind.clone())
+        );
         let mut model = model_with_item_attrs(1);
         let submit_path = def_path(&mut model, "submit");
         assert!(callee_name_matches_kind(&model, &submit_path, &kind));
@@ -480,5 +437,4 @@ mod tests {
             vec![AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Warn))]
         );
     }
-
 }

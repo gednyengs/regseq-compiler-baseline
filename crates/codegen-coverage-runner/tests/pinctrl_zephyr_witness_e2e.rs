@@ -62,7 +62,10 @@ fn zephyr_optional_present_apply_state() {
     // region map.
     let map = pos("DEVICE_MMIO_MAP(dev, K_MEM_CACHE_NONE);");
     let acquire = pos("apply the OPTIONAL default pin state");
-    assert!(map < acquire, "the pinctrl apply must follow the region map (C07)");
+    assert!(
+        map < acquire,
+        "the pinctrl apply must follow the region map (C07)"
+    );
     // Codex M4 #6: the binding declares pinctrl support for a real Zephyr build.
     assert!(
         e.binding_yaml.contains("pinctrl-device.yaml"),
@@ -87,7 +90,10 @@ fn zephyr_required_present_and_acquire_failure() {
     let map = pos("DEVICE_MMIO_MAP(dev, K_MEM_CACHE_NONE);");
     let acquire =
         pos("int __ret = pinctrl_apply_state(PINCTRL_DT_INST_DEV_CONFIG_GET(0), PINCTRL_STATE_DEFAULT);");
-    assert!(map < acquire, "the pinctrl apply must follow the region map (C07)");
+    assert!(
+        map < acquire,
+        "the pinctrl apply must follow the region map (C07)"
+    );
     pos("return __ret;");
     // The author `apply::<S>()` checks the rc (required hard-fails on failure).
     pos("if (pinctrl_apply_state(PINCTRL_DT_INST_DEV_CONFIG_GET(0), PINCTRL_STATE_SLEEP) != 0) {");

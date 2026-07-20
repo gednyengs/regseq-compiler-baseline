@@ -1,0 +1,5 @@
+name = "c5-e1000-rich"
+kind = "rust"
+lifecycle_scenario = "orderly"
+covers = ["C5-E1000-RICH", "C5-E1000-DUAL-TARGET", "C5-E1000-NIM-DCT-COMPOSITION"]
+expect = "pass"

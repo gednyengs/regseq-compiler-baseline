@@ -138,5 +138,8 @@ fn clock_pl011_managed_oracle() {
         on_deinit < disable && disable < release,
         "author disable must precede the compiler-managed release (LIFO, C07/D16)"
     );
-    assert!(acquire < release, "acquire/release frame the clock's lifetime");
+    assert!(
+        acquire < release,
+        "acquire/release frame the clock's lifetime"
+    );
 }

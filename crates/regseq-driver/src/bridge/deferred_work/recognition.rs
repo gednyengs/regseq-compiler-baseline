@@ -68,7 +68,8 @@ fn recognise_abstraction_attr(tcx: TyCtxt<'_>, def_id: DefId) -> Option<RustcSym
 /// recognizes; an unmarked local `struct Work` does not.
 fn is_work_ty(tcx: TyCtxt<'_>, ty: Ty<'_>) -> bool {
     ty.ty_adt_def().is_some_and(|adt| {
-        recognise_abstraction_attr(tcx, adt.did()).is_some_and(|name| name.as_str() == WORK_ABSTRACTION)
+        recognise_abstraction_attr(tcx, adt.did())
+            .is_some_and(|name| name.as_str() == WORK_ABSTRACTION)
     })
 }
 

@@ -3,7 +3,8 @@
 //! Kbuild fragment, under the ratified F-1 independent-lowering contract
 //! (`docs/discussions/linux-backend/linux-open-questions.md` §F.1):
 //! `generic_c` is the authoritative *reference* lowering and frozen oracle;
-//! this module owns its own emission shape and shares no code with it.
+//! this module owns its OS-facing emission shape. Only model-structural core
+//! shim classification is backend-shared.
 //!
 //! Emission ordering is Linux-native (GRILL D04): includes →
 //! register/bitfield consts → driver state → lowered bodies → lifecycle
@@ -20,7 +21,9 @@
 
 mod body;
 mod clock;
+mod dma;
 mod naming;
+mod network;
 mod pinctrl;
 mod serial;
 mod sync;
@@ -182,6 +185,18 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             ))
         }
     };
+    if model.serial_port.drivers.contains_key(driver_item) && bus != ScaffoldBus::Amba {
+        return Err(EmitError::UnsupportedInUnit {
+            what: "a non-AMBA locked serial-port binding".into(),
+            unit: "the Linux serial-framework-binding for the selected bus",
+        });
+    }
+    if model.network_interface.drivers.contains_key(driver_item) && bus != ScaffoldBus::Pci {
+        return Err(EmitError::UnsupportedInUnit {
+            what: "a non-PCI locked network-interface binding".into(),
+            unit: "the Linux network binding for the selected bus",
+        });
+    }
     if driver.descriptor.match_set.is_empty() {
         return Err(EmitError::Driver(
             "driver has an empty match set; a kernel id table needs at least one entry".into(),
@@ -230,7 +245,9 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             ));
         }
     }
-    if native_entries.is_empty() {
+    let has_l2_native =
+        matches!(bus, ScaffoldBus::Amba) && model.device_lifecycle.platform_binding.amba.is_some();
+    if native_entries.is_empty() && !has_l2_native {
         return Err(EmitError::Driver(format!(
             "match set carries no native entries for the ratified {ratified_form} registration \
              form (all {} recognized entries are foreign-transport); the D03(a) rule licenses \
@@ -245,25 +262,6 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     }
 
     let drv = c_ident(model.strings.resolve(driver.descriptor.name));
-
-    // -- serial device-class lowering (construct #7, T08/M2): replaces the
-    //    deferred/NULL-api treatment of ClassTag::Serial ADDITIVELY — only when
-    //    the driver actually implements the serial surface (`model.serial`); a
-    //    bare/deferred serial tag falls through to the class-neutral scaffold.
-    if matches!(driver.descriptor.device_class, regseq_model::ClassTag::Serial) {
-        if let Some(serial_node) = model.serial.drivers.get(driver_item) {
-            return serial::emit_linux_serial(
-                model,
-                *driver_item,
-                driver,
-                serial_node,
-                bus,
-                &drv,
-                &native_entries,
-                &ignored_audits,
-            );
-        }
-    }
 
     // -- the driver struct type + resource-field substitution ---------------
     let driver_ty = driver_struct_ty(model, *driver_item).ok_or_else(|| {
@@ -302,12 +300,16 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             reg_macros,
             bus_type: driver.descriptor.bus_type.clone(),
             drv: drv.clone(),
+            descriptor_datapath: dma::descriptor_datapath(model, *driver_item),
         },
         width8_used: false,
         uses_pr: false,
         uses_delay_busy: false,
         uses_delay_sleep: false,
+        uses_command_transport: false,
         elided_locals: std::collections::BTreeSet::new(),
+        unused_fn_instances: std::collections::BTreeSet::new(),
+        emitting_fn: None,
     };
 
     // -- synchronization (locks, T07/C02): the lock FIELDS substitute their
@@ -367,6 +369,46 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             roots.push((name, id));
         }
     }
+    let serial_roots = serial::roots(model, *driver_item)?;
+    cx.unused_fn_instances.extend(
+        serial_roots
+            .iter()
+            .filter(|(name, _)| matches!(*name, "serial_subscribe_events" | "serial_abort"))
+            .map(|(_, id)| *id),
+    );
+    roots.extend(serial_roots.iter().copied());
+    let network_roots = network::roots(model, *driver_item)?;
+    cx.unused_fn_instances
+        .extend(network_roots.iter().map(|(_, id)| *id));
+    roots.extend(network_roots.iter().copied());
+    let work_handlers: Vec<InstanceId> = model
+        .deferred_work
+        .drivers
+        .get(driver_item)
+        .map(|d| {
+            d.resources
+                .iter()
+                .map(|r| {
+                    r.handler
+                        .and_then(|h| resolve_instance_ref(model, h))
+                        .ok_or_else(|| {
+                            EmitError::Driver(
+                                "deferred-work handler does not resolve to an instance".into(),
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    if !work_handlers.is_empty() && dma::descriptor_datapath(model, *driver_item) {
+        cx.unused_fn_instances.extend(work_handlers.iter().copied());
+        cx.extra_includes.insert("<linux/netdevice.h>");
+        cx.extra_includes.insert("<linux/container_of.h>");
+    } else if !work_handlers.is_empty() {
+        cx.extra_includes.insert("<linux/workqueue.h>");
+        cx.extra_includes.insert("<linux/container_of.h>");
+    }
     // -- device-interrupt facts (construct #6, T09): guards + the handler
     //    body joins the lowered closure (its symbol comes from the leaf
     //    loop; the irqreturn_t WRAPPER is scaffold-synthesized) ------------
@@ -376,7 +418,8 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         roots
             .iter()
             .map(|(_, id)| *id)
-            .chain(irq.iter().map(|i| i.handler)),
+            .chain(irq.iter().map(|i| i.handler))
+            .chain(work_handlers.iter().copied()),
     )?;
     // Symbols: `<drv>_<leaf>` with deterministic clash suffixes, callbacks
     // named first so they always get the bare leaf.
@@ -431,10 +474,20 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             &roots,
             irq.as_ref(),
         )?,
-        ScaffoldBus::Pci => {
-            emit_scaffold_pci(&mut cx, &drv, driver_ty, &resource_names, &roots, driver)?
-        }
+        ScaffoldBus::Pci => emit_scaffold_pci(
+            &mut cx,
+            &drv,
+            driver_ty,
+            &resource_names,
+            &roots,
+            driver,
+            irq.as_ref(),
+        )?,
     };
+
+    let serial_binding = serial::emit(&mut cx, *driver_item, &drv)?;
+    let dma_binding = dma::emit(&mut cx, *driver_item, &drv);
+    let network_binding = network::emit(&mut cx, *driver_item, &drv);
 
     // -- type definitions (D04 bank 2/3), now that every use is known -------
     let type_defs = emit_type_defs(
@@ -452,6 +505,8 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             model,
             &drv,
             driver,
+            serial::present(model, *driver_item),
+            model.device_lifecycle.platform_binding.amba,
             &native_entries,
             &ignored_audits,
             scaffold.shutdown_sym.as_deref(),
@@ -523,14 +578,26 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     }
     tu.push_str(&type_defs);
     tu.push('\n');
+    tu.push_str(&network::descriptor_types(model, *driver_item, &drv));
+    if cx.uses_command_transport {
+        tu.push_str(&format!(
+            "/* L2 resolves and owns this non-blocking mailbox binding. */\nstruct {drv}_command_transport_endpoint {{\n\tstruct mbox_chan *channel;\n\tconst struct mbox_client *client;\n}};\n\n"
+        ));
+    }
     tu.push_str(&scaffold.container);
     // Timed-cpu-delay-and-sleep lowering helpers (TCD construct, M2/T08),
     // injected before the bodies that call them, gated on the demand flags the
     // body lowering set when a busy_wait/sleep was emitted.
     if cx.uses_delay_busy || cx.uses_delay_sleep {
-        tu.push_str(&body::delay_helpers(cx.uses_delay_busy, cx.uses_delay_sleep));
+        tu.push_str(&body::delay_helpers(
+            cx.uses_delay_busy,
+            cx.uses_delay_sleep,
+        ));
     }
     tu.push_str(&bodies);
+    tu.push_str(&serial_binding);
+    tu.push_str(&dma_binding);
+    tu.push_str(&network_binding);
     tu.push_str(&scaffold.text);
     tu.push('\n');
     tu.push_str(&tail);
@@ -615,6 +682,14 @@ fn reachable_closure(
             continue;
         }
         seen.push(id);
+        if let Some(dependency) = crate::core_shims::classify(model, id)
+            .map_err(|message| EmitError::Unsupported(message.into()))?
+            .and_then(crate::core_shims::BackendShim::dependency)
+        {
+            if !seen.contains(&dependency) {
+                queue.push(dependency);
+            }
+        }
         let InstanceKind::Function(data) = &model.instances[id].kind else {
             continue;
         };
@@ -630,8 +705,11 @@ fn reachable_closure(
                 // by its C02 primitive (T07) — its callee (`lock()`, the guard's
                 // drop glue, `signal`/`wait`/`reset`) is NEVER lowered, exactly
                 // like an intrinsic-anchored or trivial-accessor callee.
-                if sync::is_sync_call_block(model, body_ref, regseq_model::BlockId::from_u32(idx as u32))
-                    || is_intrinsic_anchored(model, *callee)
+                if sync::is_sync_call_block(
+                    model,
+                    body_ref,
+                    regseq_model::BlockId::from_u32(idx as u32),
+                ) || is_intrinsic_anchored(model, *callee)
                     || body::trivial_accessor_tail(model, *callee).is_some()
                 {
                     continue;
@@ -669,6 +747,10 @@ struct LinuxIrq {
     tag_offset: u64,
     tag_size: u64,
     handled_tag: u64,
+    /// Shared lines are registered live because Linux rejects
+    /// IRQF_NO_AUTOEN | IRQF_SHARED. The device's authored mask owns cause
+    /// suppression until initialization is complete.
+    shared: bool,
 }
 
 impl LinuxIrq {
@@ -677,14 +759,18 @@ impl LinuxIrq {
         format!("rseq_isr_{drv}")
     }
 
-    /// The request flags: registered DISABLED (D02). A shared line is
-    /// emit-rejected upstream — `IRQF_NO_AUTOEN | IRQF_SHARED` is `-EINVAL`
-    /// in the kernel (`kernel/irq/manage.c` `__setup_irq`), so the PLAN's
-    /// flag formula cannot be lowered as written (Codex M3 MUST-FIX; the
-    /// shared-line registration contract is a recorded design amendment for
-    /// the unit that lands a shared-irq fixture).
+    /// Non-shared lines retain the registered-disabled contract. A shared
+    /// line uses IRQF_SHARED alone and relies on the authored device mask.
     fn flags(&self) -> &'static str {
-        "IRQF_NO_AUTOEN"
+        if self.shared {
+            "IRQF_SHARED"
+        } else {
+            "IRQF_NO_AUTOEN"
+        }
+    }
+
+    fn registered_disabled(&self) -> bool {
+        !self.shared
     }
 }
 
@@ -700,19 +786,13 @@ fn linux_irq_facts(
     model: &RegseqModel,
     driver_item: &regseq_model::ItemId,
     drv: &str,
-    bus: ScaffoldBus,
+    _bus: ScaffoldBus,
 ) -> Result<Option<LinuxIrq>, EmitError> {
     let Some(interrupts) = model.interrupt.drivers.get(driver_item) else {
         return Ok(None);
     };
     if interrupts.resources.is_empty() {
         return Ok(None);
-    }
-    if bus == ScaffoldBus::Pci {
-        return Err(EmitError::UnsupportedInUnit {
-            what: "the PCI interrupt scaffold (`pdev->irq` line identity)".to_string(),
-            unit: "the unit that lands an e1000 irq fixture",
-        });
     }
     if interrupts.resources.len() > 1 {
         return Err(EmitError::Unsupported(
@@ -722,23 +802,6 @@ fn linux_irq_facts(
         ));
     }
     let resource = &interrupts.resources[0];
-    if resource.binding.shared {
-        // The kernel REJECTS `IRQF_NO_AUTOEN | IRQF_SHARED` with -EINVAL
-        // (`kernel/irq/manage.c` `__setup_irq`): a shared line cannot be held
-        // request-disabled, so the D02 registered-disabled contract and the
-        // D05 shared flag cannot compose as the PLAN's flag formula wrote
-        // them. Fail loud (I05) rather than emit a module whose probe always
-        // fails; the shared-line registration contract is a recorded design
-        // amendment for the unit that lands a shared-irq fixture (e1000,
-        // whose PCI leg is deferred anyway).
-        return Err(EmitError::Unsupported(
-            "device-interrupt: a shared line (L2 `shared = true`) cannot be lowered with \
-             the registered-disabled contract — the kernel rejects \
-             IRQF_NO_AUTOEN | IRQF_SHARED with -EINVAL; the shared-line registration \
-             form needs a design amendment (deferred to the shared-irq fixture unit)"
-                .into(),
-        ));
-    }
     if !matches!(resource.form, regseq_model::InterruptForm::Single) {
         return Err(EmitError::Unsupported(
             "device-interrupt: Option<Interrupt> / [Interrupt; N] lowering is not \
@@ -820,6 +883,7 @@ fn linux_irq_facts(
         tag_offset,
         tag_size,
         handled_tag: handled_tag as u64,
+        shared: resource.binding.shared,
     }))
 }
 
@@ -836,6 +900,69 @@ struct Scaffold {
     shutdown_sym: Option<String>,
 }
 
+struct LinuxWorkEmission {
+    fields: String,
+    wrappers: String,
+    init: String,
+    cancel: String,
+}
+
+fn linux_work_emission(
+    cx: &body::LowerCx<'_>,
+    drv: &str,
+    driver_ty: TyId,
+) -> Result<LinuxWorkEmission, EmitError> {
+    let driver_item = match &cx.model.types[driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => return Err(EmitError::Driver("driver type is not a struct".into())),
+    };
+    let Some(work) = cx.model.deferred_work.drivers.get(&driver_item) else {
+        return Ok(LinuxWorkEmission {
+            fields: String::new(),
+            wrappers: String::new(),
+            init: String::new(),
+            cancel: String::new(),
+        });
+    };
+    if dma::descriptor_datapath(cx.model, driver_item) {
+        return Ok(LinuxWorkEmission {
+            fields: String::new(),
+            wrappers: String::new(),
+            init: String::new(),
+            cancel: String::new(),
+        });
+    }
+    let mut fields = String::new();
+    let mut wrappers = String::new();
+    let mut init = String::new();
+    let mut cancel = String::new();
+    for (idx, resource) in work.resources.iter().enumerate() {
+        let handler = resource
+            .handler
+            .and_then(|h| resolve_instance_ref(cx.model, h))
+            .and_then(|id| cx.fn_symbols.get(&id))
+            .ok_or_else(|| {
+                EmitError::Driver("deferred-work handler symbol is unavailable".into())
+            })?;
+        fields.push_str(&format!("\tstruct work_struct __rseq_work_{idx};\n"));
+        wrappers.push_str(&format!(
+            "static void {drv}_work_{idx}(struct work_struct *work)\n{{\n\tstruct {drv}_priv *priv = container_of(work, struct {drv}_priv, __rseq_work_{idx});\n\n\t{handler}(&priv->inner);\n}}\n\n"
+        ));
+        init.push_str(&format!(
+            "\tINIT_WORK(&priv->__rseq_work_{idx}, {drv}_work_{idx});\n"
+        ));
+    }
+    for idx in (0..work.resources.len()).rev() {
+        cancel.push_str(&format!("\tcancel_work_sync(&priv->__rseq_work_{idx});\n"));
+    }
+    Ok(LinuxWorkEmission {
+        fields,
+        wrappers,
+        init,
+        cancel,
+    })
+}
+
 /// Synthesize the private container, `.probe`, and `.remove` for the AMBA
 /// scaffold (`linux-scaffold-and-dispatch.md` §2–§4; canonical order
 /// create → associate → preamble → on_init).
@@ -848,6 +975,10 @@ fn emit_scaffold(
     irq: Option<&LinuxIrq>,
 ) -> Result<Scaffold, EmitError> {
     let model = cx.model;
+    let driver_item = match &model.types[driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => return Err(EmitError::Driver("driver type is not a struct".into())),
+    };
     let driver_struct = cx.names.name_of(model, driver_ty)?;
     let find = |name: &str| roots.iter().find(|(n, _)| *n == name).map(|(_, id)| *id);
     let on_init = find("on_init");
@@ -870,13 +1001,18 @@ fn emit_scaffold(
     // includes <linux/errno.h>.
     let uses_errno = true;
     let mut out = String::new();
+    let work = linux_work_emission(cx, drv, driver_ty)?;
 
     // The per-device private container (the morph, `linux-lowering-per-construct.md`
     // §C.7): kernel device back-pointer + the spec driver embedded verbatim.
     // Emitted in the driver-state bank (D04), before the lowered bodies.
     let container = format!(
-        "/* per-device private container: kernel back-pointer + the spec driver */\nstruct {drv}_priv {{\n\tstruct amba_device *adev;\n\tstruct {driver_struct} inner;\n}};\n\n"
+        "/* per-device private container: kernel back-pointer + the spec driver */\nstruct {drv}_priv {{\n\tstruct amba_device *adev;\n\tstruct {driver_struct} inner;\n{}{}}};\n\n{}",
+        serial::container_field(model, driver_item),
+        work.fields,
+        serial::container_globals(model, driver_item, drv),
     );
+    out.push_str(&work.wrappers);
 
     // The irqreturn_t ISR wrapper (construct #6, C04): recover the driver
     // from the registered dev_id (the priv container), run the authored
@@ -914,8 +1050,12 @@ fn emit_scaffold(
 
     // .probe
     out.push_str(&format!(
-        "static int {drv}_probe(struct amba_device *adev, const struct amba_id *id)\n{{\n\tstruct {drv}_priv *priv;\n\n"
+        "static int {drv}_probe(struct amba_device *adev, const struct amba_id *id)\n{{\n\tstruct {drv}_priv *priv;\n"
     ));
+    if serial::present(model, driver_item) {
+        out.push_str("\tint ret;\n");
+    }
+    out.push('\n');
     out.push_str(
         "\tpriv = devm_kzalloc(&adev->dev, sizeof(*priv), GFP_KERNEL);\n\tif (!priv)\n\t\treturn -ENOMEM;\n",
     );
@@ -924,7 +1064,9 @@ fn emit_scaffold(
     // BEFORE the region map + IRQ register + on_init (lock-live ⊇ line-live).
     let sync_inits = sync::init_primitive_lines(model, driver_ty);
     if !sync_inits.is_empty() {
-        out.push_str("\n\t/* init_primitives (C05): locks initialized before region/IRQ/on_init */\n");
+        out.push_str(
+            "\n\t/* init_primitives (C05): locks initialized before region/IRQ/on_init */\n",
+        );
         for line in &sync_inits {
             out.push_str(&format!("\t{line}\n"));
         }
@@ -962,6 +1104,19 @@ fn emit_scaffold(
             );
         }
     }
+    let serial_mapped_field = resource_names.first().and_then(|fname| {
+        cx.driver
+            .resources
+            .iter()
+            .any(|(name, resolved, _)| name == fname && *resolved)
+            .then_some(fname.as_str())
+    });
+    out.push_str(&serial::probe_init(
+        model,
+        driver_item,
+        drv,
+        serial_mapped_field,
+    ));
     // Pin-controller-and-GPIO-configuration acquire preamble (pinctrl construct,
     // C07/D10, M4/T20): AFTER the region map, BEFORE the clock acquire —
     // pins-before-clock (C07). Required ⇒ `devm_pinctrl_get` + select default
@@ -981,13 +1136,19 @@ fn emit_scaffold(
     // the region. Line identity is runtime-resolved (`adev->irq[0]`, R10);
     // no IRQF_TRIGGER_* is emitted (D10/R12 — the DT is authoritative).
     if let Some(irq) = irq {
+        let registration = if irq.shared {
+            "register SHARED with authored device masking"
+        } else {
+            "register DISABLED (D02)"
+        };
         out.push_str(&format!(
-            "\n\t/* interrupt preamble (construct #6): register DISABLED (D02);\n\t * manual request/free pair (D09) */\n\t{{\n\t\tint __irq_ret = request_irq(adev->irq[0], {wrapper},\n\t\t\t\t\t    {flags}, \"{name}\", priv);\n\t\tif (__irq_ret)\n\t\t\treturn __irq_ret;\n\t}}\n",
+            "\n\t/* interrupt preamble (construct #6): {registration};\n\t * manual request/free pair (D09) */\n\t{{\n\t\tint __irq_ret = request_irq(adev->irq[0], {wrapper},\n\t\t\t\t\t    {flags}, \"{name}\", priv);\n\t\tif (__irq_ret)\n\t\t\treturn __irq_ret;\n\t}}\n",
             wrapper = irq.wrapper_sym(drv),
             flags = irq.flags(),
             name = c_ident(&irq.dev_name),
         ));
     }
+    out.push_str(&work.init);
     // Atomicity (R10/S10): seed the Atomic fields before any callback, regardless
     // of whether on_init is authored (the fields live in the private struct, so
     // a non-zero initial must be applied even with no on_init).
@@ -1010,6 +1171,7 @@ fn emit_scaffold(
                 "\t\t\t/* interrupt unwind (R16): never enabled; free the manual\n\t\t\t * request (no devm) */\n\t\t\tfree_irq(adev->irq[0], priv);\n",
             );
         }
+        hook.push_str(&work.cancel.replace('\t', "\t\t\t"));
         let failure_hook = (!hook.is_empty()).then_some(hook);
         let adapter = emit_result_adapter(
             cx,
@@ -1019,7 +1181,7 @@ fn emit_scaffold(
         )?;
         out.push_str(&adapter);
     }
-    if irq.is_some() {
+    if irq.is_some_and(LinuxIrq::registered_disabled) {
         // The enable point (D02/R05/I01): only after on_init returned Ok —
         // the adapter above has already returned the negated errno on every
         // Err path (and when on_init is not overridden, the trait default
@@ -1028,6 +1190,23 @@ fn emit_scaffold(
             "\n\t/* enable the line only after on_init Ok (D02/R05) */\n\tenable_irq(adev->irq[0]);\n",
         );
     }
+    let mut publish_failure = String::new();
+    if let Some(id) = on_deinit {
+        publish_failure.push_str(&format!("\t(void){}(&priv->inner);\n", cx.fn_symbols[&id]));
+    }
+    if let Some(irq) = irq {
+        if irq.registered_disabled() {
+            publish_failure.push_str("\tdisable_irq(adev->irq[0]);\n");
+        }
+        publish_failure.push_str("\tfree_irq(adev->irq[0], priv);\n");
+    }
+    publish_failure.push_str(&work.cancel);
+    out.push_str(&serial::probe_publish(
+        model,
+        driver_item,
+        drv,
+        &publish_failure,
+    ));
     out.push_str("\treturn 0;\n}\n\n");
 
     // .remove — orderly teardown; the present-predicate (surprise) dispatch
@@ -1035,6 +1214,7 @@ fn emit_scaffold(
     out.push_str(&format!(
         "static void {drv}_remove(struct amba_device *adev)\n{{\n\tstruct {drv}_priv *priv = amba_get_drvdata(adev);\n\n"
     ));
+    out.push_str(&serial::remove(model, driver_item, drv));
     match on_deinit {
         Some(id) => {
             let sym = cx.fn_symbols[&id].clone();
@@ -1045,15 +1225,22 @@ fn emit_scaffold(
         None => out
             .push_str("\t/* on_deinit not overridden: default no-op teardown */\n\t(void)priv;\n"),
     }
-    if irq.is_some() {
+    if let Some(irq) = irq {
         // Interrupt teardown (construct #6, D09/R06): disable then deregister
         // — the manual pair, AFTER the teardown callback and BEFORE the
         // (devm-automatic) resource postambles; the reverse of the preamble
         // where the interrupt registration came last.
-        out.push_str(
-            "\t/* interrupt teardown (construct #6): disable -> deregister (D09) */\n\tdisable_irq(adev->irq[0]);\n\tfree_irq(adev->irq[0], priv);\n",
-        );
+        if irq.registered_disabled() {
+            out.push_str(
+                "\t/* interrupt teardown (construct #6): disable -> deregister (D09) */\n",
+            );
+            out.push_str("\tdisable_irq(adev->irq[0]);\n");
+        } else {
+            out.push_str("\t/* interrupt teardown (construct #6): deregister (D09) */\n");
+        }
+        out.push_str("\tfree_irq(adev->irq[0], priv);\n");
     }
+    out.push_str(&work.cancel);
     out.push_str("\t/* postamble: devm-managed resources release automatically (A-2) */\n}\n\n");
 
     // .shutdown — the lone omit-when-absent slot, on device_driver (.drv)
@@ -1091,8 +1278,13 @@ fn emit_scaffold_pci(
     resource_names: &[String],
     roots: &[(&'static str, InstanceId)],
     driver: &regseq_model::DriverLifecycle,
+    irq: Option<&LinuxIrq>,
 ) -> Result<Scaffold, EmitError> {
     let model = cx.model;
+    let driver_item = match &model.types[driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => return Err(EmitError::Driver("driver type is not a struct".into())),
+    };
     let driver_struct = cx.names.name_of(model, driver_ty)?;
     let dev_name = model.strings.resolve(driver.descriptor.name).to_string();
     let find = |name: &str| roots.iter().find(|(n, _)| *n == name).map(|(_, id)| *id);
@@ -1106,14 +1298,46 @@ fn emit_scaffold_pci(
     // includes <linux/errno.h>.
     let uses_errno = true;
     let mut out = String::new();
+    let work = linux_work_emission(cx, drv, driver_ty)?;
 
     // The per-device private container (the morph, §C.7): kernel device
     // back-pointer + the spec driver embedded verbatim. `pdev` is the C01
     // premise: the scaffold is the sole driver instantiation site, so every
     // `&<drv>` points at `inner` and `container_of` recovery is well-defined.
     let container = format!(
-        "/* per-device private container: kernel back-pointer + the spec driver */\nstruct {drv}_priv {{\n\tstruct pci_dev *pdev;\n\tstruct {driver_struct} inner;\n}};\n\n"
+        "/* per-device private container: kernel back-pointer + the spec driver */\nstruct {drv}_priv {{\n\tstruct pci_dev *pdev;\n\tstruct {driver_struct} inner;\n{}{}{}{}}};\n\n",
+        network::container_fields(model, driver_item, drv),
+        dma::container_fields(model, driver_item),
+        serial::container_field(model, driver_item),
+        work.fields,
     );
+    out.push_str(&work.wrappers);
+
+    if let Some(irq) = irq {
+        cx.extra_includes.insert("<linux/interrupt.h>");
+        let wrapper = irq.wrapper_sym(drv);
+        let handler_sym = cx.fn_symbols[&irq.handler].clone();
+        let ret_c = types::c_type(cx.model, &mut cx.names, irq.ret_ty)?;
+        let tag_read = match irq.tag_size {
+            1 => format!("\tu8 __tag = __r._raw[{}];\n", irq.tag_offset),
+            2 => format!(
+                "\tu16 __tag; memcpy(&__tag, &__r._raw[{}], 2);\n",
+                irq.tag_offset
+            ),
+            4 => format!(
+                "\tu32 __tag; memcpy(&__tag, &__r._raw[{}], 4);\n",
+                irq.tag_offset
+            ),
+            _ => format!(
+                "\tu64 __tag; memcpy(&__tag, &__r._raw[{}], 8);\n",
+                irq.tag_offset
+            ),
+        };
+        out.push_str(&format!(
+            "/* PCI ISR claim remains interrupt-owned; packet completion stays NIM-native. */\nstatic irqreturn_t {wrapper}(int irq, void *dev_id)\n{{\n\tstruct {drv}_priv *priv = dev_id;\n\t{ret_c} __r = {handler_sym}(&priv->inner);\n{tag_read}\n\tif (__tag == {:#x})\n\t\treturn IRQ_HANDLED;\n\treturn IRQ_NONE;\n}}\n\n",
+            irq.handled_tag
+        ));
+    }
 
     // The single resolved region's BAR (D02: per-region-shaped via
     // effective_bar; >1 region is the loud B-5 gate).
@@ -1156,7 +1380,8 @@ fn emit_scaffold_pci(
     out.push_str(&format!(
         "static int {drv}_probe(struct pci_dev *pdev, const struct pci_device_id *id)\n{{\n\tstruct {drv}_priv *priv;\n"
     ));
-    if preamble.is_some() {
+    let has_network = model.network_interface.drivers.contains_key(&driver_item);
+    if preamble.is_some() || has_network {
         out.push_str("\tint ret;\n");
     }
     out.push('\n');
@@ -1168,7 +1393,9 @@ fn emit_scaffold_pci(
     // region map + IRQ register + on_init (lock-live ⊇ line-live).
     let sync_inits = sync::init_primitive_lines(model, driver_ty);
     if !sync_inits.is_empty() {
-        out.push_str("\n\t/* init_primitives (C05): locks initialized before region/IRQ/on_init */\n");
+        out.push_str(
+            "\n\t/* init_primitives (C05): locks initialized before region/IRQ/on_init */\n",
+        );
         for line in &sync_inits {
             out.push_str(&format!("\t{line}\n"));
         }
@@ -1186,6 +1413,11 @@ fn emit_scaffold_pci(
                 "\n\t/* preamble: managed enable + fused request+map of BAR{bar} (T03 pin\n\t * C-7: pcim_iomap_region; devres unwinds the map, the region, then\n\t * the enable on detach and on probe failure — A-2) */\n\tret = pcim_enable_device(pdev);\n\tif (ret)\n\t\treturn ret;\n\tpriv->inner.{fname} = pcim_iomap_region(pdev, {bar}, \"{dev_name}\");\n\tif (IS_ERR(priv->inner.{fname}))\n\t\treturn PTR_ERR(priv->inner.{fname});\n"
             ));
         }
+        None if has_network => {
+            out.push_str(
+                "\n\t/* NIM packet/DMA preamble: enable the PCI function before transfer state. */\n\tret = pcim_enable_device(pdev);\n\tif (ret)\n\t\treturn ret;\n",
+            );
+        }
         None if resource_names.is_empty() => {
             out.push_str("\n\t/* preamble: no bus-managed regions in this model */\n");
         }
@@ -1198,6 +1430,11 @@ fn emit_scaffold_pci(
             );
         }
     }
+    if has_network {
+        out.push_str(
+            "\tpci_set_master(pdev);\n\tret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));\n\tif (ret)\n\t\treturn ret;\n",
+        );
+    }
     // Pin-controller-and-GPIO-configuration acquire preamble (pinctrl construct,
     // C07/D10, M4/T20): AFTER the region map, BEFORE the clock acquire —
     // pins-before-clock (C07). Required ⇒ `devm_pinctrl_get` + select default;
@@ -1209,18 +1446,47 @@ fn emit_scaffold_pci(
     // propagation (a hard init error, I02). Empty for a clock-less / static-only
     // driver (I07). (PL011 is AMBA; this keeps a clock-bearing PCI driver sound.)
     out.push_str(&clock::acquire_lines(model, driver_ty, "&pdev->dev")?);
+    out.push_str(&work.init);
     // Atomicity (R10/S10): seed the Atomic fields before any callback, regardless
     // of whether on_init is authored (the fields live in the private struct, so
     // a non-zero initial must be applied even with no on_init).
     out.push_str(&emit_atomic_init(cx));
+    out.push_str(&network::probe_prepare(model, driver_item, drv));
+    if let Some(irq) = irq {
+        let failure = format!(
+            "{}{}",
+            work.cancel,
+            network::probe_failure(model, driver_item, drv),
+        )
+        .replace('\t', "\t\t\t");
+        let registration = if irq.shared {
+            "register shared after native packet/work state exists; device masking is authored"
+        } else {
+            "register disabled after native packet state exists"
+        };
+        out.push_str(&format!(
+            "\n\t/* PCI interrupt: {registration}. */\n\t{{\n\t\tint __irq_ret = request_irq(pdev->irq, {}, {}, \"{}\", priv);\n\t\tif (__irq_ret) {{\n{}\t\t\treturn __irq_ret;\n\t\t}}\n\t}}\n",
+            irq.wrapper_sym(drv), irq.flags(), c_ident(&irq.dev_name), failure,
+        ));
+    }
     if let Some(id) = on_init {
         let sym = cx.fn_symbols[&id].clone();
-        let failure_hook = on_init_failure.map(|fid| {
+        let mut hook = network::pre_teardown(model, driver_item).replace('\t', "\t\t\t");
+        hook.push_str(&on_init_failure.map(|fid| {
             format!(
                 "\t\t\t/* authored on_init -> Err: the failure hook IS the cleanup\n\t\t\t * (the kernel does not call .remove on probe failure; devres\n\t\t\t * unwinds the preamble) */\n\t\t\t(void){}(&priv->inner);\n",
                 cx.fn_symbols[&fid]
             )
-        });
+        }).unwrap_or_default());
+        hook.push_str(&work.cancel.replace('\t', "\t\t\t"));
+        if let Some(irq) = irq {
+            if irq.registered_disabled() {
+                hook.push_str("\t\t\tdisable_irq(pdev->irq);\n");
+            }
+            hook.push_str("\t\t\tfree_irq(pdev->irq, priv);\n");
+        }
+        hook.push_str(&network::probe_failure(model, driver_item, drv).replace('\t', "\t\t\t"));
+        let failure_hook = (!hook.is_empty()).then_some(hook);
         let adapter = emit_result_adapter(
             cx,
             id,
@@ -1229,6 +1495,27 @@ fn emit_scaffold_pci(
         )?;
         out.push_str(&adapter);
     }
+    if irq.is_some_and(LinuxIrq::registered_disabled) {
+        out.push_str("\n\t/* Enable only after authored initialization succeeded. */\n\tenable_irq(pdev->irq);\n");
+    }
+    let mut publish_failure = String::new();
+    publish_failure.push_str(&network::pre_teardown(model, driver_item));
+    if let Some(id) = on_deinit {
+        publish_failure.push_str(&format!("\t(void){}(&priv->inner);\n", cx.fn_symbols[&id]));
+    }
+    publish_failure.push_str(&work.cancel);
+    if let Some(irq) = irq {
+        if irq.registered_disabled() {
+            publish_failure.push_str("\tdisable_irq(pdev->irq);\n");
+        }
+        publish_failure.push_str("\tfree_irq(pdev->irq, priv);\n");
+    }
+    out.push_str(&network::probe_publish(
+        model,
+        driver_item,
+        drv,
+        &publish_failure,
+    ));
     out.push_str("\treturn 0;\n}\n\n");
 
     // .remove — one `void` slot. With `on_surprise_remove` overridden it
@@ -1240,6 +1527,7 @@ fn emit_scaffold_pci(
     out.push_str(&format!(
         "static void {drv}_remove(struct pci_dev *pdev)\n{{\n\tstruct {drv}_priv *priv = pci_get_drvdata(pdev);\n\n"
     ));
+    out.push_str(&network::pre_teardown(model, driver_item));
     let orderly_arm = |indent: &str| match on_deinit {
         Some(id) => format!("{indent}(void){}(&priv->inner);\n", cx.fn_symbols[&id]),
         None => {
@@ -1258,6 +1546,20 @@ fn emit_scaffold_pci(
             out.push_str("\t}\n");
         }
         None => out.push_str(&orderly_arm("\t")),
+    }
+    if model.network_interface.drivers.contains_key(&driver_item) {
+        out.push_str(&work.cancel);
+    }
+    if let Some(irq) = irq {
+        out.push_str("\t/* D1 drain completed; now deregister the hardware IRQ. */\n");
+        if irq.registered_disabled() {
+            out.push_str("\tdisable_irq(pdev->irq);\n");
+        }
+        out.push_str("\tfree_irq(pdev->irq, priv);\n");
+    }
+    out.push_str(&network::remove(model, driver_item, drv));
+    if !model.network_interface.drivers.contains_key(&driver_item) {
+        out.push_str(&work.cancel);
     }
     out.push_str("\t/* postamble: devres-managed resources release automatically (A-2) */\n}\n\n");
 
@@ -1653,6 +1955,8 @@ fn emit_module_tail(
     model: &RegseqModel,
     drv: &str,
     driver: &regseq_model::DriverLifecycle,
+    has_serial: bool,
+    platform_binding: Option<regseq_model::AmbaPlatformBinding>,
     native_entries: &[&MatchEntry],
     ignored_audits: &[crate::match_audit::MatchAudit],
     shutdown_sym: Option<&str>,
@@ -1663,13 +1967,21 @@ fn emit_module_tail(
         out.push('\n');
     }
     out.push_str(&format!("static const struct amba_id {drv}_ids[] = {{\n"));
-    for entry in native_entries {
-        let MatchEntry::Amba { id, mask } = entry else {
-            unreachable!("the C06 filter passes only Amba entries to the amba table");
-        };
+    if let Some(binding) = platform_binding {
+        let id = binding.periphid;
+        let mask = binding.mask;
         out.push_str(&format!(
             "\t{{\n\t\t.id\t= {id:#010x},\n\t\t.mask\t= {mask:#010x},\n\t}},\n"
         ));
+    } else {
+        for entry in native_entries {
+            let MatchEntry::Amba { id, mask } = entry else {
+                unreachable!("the C06 filter passes only Amba entries to the amba table");
+            };
+            out.push_str(&format!(
+                "\t{{\n\t\t.id\t= {id:#010x},\n\t\t.mask\t= {mask:#010x},\n\t}},\n"
+            ));
+        }
     }
     out.push_str("\t{ 0, 0 },\n};\n\n");
     out.push_str(&format!("MODULE_DEVICE_TABLE(amba, {drv}_ids);\n\n"));
@@ -1681,7 +1993,13 @@ fn emit_module_tail(
         "static struct amba_driver {drv}_driver = {{\n\t.drv = {{\n\t\t.name\t= \"{}\",{shutdown_field}\n\t}},\n\t.id_table\t= {drv}_ids,\n\t.probe\t\t= {drv}_probe,\n\t.remove\t\t= {drv}_remove,\n}};\n\n",
         model.strings.resolve(driver.descriptor.name)
     ));
-    out.push_str(&format!("module_amba_driver({drv}_driver);\n\n"));
+    if has_serial {
+        out.push_str(&format!(
+            "static int __init {drv}_init(void)\n{{\n\tint ret;\n\n\tret = uart_register_driver(&{drv}_uart_driver);\n\tif (ret)\n\t\treturn ret;\n\tret = amba_driver_register(&{drv}_driver);\n\tif (ret)\n\t\tuart_unregister_driver(&{drv}_uart_driver);\n\treturn ret;\n}}\nmodule_init({drv}_init);\n\nstatic void __exit {drv}_exit(void)\n{{\n\tamba_driver_unregister(&{drv}_driver);\n\tuart_unregister_driver(&{drv}_uart_driver);\n}}\nmodule_exit({drv}_exit);\n\n"
+        ));
+    } else {
+        out.push_str(&format!("module_amba_driver({drv}_driver);\n\n"));
+    }
     out.push_str(&format!(
         "MODULE_DESCRIPTION(\"Regseq-generated {} driver\");\nMODULE_LICENSE(\"GPL\");\n",
         model.strings.resolve(driver.descriptor.name)

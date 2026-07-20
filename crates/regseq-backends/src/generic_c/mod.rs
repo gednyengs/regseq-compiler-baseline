@@ -31,6 +31,8 @@ use regseq_model::{
     InstanceRef, Linkage, Mutability, PlatformIdentity, Provenance, RegseqModel, Ty, TyId,
 };
 
+use crate::core_shims::{self, BackendShim};
+
 pub mod prelude;
 
 mod backend_options;
@@ -257,6 +259,7 @@ fn emit_generic_c_inner(
     let names = build_name_table(model, &discovered);
     let syms = build_instance_symbols(model);
     let topo = topo_sort(model, &discovered)?;
+    let backend_shim_dependencies = validate_referenced_bodyless_functions(model)?;
     // Task d2.2 Change F: recover each `ConstMemoryStatic`'s consumer pointee
     // storage type, so banks 4 / 5 declare it as the type the consumer reads
     // (sound + naturally aligned) instead of the bridge's `Array(u8, len)`.
@@ -270,8 +273,21 @@ fn emit_generic_c_inner(
     let helper_use = RefCell::new(prelude::HelperUsage::default());
     let bank2 = bank2_type_forward_decls(model, &names, &discovered);
     let bank3 = bank3_type_definitions(model, &names, &topo);
-    let bank4 = bank4_declarations(model, &names, &syms, &cms_storage)?;
-    let bank5 = bank5_definitions(model, &names, &syms, &cms_storage, &helper_use)?;
+    let bank4 = bank4_declarations(
+        model,
+        &names,
+        &syms,
+        &cms_storage,
+        &backend_shim_dependencies,
+    )?;
+    let bank5 = bank5_definitions(
+        model,
+        &names,
+        &syms,
+        &cms_storage,
+        &backend_shim_dependencies,
+        &helper_use,
+    )?;
 
     // regseq-backends-28: the hand-emitted RegseqError -> errno boundary adapter,
     // built with the same `NameTable` as the banks (so it spells the `Result` /
@@ -308,6 +324,83 @@ fn emit_generic_c_inner(
     // drivers so a no-lifecycle TU's `.c` is byte-unchanged (no golden churn).
     if !model.device_lifecycle.drivers.is_empty() {
         out.push_str(prelude::LIFECYCLE_HELPERS);
+    }
+    if body_emit::model_has_command_transport_submit(model) {
+        out.push_str(prelude::COMMAND_TRANSPORT_HELPERS);
+    }
+    if body_emit::model_has_descriptor_dma_oracle(model) {
+        out.push_str(prelude::DESCRIPTOR_DMA_ORACLE_HELPERS);
+    }
+    // Locked serial-port capability manifest. Generic C executes authored
+    // bodies directly; this emitted table makes capability absence explicit
+    // without inventing an event, cancellation, or successful fallback.
+    for (driver, serial) in &model.serial_port.drivers {
+        let logical_name = model
+            .device_lifecycle
+            .drivers
+            .get(driver)
+            .map(|d| model.strings.resolve(d.descriptor.name))
+            .unwrap_or("serial");
+        out.push_str(&format!("/* RSEQ-SERIAL-PORT {logical_name}\n"));
+        for capability in serial.ops.capabilities() {
+            out.push_str(&format!(" * capability: {capability}\n"));
+        }
+        out.push_str(" * absent operations are unsupported; no terminal event is implied\n */\n");
+    }
+    // Locked DMA behavior manifest. Authored operations remain ordinary
+    // generic-C bodies; this records the two independent ownership planes and
+    // makes every missing address/status/control/callback capability explicit.
+    for (driver, dma) in &model.dma.drivers {
+        let logical_name = model
+            .device_lifecycle
+            .drivers
+            .get(driver)
+            .map(|d| model.strings.resolve(d.descriptor.name))
+            .unwrap_or("dma");
+        out.push_str(&format!("/* RSEQ-DMA {logical_name}\n"));
+        if let Some(buffer) = &dma.buffer {
+            out.push_str(" * element: DmaBuffer (independent allocate-to-free lifetime)\n");
+            for capability in buffer.ops.capabilities() {
+                out.push_str(&format!(" * buffer capability: {capability}\n"));
+            }
+            out.push_str(" * absent buffer operations are unsupported; no address or allocation is fabricated\n");
+        }
+        if let Some(channel) = &dma.channel {
+            out.push_str(
+                " * element: AsyncTransferChannel (exclusive acquire-to-release lifetime)\n",
+            );
+            for capability in channel.ops.capabilities() {
+                out.push_str(&format!(" * channel capability: {capability}\n"));
+            }
+            out.push_str(
+                " * prepare, submit, and activate are distinct; terminate emits no completion\n",
+            );
+            out.push_str(
+                " * synchronize precedes release when asynchronous termination is present\n",
+            );
+            out.push_str(" * absent channel operations are unsupported; no status or completion is fabricated\n");
+        }
+        out.push_str(" */\n");
+    }
+    // Locked network-interface manifest. Packet values stay opaque and the
+    // sibling table intentionally contains no descriptor/index/DMA/IRQ/work
+    // state. Missing optional operations remain unsupported.
+    for (driver, interface) in &model.network_interface.drivers {
+        let logical_name = model
+            .device_lifecycle
+            .drivers
+            .get(driver)
+            .map(|d| model.strings.resolve(d.descriptor.name))
+            .unwrap_or("network");
+        out.push_str(&format!("/* RSEQ-NETWORK-INTERFACE {logical_name}\n"));
+        for capability in interface.ops.capabilities() {
+            out.push_str(&format!(" * RSEQ-NIM-CAPABILITY {capability}\n"));
+        }
+        out.push_str(" * packet ownership transfers only on Accepted; BusyOrQueueFull retains caller ownership\n");
+        out.push_str(" * admin intent, carrier, and derived operational readiness are distinct\n");
+        out.push_str(" * RSEQ-NIM-BOUNDARY packet-layout/rings/indices/DMA/IRQ/work-remain-L2\n");
+        out.push_str(" * RSEQ-NIM-ABSENCE no-fabricated-packet-completion\n");
+        out.push_str(" * absent publication/receive/observer capabilities remain unsupported; no event is fabricated\n */\n");
     }
     // Device-interrupt host line model (construct #6, C05) + synchronization
     // lock-discipline oracle (synchronization construct, S11), each emitted only
@@ -383,24 +476,6 @@ fn emit_generic_c_inner(
             body_emit::clock_resource_count(model).max(1)
         ));
         out.push_str(prelude::CLOCK_HELPERS);
-    }
-    // DMA-management host DMA device model (dma-management construct, C05/C11):
-    // the `regseq_dma_*` hooks + per-region backing slab. Gated on RESOURCE
-    // presence (region/channel/stream, NOT intrinsic presence) — the
-    // compiler-managed `alloc_coherent`/`free_coherent` preamble is synthesized
-    // from the region FIELD even when the author calls no `dma_*` op. Distinct
-    // from the bus-master `dma_present` flag. A DMA-less TU's `.c` is
-    // byte-unchanged (no golden churn).
-    if body_emit::model_has_dma_resource(model) {
-        // Size the region slot table to the TU's exact coherent-region count (no
-        // fixed cap); the `#define` precedes the prelude block, which declares
-        // `regseq_dma_region_table[REGSEQ_DMA_SLOTS]`. At least 1 so it is not a
-        // zero-length array.
-        out.push_str(&format!(
-            "#define REGSEQ_DMA_SLOTS {}u\n",
-            body_emit::dma_region_count(model).max(1)
-        ));
-        out.push_str(prelude::DMA_HELPERS);
     }
     // Deferred-work-item-scheduling host work model
     // (deferred-work-item-scheduling construct, C05): the `regseq_work_*` hooks +
@@ -1624,11 +1699,93 @@ fn is_zst(model: &RegseqModel, ty: TyId) -> bool {
     .is_none()
 }
 
+/// Map the backend-shared core-shim classifier into Generic C's error type.
+fn backend_owned_shim(
+    model: &RegseqModel,
+    id: InstanceId,
+) -> Result<Option<BackendShim>, EmitError> {
+    core_shims::classify(model, id).map_err(EmitError::Unsupported)
+}
+
+fn validate_referenced_bodyless_functions(
+    model: &RegseqModel,
+) -> Result<HashSet<InstanceId>, EmitError> {
+    let mut referenced = HashSet::new();
+    let mut backend_shim_dependencies = HashSet::new();
+    for (index, instance) in model.instances.iter().enumerate() {
+        let caller = InstanceId::from_u32(index as u32);
+        let Some(body) = instance.kind.as_function().and_then(|data| data.body()) else {
+            continue;
+        };
+        for block in body.basic_blocks.iter() {
+            if let regseq_model::TerminatorKind::Call {
+                callee: regseq_model::CallCallee::Direct(callee),
+                ..
+            } = &block.terminator.kind
+            {
+                referenced.insert(*callee);
+                if backend_owned_shim(model, *callee)?.is_some() {
+                    backend_shim_dependencies.insert(caller);
+                }
+            }
+        }
+    }
+
+    for id in referenced {
+        let instance = &model.instances[id];
+        let Some(data) = instance.kind.as_function() else {
+            continue;
+        };
+        if data.body.is_some() {
+            if core_shims::is_bodyful_concrete_partial_eq(model, id) {
+                backend_shim_dependencies.insert(id);
+            }
+            continue;
+        }
+        if model.items[instance.item].linkage == Linkage::Foreign
+            || model.instance_intrinsic(id).is_some()
+        {
+            continue;
+        }
+        if let Some(shim) = backend_owned_shim(model, id)? {
+            if let BackendShim::PartialEqNe { eq } = shim {
+                // Backend-shim participants are TU-local: a plain C11 `inline`
+                // definition can otherwise leave an unresolved external reference
+                // when the compiler does not inline this call.
+                backend_shim_dependencies.insert(eq);
+            }
+            continue;
+        }
+        return Err(EmitError::Unsupported(
+            "referenced non-foreign bodyless function is not a recognized Generic-C backend shim",
+        ));
+    }
+    Ok(backend_shim_dependencies)
+}
+
+fn emit_backend_shim_body(syms: &InstanceSymbols, shim: BackendShim) -> String {
+    match shim {
+        BackendShim::NullMut => " {\n    return 0;\n}\n".to_string(),
+        BackendShim::U64Default => " {\n    return 0;\n}\n".to_string(),
+        BackendShim::PartialEqNe { eq } => {
+            format!(" {{\n    return !{}(lhs, rhs);\n}}\n", syms.symbol(eq))
+        }
+    }
+}
+
 /// The section 17 inline / weak / link-section qualifier prefix for a
 /// function instance (everything but `extern` and `_Noreturn`). Shared by
 /// the bank-4 prototype and the bank-5 definition so the two stay
 /// consistent.
-fn fn_qualifiers(model: &RegseqModel, item: regseq_model::ItemId) -> String {
+fn fn_qualifiers(
+    model: &RegseqModel,
+    item: regseq_model::ItemId,
+    backend_shim: Option<BackendShim>,
+    backend_shim_dependency: bool,
+) -> String {
+    if backend_shim.is_some() || backend_shim_dependency {
+        return "static inline ".to_string();
+    }
     let item = &model.items[item];
     let mut q = String::new();
     match item.inline_hint {
@@ -1662,6 +1819,8 @@ fn fn_signature(
     id: InstanceId,
     instance: &regseq_model::Instance,
     named: bool,
+    backend_shim: Option<BackendShim>,
+    backend_shim_dependency: bool,
 ) -> String {
     let data = instance
         .kind
@@ -1682,9 +1841,13 @@ fn fn_signature(
             // `Substituted` position takes a distinct `<local>__abi` formal name
             // (the body local of the original type is declared + marshalled by
             // the prologue), so the formal and the body local cannot collide.
-            data.body()
-                .map(|body| abi_param_name(model, body, fn_sig, lowering, i))
-                .unwrap_or_default()
+            match backend_shim.and_then(|shim| shim.param_name(i)) {
+                Some(name) => name.to_string(),
+                None => data
+                    .body()
+                    .map(|body| abi_param_name(model, body, fn_sig, lowering, i))
+                    .unwrap_or_default(),
+            }
         } else {
             String::new()
         };
@@ -1714,7 +1877,7 @@ fn fn_signature(
         types::declare(model, names, out_ty, &declarator)
     };
 
-    let quals = fn_qualifiers(model, instance.item);
+    let quals = fn_qualifiers(model, instance.item, backend_shim, backend_shim_dependency);
     let noreturn = if matches!(model.types[fn_sig.output], Ty::Never) {
         "_Noreturn "
     } else {
@@ -2360,6 +2523,7 @@ fn bank4_declarations(
     names: &NameTable,
     syms: &InstanceSymbols,
     cms_storage: &HashMap<InstanceId, StorageTy>,
+    backend_shim_dependencies: &HashSet<InstanceId>,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
     let mut wrote_header = false;
@@ -2382,12 +2546,22 @@ fn bank4_declarations(
                 if is_diag_log_instance(model, instance.item) {
                     continue;
                 }
+                let backend_shim = backend_owned_shim(model, id)?;
                 header(&mut out, &mut wrote_header);
                 let foreign = model.items[instance.item].linkage == Linkage::Foreign;
                 let prefix = if foreign { "extern " } else { "" };
                 out.push_str(&format!(
                     "{prefix}{};\n",
-                    fn_signature(model, names, syms, id, instance, false)
+                    fn_signature(
+                        model,
+                        names,
+                        syms,
+                        id,
+                        instance,
+                        false,
+                        backend_shim,
+                        backend_shim_dependencies.contains(&id),
+                    )
                 ));
             }
             InstanceKind::Static { ty, .. } => {
@@ -2436,6 +2610,7 @@ fn bank5_definitions(
     names: &NameTable,
     syms: &InstanceSymbols,
     cms_storage: &HashMap<InstanceId, StorageTy>,
+    backend_shim_dependencies: &HashSet<InstanceId>,
     helper_use: &RefCell<prelude::HelperUsage>,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
@@ -2460,12 +2635,30 @@ fn bank5_definitions(
                 if foreign || is_diag_log_instance(model, instance.item) {
                     continue;
                 }
-                let Some(body) = data.body() else {
+                let backend_shim = backend_owned_shim(model, id)?;
+                if data.body().is_none() && backend_shim.is_none() {
                     continue;
-                };
+                }
                 header(&mut out, &mut wrote_header);
-                let sig = fn_signature(model, names, syms, id, instance, true);
-                let block = body_emit::emit_body(model, names, syms, id, instance, body, helper_use)?;
+                let sig = fn_signature(
+                    model,
+                    names,
+                    syms,
+                    id,
+                    instance,
+                    true,
+                    backend_shim,
+                    backend_shim_dependencies.contains(&id),
+                );
+                let block = match (data.body(), backend_shim) {
+                    (Some(body), None) => {
+                        body_emit::emit_body(model, names, syms, id, instance, body, helper_use)?
+                    }
+                    (None, Some(shim)) => emit_backend_shim_body(syms, shim),
+                    _ => unreachable!(
+                        "backend shims are bodyless and ordinary definitions are bodyful"
+                    ),
+                };
                 out.push_str(&format!("{sig}{block}"));
             }
             InstanceKind::Static {

@@ -319,7 +319,7 @@ pub struct ConformanceReport {
     /// form (device-interrupt C02): row always Some, citation carried — the
     /// connected-but-masked statement lives in the row's citation.
     pub structurally_absent_slots: Vec<SlotEntry>,
-    pub rejected_slots: Vec<SlotEntry>,  // structurally empty on successful emit
+    pub rejected_slots: Vec<SlotEntry>, // structurally empty on successful emit
     /// Recognized foreign-transport identity entries the backend did not
     /// consume, per the D03(a) rule (GRILL spec-convergence-pl011 D08, C02).
     /// Empty when the match set is all-native. NOT a slot section: the

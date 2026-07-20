@@ -126,7 +126,9 @@ fn zephyr_irq_pl011_snapshot_and_l0_structure() {
     assert!(audit < postamble, "audit precedes the postamble");
     let between = &tu[audit_end..postamble];
     assert!(
-        between.trim_matches(|c: char| c.is_whitespace() || c == '/' || c == '*').is_empty(),
+        between
+            .trim_matches(|c: char| c.is_whitespace() || c == '/' || c == '*')
+            .is_empty(),
         "nothing may sit between the audit block and the postamble; got {between:?}"
     );
     // The COMPLETE connect shape (Codex M4): build-time param + flags 0 —

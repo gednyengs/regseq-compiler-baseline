@@ -1,0 +1,7 @@
+name = "serial-missing-port-reject"
+kind = "rust"
+covers = []
+expect = "reject"
+[expected]
+stage = "acquire"
+diagnostic = "SERIAL-ERR-MISSING-PORT"

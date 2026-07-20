@@ -1,0 +1,111 @@
+{
+  "schema": "gap-closure-verification-plan/1",
+  "stage": "C1-serial",
+  "commands": [
+    {
+      "argv": ["python3", "-c", "import json; p=json.load(open('/home/nyengele/regseq-eval-worktrees/regseq-gap-closure/docs/experiments/os-api-gap-closure/wf/runtime/gates/H12-DCT-P1-GREEN.json')); assert p['schema']=='gap-closure-gate/1' and p['gate_id']=='H12-DCT-P1-GREEN' and p['digest']=='edebf47c82a4560b0ee4e2e48ec7a687da35483b30b7f551ee1b715eb245b4c9' and p['ok'] is True and p['next_id']=='O11-device-class-serial'"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "linux_irq_pl011_e2e", "linux_irq_pl011_snapshot_and_l0_structure", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["python3", "-c", "from pathlib import Path; import hashlib; d=Path('crates/codegen-coverage-runner/fixtures/_lifecycle/lifecycle-pl011'); g=(d/'golden.c').read_text(); out=(d/'expected.stdout').read_bytes(); assert 'struct input_SerialDataBits;' in g; assert 'RSEQ-SERIAL-PORT pl011' in g; assert 'capability:' not in g; assert 'absent operations are unsupported; no terminal event is implied' in g; assert 'on_system_shutdown' not in g; assert 'amba:0x41011/0xfffff' in g; assert hashlib.sha256(out).hexdigest()=='4e445da14a4ed07c204e5c1f9a20c0f51acebe78cb4eca6089313e0d6280cfdf'"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "lifecycle_pl011_e2e", "lifecycle_pl011_m5_gate", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "serial_port_e2e", "empty_serial_port_impl_preserves_every_capability_as_absent", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "serial_port_e2e", "serial_port_all_ops_generic_c_behavior", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "regseq-driver", "--test", "bridge_device_lifecycle_recognition", "device_class_tags_map_to_class_tag", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "--workspace"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "regseq-model", "serial_port_model_roundtrip_and_capabilities", "--", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "regseq-model", "abort_and_purge_are_independent_capabilities", "--", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "serial_port_e2e", "serial_capability_absence_has_no_fabricated_event_or_success", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "serial_reject_e2e", "locked_serial_negative_diagnostics", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "serial_os_lowering_e2e", "serial_linux_uses_uart_ops_and_counted_buffer_adapters", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "serial_os_lowering_e2e", "serial_zephyr_uses_uart_driver_api_and_preserves_progress_counts", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "serial_os_lowering_e2e", "serial_native_bindings_do_not_fabricate_absent_capabilities", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-c", "test -n \"${RSEQ_LINUX_KDIR:-}\" && cargo test -p codegen-coverage-runner --test linux_kbuild_e2e generated_drivers_kbuild_against_the_campaign_tree -- --exact --nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-c", "test -n \"${RSEQ_ZEPHYR_WORKSPACE:-}\" && cargo test -p codegen-coverage-runner --test zephyr_build_e2e zephyr_build_gate_over_locked_serial_port -- --exact --nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "serial_covers", "locked_serial_stage_accounts_for_all_frozen_pl011_rows", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-c", "! grep -rnE 'SerialRuntimeLineConfig|SerialInterruptDriven|SerialQueueControl|SerialShutdownOps|SerialBulkTransfer|SerialBreak|irq_source_set|irq_cause_decode' crates/regseq-model/src/serial.rs crates/regseq-backends/src/linux_c/serial.rs crates/regseq-backends/src/zephyr_c/serial.rs && ! grep -rnE 'pub (bits|driven|sensed|changed): u32' crates/codegen-coverage-runner/fixtures/_serial_port_surface.rs"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["python3", "-c", "import json; p=json.load(open('experiments/os-api-gap-closure/provenance/C1-serial.json')); assert p['stage']=='C1-serial'; assert p['source_object']=='ef2e09d1b56fd82a57f3abef14c983d376058b98'; assert {x['asset_id'] for x in p['transplants']}=={'SER-CORE','SER-BACKENDS'}; c=json.load(open('experiments/os-api-gap-closure/coverage/C1-serial.json')); assert [r['id'] for r in c['rows']]==[f'PL011-S{i:02d}' for i in range(1,22)]"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["python3", "-c", "import json; p=json.load(open('experiments/os-api-gap-closure/verification/C1-serial.json')); assert set(p)=={'schema','stage','commands'}; assert p['schema']=='gap-closure-verification-plan/1' and p['stage']=='C1-serial'; allowed={'cargo','uv','python3','bash','make','cmake','ninja'}; assert p['commands'] and all(set(c)=={'argv','cwd','expected_outputs'} and c['argv'][0] in allowed and isinstance(c['cwd'],str) and isinstance(c['expected_outputs'],list) for c in p['commands'])"],
+      "cwd": ".",
+      "expected_outputs": []
+    }
+  ]
+}

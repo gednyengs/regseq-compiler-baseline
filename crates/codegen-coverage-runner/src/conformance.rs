@@ -38,7 +38,10 @@ pub fn render_json(report: &ConformanceReport) -> String {
         json_str(report.os_version_pin),
         render_list("delivered_slots", &report.delivered_slots),
         render_list("absent_dispatch_slots", &report.absent_dispatch_slots),
-        render_list("structurally_absent_slots", &report.structurally_absent_slots),
+        render_list(
+            "structurally_absent_slots",
+            &report.structurally_absent_slots
+        ),
         render_list("rejected_slots", &report.rejected_slots),
         render_audit_list(&report.ignored_match_entries),
     )
@@ -63,10 +66,7 @@ fn render_audit_list(entries: &[MatchAudit]) -> String {
             )
         })
         .collect();
-    format!(
-        "  \"ignored_match_entries\": [\n{}\n  ]",
-        items.join(",\n")
-    )
+    format!("  \"ignored_match_entries\": [\n{}\n  ]", items.join(",\n"))
 }
 
 fn render_list(key: &str, entries: &[SlotEntry]) -> String {

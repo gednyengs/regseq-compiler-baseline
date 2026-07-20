@@ -41,12 +41,16 @@ fn emit_for(binding: manifest::OsBinding) -> String {
     let mut model = unbound.clone();
     pipeline::bind_l2_platform(&mut model, &fixture).expect("L2 bind");
     match binding {
-        manifest::OsBinding::Linux => regseq_backends::emit_linux_c(&model)
-            .expect("emit_linux_c")
-            .tu,
-        manifest::OsBinding::Zephyr => regseq_backends::emit_zephyr_c(&model)
-            .expect("emit_zephyr_c")
-            .tu,
+        manifest::OsBinding::Linux => {
+            regseq_backends::emit_linux_c(&model)
+                .expect("emit_linux_c")
+                .tu
+        }
+        manifest::OsBinding::Zephyr => {
+            regseq_backends::emit_zephyr_c(&model)
+                .expect("emit_zephyr_c")
+                .tu
+        }
     }
 }
 
@@ -61,7 +65,10 @@ fn fn_body<'a>(tu: &'a str, sig: &str) -> &'a str {
             .find(sig)
             .unwrap_or_else(|| panic!("definition `{sig}` not found in:\n{tu}"));
         let start = from + rel;
-        let line_end = tu[start..].find('\n').map(|n| start + n).unwrap_or(tu.len());
+        let line_end = tu[start..]
+            .find('\n')
+            .map(|n| start + n)
+            .unwrap_or(tu.len());
         // A definition's signature line is immediately followed by a `{` line; a
         // forward declaration's line ends with `;`.
         if tu[line_end..].starts_with("\n{") {
@@ -75,8 +82,12 @@ fn fn_body<'a>(tu: &'a str, sig: &str) -> &'a str {
 
 /// Assert `first` appears before `second` in `tu`.
 fn assert_before(tu: &str, first: &str, second: &str, what: &str) {
-    let a = tu.find(first).unwrap_or_else(|| panic!("{what}: `{first}` not found"));
-    let b = tu.find(second).unwrap_or_else(|| panic!("{what}: `{second}` not found"));
+    let a = tu
+        .find(first)
+        .unwrap_or_else(|| panic!("{what}: `{first}` not found"));
+    let b = tu
+        .find(second)
+        .unwrap_or_else(|| panic!("{what}: `{second}` not found"));
     assert!(a < b, "{what}: expected `{first}` before `{second}`");
 }
 
@@ -106,7 +117,8 @@ fn linux_isr_and_mainline_acquire_the_same_seam_lock() {
         "the ISR must acquire the seam lock:\n{isr}"
     );
     assert_eq!(
-        isr.matches("spin_unlock_irqrestore(&_1->isr_state,").count(),
+        isr.matches("spin_unlock_irqrestore(&_1->isr_state,")
+            .count(),
         2,
         "the ISR guard must release on BOTH branch exits:\n{isr}"
     );

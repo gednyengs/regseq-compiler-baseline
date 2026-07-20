@@ -1,8 +1,8 @@
 //! Phase 4 final `ItemId` assignment and side-table population.
 
 use super::{
-    atomic, clock, deferred_work, device_lifecycle, dma, framework_type, interrupt, intrinsic,
-    pinctrl, synchronization, timed_delay, BridgeCtxt, BridgeError,
+    atomic, clock, deferred_work, device_lifecycle, framework_type, interrupt, intrinsic, pinctrl,
+    synchronization, timed_delay, transport, BridgeCtxt, BridgeError,
 };
 
 /// Assigns dense `ItemId`s and populates item side tables in lock-step.
@@ -16,6 +16,7 @@ pub(crate) fn assign_item_ids_and_populate_sidetables(
     // every recognized busy_wait/sleep facade (TCD-ERR-02). Runs after
     // `materialise_intrinsics` records the markers it walks.
     timed_delay::validate_delay_signatures(ctxt)?;
+    transport::validate_submit_signatures(ctxt)?;
     // Atomic-memory-access-and-ordering (atomicity construct): record the
     // `AttrData::Atomic` field marker for every `Atomic<T>` struct field
     // (element type + optional initial value), rejecting an unsupported element
@@ -64,20 +65,6 @@ pub(crate) fn assign_item_ids_and_populate_sidetables(
     // so they run later: `validate_author_managed_fields` at the end of
     // `run_bridge`, `validate_apply_sites` post-L2 (GRILL C03).
     pinctrl::validate_pinctrl_signatures(ctxt)?;
-    // DMA-management (dma-management construct, M1 region path): recognize
-    // coherent `DmaRegion<T>` resource fields on the same driver map. Runs after
-    // device-lifecycle (the walk root) and the sibling resource passes — order
-    // among sibling resources is irrelevant; the `alloc_coherent` preamble's
-    // position is derived downstream from `model.dma` (GRILL C07/C09). Sets the
-    // narrow `dma_present` bus-master bit (T05).
-    dma::materialise_dma_regions(ctxt)?;
-    // DMA-management completion-handler recognition (dma-management construct,
-    // M3/T09(b)): item-driven `#[rseq::dma_completion(channel = "…")]` recognition
-    // — record the binding on the handler item + into the owning driver's
-    // `DriverDma.completions` (registration-shape only, GRILL D06/C05). Runs after
-    // `materialise_dma_regions` (the driver `dma.drivers` entries exist) and after
-    // device-lifecycle (the driver map is the self-ADT join root).
-    dma::materialise_dma_completions(ctxt)?;
     // Deferred-work-item-scheduling (deferred-work-item-scheduling construct):
     // type-driven `Work`-field recognition on the same driver map. Runs after
     // device-lifecycle (the walk root) and after the sibling resource passes —

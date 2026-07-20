@@ -1,0 +1,88 @@
+{
+  "schema": "gap-closure-provenance/1",
+  "stage": "C1-serial",
+  "authority": "addendum/device-class-serial.md (locked epoch 1)",
+  "source_object": "ef2e09d1b56fd82a57f3abef14c983d376058b98",
+  "source_snapshot_commit": "369acac51b1874a5c51924b4245bfa150c00cac1",
+  "source_snapshot_root": "/home/nyengele/regseq-eval-worktrees/regseq-gap-closure/docs/experiments/os-api-gap-closure/convergence/branch-snapshots/369acac51b1874a5c51924b4245bfa150c00cac1",
+  "source_snapshot_sha256": "b4eb6836313b4b04d72d033d6362a7b099e118b9d01fb5a413c98e83667c0f94",
+  "prerequisite": {
+    "gate": "H12-DCT-P1-GREEN",
+    "path": "/home/nyengele/regseq-eval-worktrees/regseq-gap-closure/docs/experiments/os-api-gap-closure/wf/runtime/gates/H12-DCT-P1-GREEN.json",
+    "digest": "edebf47c82a4560b0ee4e2e48ec7a687da35483b30b7f551ee1b715eb245b4c9",
+    "ok": true,
+    "next_id": "O11-device-class-serial"
+  },
+  "transplants": [
+    {
+      "asset_id": "SER-CORE",
+      "source_path": "crates/regseq-model/src/serial.rs; crates/regseq-driver/src/bridge/serial.rs",
+      "destination": "crates/regseq-model/src/serial.rs; crates/regseq-driver/src/bridge/serial.rs",
+      "old_semantics": "Six register-primitive UART trait planes with byte-at-a-time transfer and device bitsets.",
+      "new_semantics": "One SerialPort element with independently optional operations, pointer+length transfer values and actual-progress counts, named portable values, conditional lifecycle/maintenance, and no endpoint/IRQ/register ownership.",
+      "behavior_delta": "The trait planes collapse; config readback, signals, subscriptions, purge, drain, and conditional abort become positive capabilities; raw line-error/event/signal bitsets and legacy traits reject.",
+      "reuse_mode": "adapted idioms only; no historical hunk copied verbatim",
+      "tests": [
+        "regseq-model::serial_port_model_roundtrip_and_capabilities",
+        "serial_port_e2e",
+        "serial_reject_e2e"
+      ]
+    },
+    {
+      "asset_id": "SER-BACKENDS",
+      "source_path": "crates/regseq-backends/src/linux_c/serial.rs; crates/regseq-backends/src/zephyr_c/serial.rs",
+      "destination": "crates/regseq-backends/src/linux_c/serial.rs; crates/regseq-backends/src/zephyr_c/serial.rs; crates/regseq-backends/src/generic_c/mod.rs",
+      "old_semantics": "PL011-shaped uart_ops/uart_driver_api scaffolds synthesized queue and interrupt policy around single-octet register primitives.",
+      "new_semantics": "Queue-neutral Linux pointer+length adapters and capability-gated uart_ops slots; Zephyr polling/FIFO/runtime-config adapters over counted buffers; generic C emits the capability/absence manifest and executes authored behavior.",
+      "behavior_delta": "OS framework types remain, but PL011 register policy, IRQ acquisition/scatter, DMA/PIO selection, and device queue ownership are absent. Missing capabilities create no slot and no terminal event or successful fallback.",
+      "reuse_mode": "adapted framework slot and include idioms only; old fixture/golden/scatter code excluded",
+      "tests": [
+        "serial_os_lowering_e2e",
+        "linux_kbuild_e2e::generated_drivers_kbuild_against_the_campaign_tree",
+        "zephyr_build_e2e::zephyr_build_gate_over_locked_serial_port"
+      ]
+    }
+  ],
+  "negative_reclassification": [
+    {
+      "historical_cases": ["serial-modem-control-reject", "serial-line-format-readback-reject"],
+      "locked_disposition": "positive capability-gated set_signals/get_signals/get_config"
+    },
+    {
+      "historical_cases": ["serial-fifo-purge-reject"],
+      "locked_disposition": "positive capability-gated purge, kept distinct from abort"
+    },
+    {
+      "historical_cases": ["serial-bulk-transfer-reject"],
+      "locked_disposition": "reclassified to positive counted transmit/receive buffers; the old SerialBulkTransfer trait plane remains rejected"
+    },
+    {
+      "historical_cases": ["serial-break-set-reject", "serial-dynamic-irq-set-reject", "serial-irq-set-closure-reject", "serial-irq-set-fnptr-reject", "serial-console-reject"],
+      "locked_disposition": "still excluded from serial L1: break, console, and queue/IRQ policy remain backend/L2 or another owner"
+    },
+    {
+      "historical_cases": ["serial-flow-auto-set-reject"],
+      "locked_disposition": "reclassified to positive capability-gated flow_control_mode data; enforcement remains L2"
+    },
+    {
+      "historical_cases": ["serial-bitset-raw-literal-reject", "serial-bitset-struct-literal-reject", "serial-bitset-field-mutation-reject", "serial-bitset-nested-field-mutation-reject", "serial-bitset-projection-dest-reject", "serial-bitset-mut-borrow-reject", "serial-bitset-helper-reject", "serial-bitset-device-leak-reject", "serial-cause-const-mismatch-reject", "serial-rxerror-const-mismatch-reject"],
+      "locked_disposition": "old const/bitset APIs are oracle-only and remain rejected; their portable meanings are positive named enum or boolean-field values with no raw device-bit carrier"
+    },
+    {
+      "historical_cases": ["serial-dynamic-shutdown-reject", "serial-shutdown-dyn-dispatch-reject"],
+      "locked_disposition": "old SerialShutdown plane rejected; close is an ordinary conditional SerialPort capability"
+    },
+    {
+      "historical_cases": ["data_unit_write/data_unit_read byte-at-a-time primitives"],
+      "locked_disposition": "rejected below L1 by serial-byte-transfer-reject; locked transfer takes a pointer+length value and returns actual progress"
+    }
+  ],
+  "excluded_collateral": [
+    "historical six-trait and SerialShutdown symbols",
+    "PL011 authored fixture and generated goldens",
+    "register offsets and register programming policy",
+    "IRQ scatter/acquisition and deferred scheduling",
+    "DMA/PIO selection and tty/Zephyr queue ownership",
+    "old coverage and maturity claims"
+  ]
+}

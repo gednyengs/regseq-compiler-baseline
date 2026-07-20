@@ -1,0 +1,5 @@
+name = "network-full"
+kind = "rust"
+lifecycle_scenario = "orderly"
+covers = ["NIM-FULL-SURFACE", "NIM-PACKET-OWNERSHIP", "NIM-COMPOSED-OWNERS"]
+expect = "pass"

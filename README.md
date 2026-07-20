@@ -12,7 +12,7 @@ Linux, Zephyr, or other OS backends.
 Regseq operates on a three-layer model:
 
 - **Layer 1 -- Driver Specification.** Portable device semantics written in
-  Rust: register layouts, interrupt intent, DMA structure, synchronization,
+  Rust: register layouts, interrupt intent, synchronization,
   parameters, and lifecycle behavior. Uses `#[rseq::*]` attributes, resource
   types, traits, and compiler-recognized intrinsics. Captures *what* the
   device needs, not *how* any particular OS provides it. The `rseq`
@@ -37,7 +37,7 @@ This implementation targets two artifact devices for an ASPLOS evaluation:
 
 - **PL011** -- ARM UART. Narrower device, validates the end-to-end compiler
   path first.
-- **E1000** -- Intel NIC. Richer device, stress-tests DMA, networking,
+- **E1000** -- Intel NIC. Richer device, stress-tests networking,
   interrupt complexity, and performance-sensitive lowering.
 
 Target OS backends are Linux (primary) and Zephyr (secondary).
@@ -159,11 +159,9 @@ including:
 
 Current refinement/decision docs that matter in day-to-day work include:
 
-- `docs/discussions/device-class-serial/serial-device-class-spec.md`
-- `docs/discussions/pl011-full-spec/`
+- `docs/discussions/register-access/`
 - `docs/discussions/regseq-model/`
-- `docs/discussions/regseq-analysis/`
-- `docs/discussions/evaluation-environment/`
+- `docs/discussions/os-capability-disposition/`
 
 Use `docs/handoff.md` to decide which of these are currently authoritative and
 which are supporting or historical only.

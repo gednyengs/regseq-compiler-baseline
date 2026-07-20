@@ -113,9 +113,7 @@ fn deferred_work_reset_oracle() {
         .find("static void rseq_work_")
         .expect("golden.c defines the self-recovering wrapper");
     let wbody = &golden[wstart..];
-    let wend = wbody
-        .find("\n}\n")
-        .expect("wrapper has a closing brace");
+    let wend = wbody.find("\n}\n").expect("wrapper has a closing brace");
     let wrapper = &wbody[..wend];
     assert!(
         !wrapper.contains("lock"),
@@ -153,7 +151,10 @@ fn deferred_work_reset_oracle() {
     let cancel = pos("WRK cancel 0");
 
     // init_work precedes the author on_init (compiler-owned lifecycle entry, I05).
-    assert!(init < on_init, "init_work must precede the author on_init (I05)");
+    assert!(
+        init < on_init,
+        "init_work must precede the author on_init (I05)"
+    );
     // The author `self.work.submit()` fires inside on_init.
     assert!(on_init < submit, "the author submit fires inside on_init");
     // The harness drain (after on_init returns) dispatches the submitted work (D09).
@@ -163,7 +164,10 @@ fn deferred_work_reset_oracle() {
     );
     // cancel_work runs last in the teardown, after the (single) legitimate
     // dispatch (I04/C07).
-    assert!(dispatch < cancel, "cancel_work runs last, before free (I04/C07)");
+    assert!(
+        dispatch < cancel,
+        "cancel_work runs last, before free (I04/C07)"
+    );
 
     // POST-CANCEL RE-ARM PROBE (C05 item 4): a harness-side submit+drain AFTER the
     // teardown's cancel must NOT re-arm — the work dispatches exactly ONCE in the

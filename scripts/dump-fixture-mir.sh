@@ -13,7 +13,7 @@
 # eventual whitelist and the new extractor's recognition strategy should be.
 #
 # Usage: scripts/dump-fixture-mir.sh <fixture-dir>
-# Example: scripts/dump-fixture-mir.sh tests/fixtures/pl011-full-spec
+# Example: scripts/dump-fixture-mir.sh tests/fixtures/regaccess-pl011
 
 set -euo pipefail
 

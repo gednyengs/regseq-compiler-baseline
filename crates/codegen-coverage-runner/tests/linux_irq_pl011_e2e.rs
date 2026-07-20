@@ -67,8 +67,8 @@ fn linux_irq_pl011_snapshot_and_l0_structure() {
         result.verdict
     );
 
-    let tu = std::fs::read_to_string(pipeline::linux_golden_path(fixture))
-        .expect("read golden.linux.c");
+    let tu =
+        std::fs::read_to_string(pipeline::linux_golden_path(fixture)).expect("read golden.linux.c");
     let pos = |needle: &str| {
         tu.find(needle)
             .unwrap_or_else(|| panic!("TU must contain `{needle}`; got:\n{tu}"))
@@ -131,12 +131,9 @@ fn linux_irq_pl011_snapshot_and_l0_structure() {
         "conformance must report the deregister slot delivered (D09 contrast with C02); got:\n{conf}"
     );
 
-    // The shared-line NEGATIVE (Codex M3 MUST-FIX): the kernel rejects
-    // IRQF_NO_AUTOEN | IRQF_SHARED with -EINVAL, so an L2 `shared = true`
-    // board fact must be EMIT-REJECTED loudly, never lowered into a module
-    // whose probe always fails. Re-bridge the same authored spec (the
-    // snapshot above was this process's FIRST bridge, so the byte-lock is
-    // already done) and join a shared-variant platform binding directly.
+    // Linux rejects IRQF_NO_AUTOEN | IRQF_SHARED. The shared-line form must
+    // therefore request IRQF_SHARED alone, keep device-cause masking authored,
+    // and omit the later enable_irq reserved for request-disabled lines.
     let mut model = match try_bridge_fixture_path(&fixture.input) {
         BridgeOutcome::Ok(m) => m,
         other => panic!("re-bridge failed: {other:?}"),
@@ -146,11 +143,10 @@ fn linux_irq_pl011_snapshot_and_l0_structure() {
     let bindings = regseq_config::parse_platform_bindings_str(shared_toml).expect("parse");
     regseq_l2::bind_all(&mut model, &bindings).expect("bind_all");
     regseq_l2::validate_l2_surface(&model).expect("validate");
-    let err = regseq_backends::emit_linux_c(&model)
-        .expect_err("shared=true must be emit-rejected on linux_c");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("IRQF_NO_AUTOEN | IRQF_SHARED") && msg.contains("shared"),
-        "the rejection must name the kernel flag conflict; got: {msg}"
-    );
+    let shared = regseq_backends::emit_linux_c(&model)
+        .expect("shared=true must use the live shared registration form")
+        .tu;
+    assert!(shared.contains("IRQF_SHARED, \"pl011irq\", priv)"));
+    assert!(!shared.contains("IRQF_NO_AUTOEN | IRQF_SHARED"));
+    assert!(!shared.contains("enable_irq(adev->irq[0]);"));
 }

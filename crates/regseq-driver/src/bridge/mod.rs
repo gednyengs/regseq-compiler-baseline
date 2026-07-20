@@ -16,20 +16,21 @@ use regseq_model::{
 
 mod assign;
 mod atomic;
-mod clock;
-mod deferred_work;
 pub mod body;
+mod clock;
 pub mod const_;
 pub mod def_path;
+mod deferred_work;
 mod device_lifecycle;
-mod dma;
 pub mod diag_log;
 mod discovery;
+mod dma;
 pub mod fnsig;
 mod framework_type;
 mod handles;
 mod interrupt;
 pub(crate) mod intrinsic;
+mod network;
 mod opaque_handle;
 mod pinctrl;
 mod serial;
@@ -37,6 +38,7 @@ mod sort;
 mod synchronization;
 pub mod synth;
 mod timed_delay;
+mod transport;
 pub mod ty;
 
 pub use const_::ConstMemoryStaticHandle;
@@ -193,29 +195,6 @@ pub struct BridgeCtxt<'tcx> {
     /// so the RJ-009 bucket-4 `signature_non_rigid` carve-out is
     /// preserved.
     pub reveal_opaque_types: bool,
-    /// Transient flag (dma-management T13) gating a NARROW carve-out in the
-    /// substantive-HRTB / fn-ptr-binder safety check (spec §17.1): while set,
-    /// `ty::translate_generic_args` permits a closure's OWN reified
-    /// `for<'a> extern "rust-call" fn((&'a mut V,))` signature FnPtr — and ONLY
-    /// that exact shape (RustCall ABI + a single tupled input, the closure
-    /// self-signature artifact) — instead of rejecting it as a substantive HRTB.
-    /// Default `false`; set to `true` ONLY for the duration of translating the
-    /// callee `FnDef` type of a recognized `IntrinsicKind::Dma(ElementAccess)`
-    /// call (whose generic args carry the borrow-closure type) via the
-    /// [`DmaElementClosureRelaxScope`] RAII guard, restored on guard `Drop`. It
-    /// MUST stay `false` everywhere else: the global HRTB guard is UNCHANGED for
-    /// all non-DMA code (and a relational/projection HRTB is still rejected even
-    /// under this flag — the shape gate matches only the benign closure-self
-    /// signature). See `ty::closure_reified_sig_relaxable`.
-    pub dma_element_closure_relax: bool,
-    /// The `DefPathHash`es of the borrow closures passed to a recognized
-    /// `IntrinsicKind::Dma(ElementAccess)` call (dma-management T13). Recorded at
-    /// the call's Phase-4 scan; consulted by `construct_closure_call_instances`
-    /// to relax the closure-reified-sig HRTB carve-out ONLY for these specific
-    /// closures (the call-site relax flag does not reach that later, per-closure
-    /// pass). A non-DMA borrow closure is never inserted here, so it is never
-    /// relaxed; it is in any case rejected upstream.
-    pub dma_element_closure_defs: std::collections::HashSet<DefPathHash>,
 }
 
 impl<'tcx> BridgeCtxt<'tcx> {
@@ -244,8 +223,6 @@ impl<'tcx> BridgeCtxt<'tcx> {
             ty_forward_cache: HashMap::new(),
             diag_log_peel_residue: DiagLogPeelResidue::default(),
             reveal_opaque_types: false,
-            dma_element_closure_relax: false,
-            dma_element_closure_defs: std::collections::HashSet::new(),
         }
     }
 }
@@ -300,54 +277,6 @@ impl<'tcx> std::ops::DerefMut for RevealOpaqueScope<'_, 'tcx> {
 impl Drop for RevealOpaqueScope<'_, '_> {
     fn drop(&mut self) {
         self.cx.reveal_opaque_types = self.prev;
-    }
-}
-
-/// RAII guard (dma-management T13) that enables the NARROW closure-reified-sig
-/// carve-out in the substantive-HRTB safety check (`BridgeCtxt::
-/// dma_element_closure_relax`) for the duration of translating the callee
-/// `FnDef` type of a recognized `IntrinsicKind::Dma(ElementAccess)` call. The
-/// guard saves the prior flag and restores it on `Drop` (every exit path,
-/// including `?`), so the relaxation can never leak past the one `translate_ty`
-/// it brackets. The carve-out itself additionally matches ONLY the closure
-/// self-signature SHAPE (`ty::closure_reified_sig_relaxable`), so even within
-/// the window a relational/projection HRTB or a user fn-ptr binder is still
-/// rejected — the global spec-§17.1 guard is unchanged for all other code.
-pub(crate) struct DmaElementClosureRelaxScope<'a, 'tcx> {
-    cx: &'a mut BridgeCtxt<'tcx>,
-    prev: bool,
-}
-
-impl<'a, 'tcx> DmaElementClosureRelaxScope<'a, 'tcx> {
-    /// Save the current flag, set it to `value`, and return a guard that
-    /// restores the saved value on `Drop`. Callers pass `value = true` only when
-    /// the callee being translated is a recognized DMA element-access intrinsic;
-    /// passing `false` leaves the global guard semantics unchanged while still
-    /// providing a tidy restore-on-drop bracket.
-    pub(crate) fn enter_with(cx: &'a mut BridgeCtxt<'tcx>, value: bool) -> Self {
-        let prev = cx.dma_element_closure_relax;
-        cx.dma_element_closure_relax = value;
-        Self { cx, prev }
-    }
-}
-
-impl<'tcx> std::ops::Deref for DmaElementClosureRelaxScope<'_, 'tcx> {
-    type Target = BridgeCtxt<'tcx>;
-
-    fn deref(&self) -> &Self::Target {
-        self.cx
-    }
-}
-
-impl<'tcx> std::ops::DerefMut for DmaElementClosureRelaxScope<'_, 'tcx> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.cx
-    }
-}
-
-impl Drop for DmaElementClosureRelaxScope<'_, '_> {
-    fn drop(&mut self) {
-        self.cx.dma_element_closure_relax = self.prev;
     }
 }
 
@@ -723,6 +652,20 @@ pub enum BridgeError {
     #[error("device-lifecycle validation: {0}")]
     DeviceLifecycleValidation(DeviceLifecycleDiagnostic),
 
+    /// A canonical register-access `regseq::Mmio<T>` resource named an inner
+    /// type that is not declared as a register block.
+    #[error(
+        "register-access validation: driver `{driver}` field `{field}` uses regseq::Mmio<{block_type}>, but `{block_type}` is not marked #[rseq::register_block(...)]"
+    )]
+    RegisterAccessValidation {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending MMIO resource field.
+        field: String,
+        /// The canonical resource's inner type, rendered by rustc.
+        block_type: String,
+    },
+
     /// A device-interrupt frontend check failed (construct #6, contract C06).
     #[error("device-interrupt validation: {0}")]
     InterruptValidation(InterruptDiagnostic),
@@ -749,21 +692,11 @@ pub enum BridgeError {
     #[error("atomic-memory-access-and-ordering validation: {0}")]
     AtomicValidation(AtomicDiagnostic),
 
-    /// A serial device-class frontend check failed (construct #7).
-    #[error("serial validation: {0}")]
-    SerialValidation(SerialDiagnostic),
-
     /// A synchronization frontend check failed (synchronization construct,
     /// contract C03). The §7 context checks land in M3; M2 carries the
     /// deferred-surface rejections (e.g. `AllWaiters` cardinality).
     #[error("synchronization validation: {0}")]
     SynchronizationValidation(SyncDiagnostic),
-
-    /// A dma-management frontend (recognition) check failed (dma-management
-    /// construct, GRILL C03/C10 — the `DMA-ERR-*` recognition set). The
-    /// binding-side `DMA-L2-*` set lives in `regseq-l2`.
-    #[error("dma-management validation: {0}")]
-    DmaValidation(DmaDiagnostic),
 
     /// A deferred-work-item-scheduling frontend check failed
     /// (deferred-work-item-scheduling construct, contract C06 — the `DWS-ERR-*`
@@ -771,256 +704,21 @@ pub enum BridgeError {
     /// (0 L1 / 0 L2 properties, GRILL D02), so there is no `DWS-L2-*` family.
     #[error("deferred-work-item-scheduling validation: {0}")]
     DeferredWorkValidation(DeferredWorkDiagnostic),
-}
 
-/// Per-construct dma-management frontend (recognition) diagnostics
-/// (dma-management construct, M1 region path; GRILL C03/C10). Carried by
-/// [`BridgeError::DmaValidation`]. The `DMA-ERR-*` family is the recognition
-/// half (this enum); the binding half is the `regseq-l2` `DMA-L2-*` family. This
-/// is the M1 subset (mandatory `#[rseq::dma_region]` keys, unsupported form,
-/// attr-on-non-region, duplicate id); the layout/anti-form/fallibility rejects
-/// are later milestones (T17/T19/T20/T22).
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
-pub enum DmaDiagnostic {
-    /// `DMA-ERR-MISSING-KEY`: a `#[rseq::dma_region]` field is missing a
-    /// mandatory key (`id`/`element_size`/`element_count`, GRILL C03/S01). The
-    /// `alignment` key is optional (omitted ⇒ `align_of::<T>()`).
-    #[error(
-        "DMA-ERR-MISSING-KEY: driver `{driver}` dma_region field `{field}` is missing the \
-         mandatory `#[rseq::dma_region]` key `{key}` (id/element_size/element_count are all \
-         required; alignment is optional)"
-    )]
-    MissingKey {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The offending field name.
-        field: String,
-        /// The missing key.
-        key: &'static str,
-    },
-    /// `DMA-ERR-MALFORMED-ATTR`: a structurally bad `#[rseq::dma_region(...)]`
-    /// attribute (empty id, non-literal value, duplicate or unknown key).
-    #[error(
-        "DMA-ERR-MALFORMED-ATTR: driver `{driver}` dma_region field `{field}`: {detail}"
-    )]
-    MalformedAttr {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The offending field name.
-        field: String,
-        /// What is wrong with the attribute.
-        detail: String,
-    },
-    /// `DMA-ERR-ATTR-ON-NON-REGION`: a `#[rseq::dma_region]` attribute on a field
-    /// whose type is not a `DmaRegion<T>`.
-    #[error(
-        "DMA-ERR-ATTR-ON-NON-REGION: driver `{driver}` field `{field}` carries a \
-         `#[rseq::dma_region]` attribute but is not a `DmaRegion<T>` resource"
-    )]
-    AttrOnNonRegion {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The offending field name.
-        field: String,
-    },
-    /// `DMA-ERR-UNSUPPORTED-FORM`: a recognized DMA-region declaration form M1
-    /// does not build (`Option<DmaRegion<T>>` / `[DmaRegion<T>; N]` /
-    /// `&DmaRegion<T>`); only the required `DmaRegion<T>` form is built.
-    #[error(
-        "DMA-ERR-UNSUPPORTED-FORM: driver `{driver}` dma_region field `{field}` uses the \
-         unsupported form `{form}` (M1 builds only the required `DmaRegion<T>` form)"
-    )]
-    UnsupportedForm {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The offending field name.
-        field: String,
-        /// The rejected form's spelling.
-        form: String,
-    },
-    /// `DMA-ERR-DUPLICATE-ID`: two `#[rseq::dma_region(id = "…")]` fields on one
-    /// driver share an L1 id (the `[dma.<id>]` join key must be unique).
-    #[error(
-        "DMA-ERR-DUPLICATE-ID: driver `{driver}` declares more than one DMA resource with \
-         id `{id}` (the `[dma.<id>]` join key must be unique within a driver)"
-    )]
-    DuplicateId {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The duplicated id.
-        id: String,
-    },
-    /// `DMA-ERR-LAYOUT-MISMATCH`: the declaration-time layout guard (dma-management
-    /// FIX #2) found the `#[rseq::dma_region(...)]` constants inconsistent with the
-    /// element type `T`'s resolved ABI layout — the declared `element_size` is
-    /// smaller than `size_of::<T>()`, the effective alignment is below
-    /// `align_of::<T>()`, the effective alignment is not a power of two, or the
-    /// stride is not a multiple of the effective alignment. (The full per-access
-    /// size-fits-view verify is M4/T19; this is the minimal declaration guard.)
-    #[error(
-        "DMA-ERR-LAYOUT-MISMATCH: driver `{driver}` dma_region field `{field}`: {detail}"
-    )]
-    LayoutMismatch {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The offending field name.
-        field: String,
-        /// What is inconsistent between the declared constants and `T`'s layout.
-        detail: String,
-    },
-    /// `DMA-ERR-MISSING-DIRECTION`: a `#[rseq::dma_channel(...)]` field is missing
-    /// (or carries a malformed) mandatory `direction` key (dma-management M2/T07;
-    /// `direction = "device_to_host" | "host_to_device"` is mandatory — a channel's
-    /// declared direction fixes the source-vs-destination role of a transfer
-    /// endpoint, GRILL S02/D05/C06). Also covers a missing `id`, a structurally bad
-    /// attribute, or an unknown direction token.
-    #[error(
-        "DMA-ERR-MISSING-DIRECTION: driver `{driver}` dma_channel field `{field}`: {detail}"
-    )]
-    ChannelAttr {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The offending field name.
-        field: String,
-        /// What is wrong (missing id/direction, malformed attr, bad direction).
-        detail: String,
-    },
-    /// `DMA-ERR-DISCARDED-RESULT`: the fallibility lint (GRILL C10/I06, M2/T17). A
-    /// fallible DMA op (`dma::stream`/`stage_transfer`/`start_transfer`/
-    /// `remaining_bytes`) whose `Result` is DISCARDED — including the explicit
-    /// `let _ = …` form that Rust's `unused_must_use` does NOT catch. `stop` is
-    /// infallible and exempt. The author must consume the `Result` (e.g. `?` or a
-    /// match).
-    #[error(
-        "DMA-ERR-DISCARDED-RESULT: the fallible DMA op `{op}` returns a `Result` that must be \
-         consumed (e.g. with `?`), but it is discarded here (an explicit `let _ = …` also \
-         discards it); GRILL C10/I06"
-    )]
-    DiscardedResult {
-        /// The author-facing spelling of the discarded fallible op.
-        op: &'static str,
-    },
-    /// `DMA-ERR-COMPLETION-ATTR`: a `#[rseq::dma_completion(channel = "…")]` handler
-    /// is malformed (dma-management M3/T09(b), GRILL C05/D06): a missing/empty
-    /// `channel` key, a structurally bad attribute, or a handler that is not an
-    /// inherent method on a `#[rseq::driver]` struct.
-    #[error("DMA-ERR-COMPLETION-ATTR: completion handler `{method}`: {detail}")]
-    CompletionAttr {
-        /// The offending handler method name.
-        method: String,
-        /// What is wrong (missing channel, malformed attr, non-driver method).
-        detail: String,
-    },
-    /// `DMA-ERR-UNKNOWN-COMPLETION-CHANNEL`: a `#[rseq::dma_completion(channel =
-    /// "…")]` binds a channel id that NO `#[rseq::dma_channel(id = "…")]` on the
-    /// owning driver declares (dma-management M3/T18, GRILL C05). Registering a
-    /// dangling completion for a never-`request_channel`'d channel is rejected: the
-    /// `channel` id must name a declared slave channel.
-    #[error(
-        "DMA-ERR-UNKNOWN-COMPLETION-CHANNEL: completion handler `{method}` binds channel `{channel}`, \
-         which no `#[rseq::dma_channel(id = \"{channel}\")]` on driver `{driver}` declares (C05)"
-    )]
-    UnknownCompletionChannel {
-        /// The offending handler method name.
-        method: String,
-        /// The dangling channel id the binding references.
-        channel: String,
-        /// The owning driver's logical name.
-        driver: String,
-    },
-    /// `DMA-ERR-ANTI-FORM`: a forbidden `stage_transfer(&DmaRegion<T>)` anti-form
-    /// (dma-management M3/T20, GRILL C06/I07): a coherent region was passed to
-    /// `stage_transfer` DIRECTLY instead of via `region.span(range)`. A staged
-    /// transfer endpoint must be a `region.span(range)` (a `DmaRegionSpan`) or a
-    /// `&DmaStreamBuffer` — never the bare region.
-    #[error(
-        "DMA-ERR-ANTI-FORM: `stage_transfer` was passed the coherent region `{region}` directly; \
-         pass a `region.span(range)` (a `DmaRegionSpan`) endpoint, not the bare region (C06/I07)"
-    )]
-    AntiForm {
-        /// The region id passed directly (the anti-form).
-        region: String,
-    },
-    /// `DMA-ERR-DIRECTION-MISMATCH`: a `stage_transfer` endpoint is incompatible
-    /// with the channel's declared direction (dma-management M3/T20, GRILL
-    /// D05/C06). The span's role (source vs destination) is fixed by the CHANNEL
-    /// direction; a region/flow that cannot serve that role is rejected.
-    #[error(
-        "DMA-ERR-DIRECTION-MISMATCH: the transfer endpoint is incompatible with channel `{channel}`'s \
-         declared direction `{direction}`: {detail} (D05/C06)"
-    )]
-    DirectionMismatch {
-        /// The channel id.
-        channel: String,
-        /// The channel's declared direction (the OS-agnostic spelling).
-        direction: String,
-        /// Why the endpoint cannot serve the direction's role.
-        detail: String,
-    },
-    /// `DMA-ERR-SPAN-BOUNDS`: a `region.span(range)` is out of bounds or empty
-    /// (dma-management M3/T20, GRILL C06): `range.end > element_count`, or a
-    /// zero-length (`range.start >= range.end`) span, where statically known.
-    #[error(
-        "DMA-ERR-SPAN-BOUNDS: `region.span(range)` on region `{region}` is invalid: {detail} (C06)"
-    )]
-    SpanBounds {
-        /// The provenance region id.
-        region: String,
-        /// What is out of bounds (OOB end, or zero-length).
-        detail: String,
-    },
-    /// `DMA-ERR-LAYOUT-VERIFY`: the C03 layout verify rule (dma-management M4/T19,
-    /// GRILL C03/D08) found a `#[rseq::dma_region]` declaration or an
-    /// `element_access` reinterpret view that violates a layout clause: the
-    /// declared `T` or an access view `V` is not `Sized + DmaPod` (repr(C) POD: no
-    /// Drop, no refs/pointers, no DST/`dyn`, no unresolved generics), or
-    /// `size_of::<V>() > element_size`, or `align_of::<V>() > region_alignment`, or
-    /// `element_size % align_of::<V>() != 0`, or a static index `i` is out of
-    /// `[0, element_count)`. The diagnostic NAMES the violated clause (C03). This
-    /// is the full per-access verify; the M1 `DMA-ERR-LAYOUT-MISMATCH` is the
-    /// declaration-time size/align/stride numeric guard.
-    #[error(
-        "DMA-ERR-LAYOUT-VERIFY: region `{region}` violates the layout clause `{clause}`: {detail} \
-         (C03/D08)"
-    )]
-    LayoutVerify {
-        /// The offending region id.
-        region: String,
-        /// The violated C03 clause (e.g. `V: DmaPod (access view)`,
-        /// `size_of::<V>() <= element_size`, `i in [0, element_count)`).
-        clause: &'static str,
-        /// The concrete numbers / POD reason behind the violation.
-        detail: String,
-    },
-}
+    /// A locked serial-port frontend check failed.
+    #[error("serial-port validation: {0}")]
+    SerialValidation(SerialDiagnostic),
 
-impl DmaDiagnostic {
-    /// The stable `DMA-ERR-*` diagnostic code for this rejection (dma-management
-    /// M4/T22). The programmatic accessor for the recognition-half diagnostic family
-    /// (the binding-half codes are `DmaL2Error::code` — the `DMA-L2-*` set). Every
-    /// `DmaDiagnostic` variant carries exactly one code, mirroring the embedded
-    /// `#[error("DMA-ERR-…")]` prefix, so the compile-fail oracle corpus can assert a
-    /// rejection by code without string-matching the message body. The full coded
-    /// reject set: recognition + fallibility (T17) + layout (T19) + anti-form/
-    /// direction/span (T20) + the M1 attr/form rejects.
-    pub fn code(&self) -> &'static str {
-        match self {
-            DmaDiagnostic::MissingKey { .. } => "DMA-ERR-MISSING-KEY",
-            DmaDiagnostic::MalformedAttr { .. } => "DMA-ERR-MALFORMED-ATTR",
-            DmaDiagnostic::AttrOnNonRegion { .. } => "DMA-ERR-ATTR-ON-NON-REGION",
-            DmaDiagnostic::UnsupportedForm { .. } => "DMA-ERR-UNSUPPORTED-FORM",
-            DmaDiagnostic::DuplicateId { .. } => "DMA-ERR-DUPLICATE-ID",
-            DmaDiagnostic::LayoutMismatch { .. } => "DMA-ERR-LAYOUT-MISMATCH",
-            DmaDiagnostic::ChannelAttr { .. } => "DMA-ERR-MISSING-DIRECTION",
-            DmaDiagnostic::DiscardedResult { .. } => "DMA-ERR-DISCARDED-RESULT",
-            DmaDiagnostic::CompletionAttr { .. } => "DMA-ERR-COMPLETION-ATTR",
-            DmaDiagnostic::UnknownCompletionChannel { .. } => "DMA-ERR-UNKNOWN-COMPLETION-CHANNEL",
-            DmaDiagnostic::AntiForm { .. } => "DMA-ERR-ANTI-FORM",
-            DmaDiagnostic::DirectionMismatch { .. } => "DMA-ERR-DIRECTION-MISMATCH",
-            DmaDiagnostic::SpanBounds { .. } => "DMA-ERR-SPAN-BOUNDS",
-            DmaDiagnostic::LayoutVerify { .. } => "DMA-ERR-LAYOUT-VERIFY",
-        }
-    }
+    /// A locked DMA ownership/lifetime frontend check failed.
+    #[error("DMA-management validation: {0}")]
+    DmaValidation(DmaDiagnostic),
+
+    /// The locked device-command-transport admission surface is malformed.
+    #[error("device-command-transport validation: {0}")]
+    TransportValidation(TransportDiagnostic),
+    /// A locked network-interface frontend check failed.
+    #[error("network-interface-management validation: {0}")]
+    NetworkValidation(NetworkDiagnostic),
 }
 
 /// Per-construct atomic-memory-access-and-ordering (atomicity) frontend
@@ -1161,137 +859,6 @@ pub enum AtomicDiagnostic {
     },
 }
 
-/// Per-construct serial device-class frontend diagnostics (construct #7). The
-/// `SER-ERR-*` family. Carried by [`BridgeError::SerialValidation`]. T03 mints
-/// the recognition diagnostics (`MISSING-BASE`, `TYPE-MISMATCH`,
-/// `BAD-VARIANTS`); T04 adds the enforcement matrix (dynamic `irq_source_set`
-/// call rejection + deferred-member capability gates).
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
-pub enum SerialDiagnostic {
-    /// `SER-ERR-MISSING-BASE`: a `#[rseq::device_class(serial)]` driver does not
-    /// implement the required base `Serial` trait (C04).
-    #[error(
-        "SER-ERR-MISSING-BASE: serial-class driver `{driver}` does not implement the base \
-         `Serial` trait (C04: port_service_set/data_ready_query/data_unit_write/data_unit_read)"
-    )]
-    MissingBase {
-        /// The offending driver's logical name.
-        driver: String,
-    },
-    /// `SER-ERR-TYPE-MISMATCH`: a recognized serial method carries a support
-    /// type of the wrong shape (e.g. a non-enum where an enum is required).
-    #[error("SER-ERR-TYPE-MISMATCH: driver `{driver}` serial type `{type_name}`: {detail}")]
-    TypeMismatch {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The support type that mismatched.
-        type_name: String,
-        /// What was expected.
-        detail: String,
-    },
-    /// `SER-ERR-BAD-VARIANTS`: a serial support enum is missing a required
-    /// variant of the closed vocab (so the compiler cannot mint the literal).
-    #[error("SER-ERR-BAD-VARIANTS: driver `{driver}` serial enum `{type_name}`: {detail}")]
-    BadVariants {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The offending enum's name.
-        type_name: String,
-        /// What was missing/wrong.
-        detail: String,
-    },
-    /// `SER-ERR-DYNAMIC-IRQ-SET` (T04, R07/D03/I01): an author method body calls
-    /// `irq_source_set` directly. The op is BACKEND-CALLED only — the compiler
-    /// owns WHEN each source is armed/disarmed (the per-OS scatter sites); a
-    /// dynamic author call breaks the portable placement contract.
-    #[error(
-        "SER-ERR-DYNAMIC-IRQ-SET: driver `{driver}` method `{caller}` calls `irq_source_set` \
-         directly — it is backend-called only (the compiler arms/disarms sources at the per-OS \
-         scatter sites; the author owns only the mask bits in the `irq_source_set` match arms)"
-    )]
-    DynamicIrqSourceSet {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The author method whose body contains the illegal call.
-        caller: String,
-    },
-    /// `SER-ERR-DEFERRED-MEMBER` (T04, R10/C03/C05): an author impl OVERRIDES a
-    /// v1-deferred member inside an in-scope trait (`SerialRuntimeLineConfig::`
-    /// `{line_format_readback,break_set,flow_auto_set}` or
-    /// `SerialQueueControl::fifo_purge_hw`). Deferred members are capability-
-    /// gated out of v1; the backend never sees a partially-built surface.
-    #[error(
-        "SER-ERR-DEFERRED-MEMBER: driver `{driver}` impl of `{trait_name}` overrides the \
-         v1-deferred member `{member}` — that capability is not built in v1 (defer it)"
-    )]
-    DeferredMember {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The in-scope trait carrying the deferred member.
-        trait_name: String,
-        /// The deferred member that was overridden.
-        member: String,
-    },
-    /// `SER-ERR-DEFERRED-TRAIT` (T04, R10/C06/C07/C08): a serial-class driver
-    /// implements a v1-deferred companion trait (`SerialModemControl`,
-    /// `SerialConsole`, or `SerialBulkTransfer`). Those planes are out of v1.
-    #[error(
-        "SER-ERR-DEFERRED-TRAIT: driver `{driver}` implements the v1-deferred serial trait \
-         `{trait_name}` — that plane is not built in v1 (defer it)"
-    )]
-    DeferredTrait {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The deferred trait that was implemented.
-        trait_name: String,
-    },
-    /// `SER-ERR-REPR-CONST` (O2 hardening): an author bit-position const
-    /// (`CAUSE_*` for `CauseSetRepr`, `RX_ERR_*` for `RxErrorRepr`) disagrees with
-    /// the pinned representation's convention (bit position = the canonical
-    /// `SerialCause`/`SerialRxErrorKind` discriminant). The backends decode the
-    /// authored bitsets against the pinned convention, so a mismatched const
-    /// would make them silently MISCLASSIFY the decoded causes / inline errors —
-    /// caught here at the frontend instead.
-    #[error(
-        "SER-ERR-REPR-CONST: {repr} bit const `{const_name}` = {found:#x}, but the pinned \
-         {repr}Repr convention requires {expected:#x} (bit position = the canonical \
-         discriminant); the backend would misclassify — fix the const to match"
-    )]
-    ReprConstMismatch {
-        /// Which representation the const belongs to (`CauseSet` / `RxError`).
-        repr: String,
-        /// The offending const's name.
-        const_name: String,
-        /// The author's value.
-        found: u32,
-        /// The pinned-convention value (`1 << discriminant`).
-        expected: u32,
-    },
-    /// `SER-ERR-BITSET-PROVENANCE` (O2 body-provenance hardening): the value
-    /// constructed and handed to `<CauseSet|RxError>::from_bits` in the author's
-    /// `irq_cause_decode` / `data_unit_read` body carries bits the backend would
-    /// MISCLASSIFY — either a constant bit outside the pinned representation's
-    /// bit-domain (a raw literal or a wrong-value const), or a non-constant
-    /// (device-derived / computed) contribution. The backend decodes the bitset
-    /// against the pinned convention, so the bitset must be built ONLY from
-    /// convention-domain constant bits. This catches the raw-literal /
-    /// differently-named-const / device-bit-leak bypasses of the named-const
-    /// check; the device→semantic mapping (which device bit means which cause)
-    /// remains irreducibly author knowledge (documented residual).
-    #[error(
-        "SER-ERR-BITSET-PROVENANCE: the `{repr}` bitset built in `{op}` is not a pure OR of \
-         pinned {repr}Repr convention bits — {detail}; the backend would misclassify"
-    )]
-    BitsetProvenance {
-        /// Which representation (`CauseSet` / `RxError`).
-        repr: String,
-        /// The op whose body builds the bitset.
-        op: String,
-        /// What was wrong (foreign bits / non-constant contribution).
-        detail: String,
-    },
-}
-
 /// Per-construct device-lifecycle validation diagnostics (PLAN T16; GRILL I09;
 /// D06 per-construct numbering). D4 is deferred. Carried by
 /// [`BridgeError::DeviceLifecycleValidation`]. M6 constructs only D3
@@ -1311,11 +878,13 @@ pub enum DeviceLifecycleDiagnostic {
         /// The offending driver's logical name.
         driver: String,
     },
-    /// D3: a user-data field whose type is neither Rule-1 (the scalar zero-init
-    /// whitelist bool/u8/u16/u32/u64) nor Rule-2 (`Option<T: Copy>`).
+    /// D3: a user-data field whose type is neither Rule-1 (the zero-init
+    /// whitelist bool/u8/u16/u32/u64 plus recursively initializable POD
+    /// structs) nor Rule-2 (`Option<T: Copy>`).
     #[error(
         "driver `{driver}` field `{field}` of type `{rejected_type}` is not a valid user-data \
-         field (expected a scalar bool/u8/u16/u32/u64 or Option<T: Copy>)"
+         field (expected a scalar bool/u8/u16/u32/u64, a recursively zero-initializable POD \
+         struct, or Option<T: Copy>)"
     )]
     UserDataNotInitializable {
         /// The offending driver's logical name.
@@ -1566,105 +1135,6 @@ pub enum ClockDiagnostic {
     },
 }
 
-/// Per-construct deferred-work-item-scheduling frontend diagnostics
-/// (deferred-work-item-scheduling construct, contract C06; GRILL D04/D10/D17,
-/// G4/G5/G6). Carried by [`BridgeError::DeferredWorkValidation`]. The `DWS-ERR-*`
-/// family is the whole frontend set — there is no L2 binding (0 L1 / 0 L2
-/// properties, GRILL D02), so there is no `DWS-L2-*` half. This is the v1 BUILT
-/// subset; the design-in IDs (`DWS-ERR-BARE-WH-AMBIGUOUS` for ≥2 `Work`,
-/// `DWS-ERR-EXCLUDED-PRIMITIVE`, `DWS-ERR-COLLAPSE-WITH-TIMER`) are NOT added
-/// (append-only later). Concrete numbering is blessed here within the locked
-/// `DWS-ERR-*` family (GRILL D17).
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
-pub enum DeferredWorkDiagnostic {
-    /// `DWS-ERR-HANDLER-SIGNATURE`: a `#[rseq::work_handler]` method whose
-    /// signature is not the required `fn(&mut self)` shape — wrong receiver
-    /// (must be `&mut self`) or a non-`()` return (a deferred-work handler runs
-    /// in thread context and returns nothing, GRILL G2/I01).
-    #[error(
-        "DWS-ERR-HANDLER-SIGNATURE: driver `{driver}` work handler `{method}`: {detail} \
-         (a `#[rseq::work_handler]` must be `fn(&mut self)` returning `()`)"
-    )]
-    HandlerSignature {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The handler method name.
-        method: String,
-        /// What is wrong with the signature.
-        detail: String,
-    },
-    /// `DWS-ERR-REQUIRED-WORK-NO-HANDLER`: a required `Work` resource with no
-    /// bound `#[rseq::work_handler]` (a `Work` you can never run is broken — the
-    /// analogue of a required `Clock` with no resolved section, GRILL G5).
-    #[error(
-        "DWS-ERR-REQUIRED-WORK-NO-HANDLER: driver `{driver}` declares a required `Work` field \
-         `{field}` with no bound `#[rseq::work_handler]` (a required Work needs exactly one handler)"
-    )]
-    RequiredWorkNoHandler {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The offending `Work` field name.
-        field: String,
-    },
-    /// `DWS-ERR-DUPLICATE-HANDLER`: two `#[rseq::work_handler]` methods bound to
-    /// the same `Work` resource (a `Work` has exactly one handler, GRILL D10).
-    /// Fires with a single `Work` resource (the ≥2-`Work` ambiguity is the
-    /// design-in `DWS-ERR-BARE-WH-AMBIGUOUS`, NOT built).
-    #[error(
-        "DWS-ERR-DUPLICATE-HANDLER: driver `{driver}` binds more than one `#[rseq::work_handler]` \
-         to the `Work` field `{field}` (a Work has exactly one handler)"
-    )]
-    DuplicateHandler {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The over-bound `Work` field name.
-        field: String,
-    },
-    /// `DWS-ERR-BARE-WH-ZERO-WORK`: a bare `#[rseq::work_handler]` on a driver
-    /// that declares no `Work` resource (the bare handler binds the sole `Work`;
-    /// with zero `Work` there is nothing to bind, GRILL G6/D10).
-    #[error(
-        "DWS-ERR-BARE-WH-ZERO-WORK: driver `{driver}` method `{method}` is a `#[rseq::work_handler]` \
-         but the driver declares no `Work` resource (the bare handler binds the sole Work)"
-    )]
-    BareHandlerZeroWork {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The handler method name.
-        method: String,
-    },
-    /// `DWS-ERR-SPOOFED-RECEIVER`: a `#[rseq::intrinsic("deferred_work_submit")]`
-    /// tag on a method whose receiver is not the `Work` resource shell — a
-    /// spoofed submit op (the `submit` op exists only on `Work`, GRILL D11,
-    /// mirror clock N22), OR a `.submit()` whose receiver is not a direct field
-    /// path to a bound `Work` (aliases/projections are design-in, NOT built).
-    #[error(
-        "DWS-ERR-SPOOFED-RECEIVER: a `deferred_work_submit` op has receiver `{receiver}`, not a \
-         direct field path to a bound `Work` resource (submit exists only on a directly-named Work field)"
-    )]
-    SpoofedReceiver {
-        /// The receiver type / path the submit op resolves to.
-        receiver: String,
-    },
-    /// `DWS-ERR-UNSUPPORTED-FORM`: a recognized `Work` field in a form v1 does
-    /// not build — `Option<Work>` / `[Work; N]` / `Vec<Work>` / `&Work`. v1
-    /// builds only the required single `Work` form (GRILL D01/T04; their
-    /// *rejection* is built, their *support* is design-in).
-    #[error(
-        "DWS-ERR-UNSUPPORTED-FORM: driver `{driver}` work field `{field}` uses the unsupported \
-         `{form}` form; v1 builds only the required single `Work` form \
-         (`Option<Work>`/`[Work; N]`/`Vec<Work>`/`&Work` are designed-in, not built)"
-    )]
-    UnsupportedForm {
-        /// The offending driver's logical name.
-        driver: String,
-        /// The offending field name.
-        field: String,
-        /// The recognized-but-rejected form (e.g. `Option<Work>`).
-        form: String,
-    },
-}
-
 /// Per-construct pin-controller-and-GPIO-configuration frontend (recognition)
 /// diagnostics (pinctrl state-selection construct, contract C06; GRILL
 /// D04/D07/D11). Carried by [`BridgeError::PinctrlValidation`]. The `PIN-ERR-*`
@@ -1811,6 +1281,167 @@ pub enum PinctrlDiagnostic {
         method: String,
         /// The receiver type the method is declared on.
         receiver: String,
+    },
+}
+
+/// Per-construct deferred-work-item-scheduling frontend diagnostics
+/// (deferred-work-item-scheduling construct, contract C06; GRILL D04/D10/D17,
+/// G4/G5/G6). Carried by [`BridgeError::DeferredWorkValidation`]. The `DWS-ERR-*`
+/// family is the whole frontend set — there is no L2 binding (0 L1 / 0 L2
+/// properties, GRILL D02), so there is no `DWS-L2-*` half. This is the v1 BUILT
+/// subset; the design-in IDs (`DWS-ERR-BARE-WH-AMBIGUOUS` for ≥2 `Work`,
+/// `DWS-ERR-EXCLUDED-PRIMITIVE`, `DWS-ERR-COLLAPSE-WITH-TIMER`) are NOT added
+/// (append-only later). Concrete numbering is blessed here within the locked
+/// `DWS-ERR-*` family (GRILL D17).
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum DeferredWorkDiagnostic {
+    /// `DWS-ERR-HANDLER-SIGNATURE`: a `#[rseq::work_handler]` method whose
+    /// signature is not the required `fn(&mut self)` shape — wrong receiver
+    /// (must be `&mut self`) or a non-`()` return (a deferred-work handler runs
+    /// in thread context and returns nothing, GRILL G2/I01).
+    #[error(
+        "DWS-ERR-HANDLER-SIGNATURE: driver `{driver}` work handler `{method}`: {detail} \
+         (a `#[rseq::work_handler]` must be `fn(&mut self)` returning `()`)"
+    )]
+    HandlerSignature {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The handler method name.
+        method: String,
+        /// What is wrong with the signature.
+        detail: String,
+    },
+    /// `DWS-ERR-REQUIRED-WORK-NO-HANDLER`: a required `Work` resource with no
+    /// bound `#[rseq::work_handler]` (a `Work` you can never run is broken — the
+    /// analogue of a required `Clock` with no resolved section, GRILL G5).
+    #[error(
+        "DWS-ERR-REQUIRED-WORK-NO-HANDLER: driver `{driver}` declares a required `Work` field \
+         `{field}` with no bound `#[rseq::work_handler]` (a required Work needs exactly one handler)"
+    )]
+    RequiredWorkNoHandler {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending `Work` field name.
+        field: String,
+    },
+    /// `DWS-ERR-DUPLICATE-HANDLER`: two `#[rseq::work_handler]` methods bound to
+    /// the same `Work` resource (a `Work` has exactly one handler, GRILL D10).
+    /// Fires with a single `Work` resource (the ≥2-`Work` ambiguity is the
+    /// design-in `DWS-ERR-BARE-WH-AMBIGUOUS`, NOT built).
+    #[error(
+        "DWS-ERR-DUPLICATE-HANDLER: driver `{driver}` binds more than one `#[rseq::work_handler]` \
+         to the `Work` field `{field}` (a Work has exactly one handler)"
+    )]
+    DuplicateHandler {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The over-bound `Work` field name.
+        field: String,
+    },
+    /// `DWS-ERR-BARE-WH-ZERO-WORK`: a bare `#[rseq::work_handler]` on a driver
+    /// that declares no `Work` resource (the bare handler binds the sole `Work`;
+    /// with zero `Work` there is nothing to bind, GRILL G6/D10).
+    #[error(
+        "DWS-ERR-BARE-WH-ZERO-WORK: driver `{driver}` method `{method}` is a `#[rseq::work_handler]` \
+         but the driver declares no `Work` resource (the bare handler binds the sole Work)"
+    )]
+    BareHandlerZeroWork {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The handler method name.
+        method: String,
+    },
+    /// `DWS-ERR-SPOOFED-RECEIVER`: a `#[rseq::intrinsic("deferred_work_submit")]`
+    /// tag on a method whose receiver is not the `Work` resource shell — a
+    /// spoofed submit op (the `submit` op exists only on `Work`, GRILL D11,
+    /// mirror clock N22), OR a `.submit()` whose receiver is not a direct field
+    /// path to a bound `Work` (aliases/projections are design-in, NOT built).
+    #[error(
+        "DWS-ERR-SPOOFED-RECEIVER: a `deferred_work_submit` op has receiver `{receiver}`, not a \
+         direct field path to a bound `Work` resource (submit exists only on a directly-named Work field)"
+    )]
+    SpoofedReceiver {
+        /// The receiver type / path the submit op resolves to.
+        receiver: String,
+    },
+    /// `DWS-ERR-UNSUPPORTED-FORM`: a recognized `Work` field in a form v1 does
+    /// not build — `Option<Work>` / `[Work; N]` / `Vec<Work>` / `&Work`. v1
+    /// builds only the required single `Work` form (GRILL D01/T04; their
+    /// *rejection* is built, their *support* is design-in).
+    #[error(
+        "DWS-ERR-UNSUPPORTED-FORM: driver `{driver}` work field `{field}` uses the unsupported \
+         `{form}` form; v1 builds only the required single `Work` form \
+         (`Option<Work>`/`[Work; N]`/`Vec<Work>`/`&Work` are designed-in, not built)"
+    )]
+    UnsupportedForm {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+        /// The recognized-but-rejected form (e.g. `Option<Work>`).
+        form: String,
+    },
+}
+
+/// Locked serial-port frontend diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum SerialDiagnostic {
+    #[error("SERIAL-ERR-MISSING-PORT: serial-class driver `{driver}` must implement `SerialPort`")]
+    MissingPort { driver: String },
+    #[error("SERIAL-ERR-WRONG-CLASS: driver `{driver}` implements `SerialPort` but is not tagged device_class(serial)")]
+    WrongDeviceClass { driver: String },
+    #[error("SERIAL-ERR-EXCLUDED-SURFACE: serial-class driver `{driver}` implements excluded historical surface `{surface}`; use the single `SerialPort` element")]
+    ExcludedSurface { driver: String, surface: String },
+    #[error("SERIAL-ERR-BAD-SIGNATURE: driver `{driver}` operation `{operation}`: {detail}")]
+    BadSignature {
+        driver: String,
+        operation: String,
+        detail: String,
+    },
+}
+
+/// Locked DMA buffer/channel frontend diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum DmaDiagnostic {
+    #[error("DMA-ERR-EXCLUDED-SURFACE: driver `{driver}` implements excluded historical surface `{surface}`; the locked L1 elements are `DmaBuffer` and `AsyncTransferChannel`")]
+    ExcludedSurface { driver: String, surface: String },
+    #[error("DMA-ERR-INCOMPLETE-BUFFER: driver `{driver}` is missing required DmaBuffer ownership operations: {missing}")]
+    IncompleteBuffer { driver: String, missing: String },
+    #[error("DMA-ERR-INCOMPLETE-CHANNEL: driver `{driver}` is missing required AsyncTransferChannel lifecycle operations: {missing}")]
+    IncompleteChannel { driver: String, missing: String },
+    #[error("DMA-ERR-TERMINATE-NEEDS-SYNCHRONIZE: driver `{driver}` exposes asynchronous terminate without the synchronize barrier required before callback or buffer resources are released")]
+    TerminateNeedsSynchronize { driver: String },
+    #[error("DMA-ERR-BAD-SIGNATURE: driver `{driver}` operation `{operation}`: {detail}")]
+    BadSignature {
+        driver: String,
+        operation: String,
+        detail: String,
+    },
+}
+
+/// Locked device-command-transport frontend diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum TransportDiagnostic {
+    #[error("DCT-ERR-BAD-SIGNATURE: command transport submit: {detail}")]
+    BadSignature { detail: String },
+    #[error("DCT-ERR-DISCARDED-OUTCOME: command transport submit admission must be consumed as Accepted or Rejected(native_reason)")]
+    DiscardedOutcome,
+}
+
+/// Locked network-interface frontend diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum NetworkDiagnostic {
+    #[error("NIM-ERR-WRONG-CLASS: driver `{driver}` implements `NetworkInterface` but is not tagged device_class(network)")]
+    WrongDeviceClass { driver: String },
+    #[error("NIM-ERR-EXCLUDED-SURFACE: network-class driver `{driver}` implements excluded historical surface `{surface}`; use the full `NetworkInterface` element")]
+    ExcludedSurface { driver: String, surface: String },
+    #[error("NIM-ERR-INCOMPLETE-INTERFACE: driver `{driver}` is missing required network-interface operations: {missing}")]
+    IncompleteInterface { driver: String, missing: String },
+    #[error("NIM-ERR-BAD-SIGNATURE: driver `{driver}` operation `{operation}`: {detail}")]
+    BadSignature {
+        driver: String,
+        operation: String,
+        detail: String,
     },
 }
 
@@ -2766,31 +2397,9 @@ fn scan_terminator_for_synthesis<'tcx>(
                 // must still run for fn-ptr calls whose args carry
                 // vtable / drop-glue needs.
                 if !matches!(canonical.flavor, FunctionInstanceFlavor::FnPtrShim) {
-                    // dma-management T13: a recognized `dma_element_{read,write,
-                    // update}` callee's generic args carry the borrow-closure
-                    // type, whose reified self-signature `for<'r> fn((&'r mut V,))`
-                    // would trip the substantive-HRTB guard during the FnDef-type
-                    // translation below. Bracket BOTH translate_ty calls with the
-                    // narrow closure-reified-sig carve-out, scoped to this exact
-                    // DMA-element-access callee only (the guard restores the flag on
-                    // every exit — incl. the `?` below; the shape gate keeps every
-                    // other binder rejected).
-                    let relax = matches!(
-                        intrinsic::intrinsic_kind_for_def_id(ctxt.input.tcx, canonical.callee_def_id),
-                        Some(regseq_model::IntrinsicKind::Dma(regseq_model::DmaOp::ElementAccess { .. }))
-                    );
-                    // The guard sets the flag to `relax` on enter and restores the
-                    // prior value on drop (every exit, incl. the `?` below). For a
-                    // non-DMA callee `relax` is false, so the global guard is
-                    // unaffected for all other code.
-                    let mut guard = DmaElementClosureRelaxScope::enter_with(ctxt, relax);
-                    let ctxt: &mut BridgeCtxt<'_> = &mut guard;
                     let _ = ty::translate_ty(ctxt, canonical.callee_ty);
-                    if intrinsic::intrinsic_kind_for_def_id(
-                        ctxt.input.tcx,
-                        canonical.callee_def_id,
-                    )
-                    .is_some()
+                    if intrinsic::intrinsic_kind_for_def_id(ctxt.input.tcx, canonical.callee_def_id)
+                        .is_some()
                     {
                         let model_ty = ty::translate_ty(ctxt, canonical.callee_ty)?;
                         if let Ty::FnDef(callee_item, _) =
@@ -2811,38 +2420,6 @@ fn scan_terminator_for_synthesis<'tcx>(
                                 &callee_def_path,
                                 canonical.callee_def_id,
                             )?;
-                        }
-                    }
-                }
-            }
-        }
-        // dma-management T13: if this call is a recognized `dma_element_*`
-        // intrinsic, record the DefPathHash of every closure passed as an
-        // argument, so the later (per-closure, not per-call) closure-instance
-        // construction pass can relax the closure-reified-sig HRTB carve-out for
-        // exactly these closures. A non-DMA closure is never recorded here.
-        if let rustc_middle::mir::Operand::Constant(constant) = func {
-            if let TyKind::FnDef(def_id, generic_args) = constant.const_.ty().kind() {
-                if let Ok(canonical) =
-                    canonicalize_call_site_callee(ctxt.input.tcx, *def_id, generic_args)
-                {
-                    if matches!(
-                        intrinsic::intrinsic_kind_for_def_id(ctxt.input.tcx, canonical.callee_def_id),
-                        Some(regseq_model::IntrinsicKind::Dma(regseq_model::DmaOp::ElementAccess {
-                            ..
-                        }))
-                    ) {
-                        for arg in args.iter() {
-                            let arg_ty = arg.node.ty(local_decls, ctxt.input.tcx);
-                            if let TyKind::Closure(closure_def_id, _) = arg_ty.kind() {
-                                let hash = ctxt.input.tcx.def_path_hash(*closure_def_id);
-                                ctxt.dma_element_closure_defs.insert(DefPathHash {
-                                    stable_crate_id: StableCrateId(
-                                        hash.stable_crate_id().as_u64(),
-                                    ),
-                                    local_hash: hash.local_hash().as_u64(),
-                                });
-                            }
                         }
                     }
                 }
@@ -3121,14 +2698,16 @@ fn construct_instances_and_resolve_cross_references(
     // and force-materialize the overriding instances BEFORE the Phase-5 body
     // drain, so those synthesized callbacks get bodies the backend can emit.
     device_lifecycle::resolve_drivers(ctxt)?;
-    // Serial device-class (construct #7): recognize each serial-class driver's
-    // op-set + capture the support-enum variant maps, force-materializing the op
-    // bodies before the drain (like the lifecycle callbacks). Runs after the
-    // lifecycle pass (device class known) and before `resolve_isrs` so the
-    // serial-class interrupt-handler relaxation (a serial driver's line handler
-    // is the compiler-synthesized serial ISR, not an authored `#[rseq::isr]`) is
-    // in effect when the interrupt pass validates handler presence.
-    serial::resolve_serial(ctxt)?;
+    // Locked device-class-serial recognition: one SerialPort trait whose
+    // authored overrides are the capability set. Run before the body drain so
+    // every supported operation body is force-materialized.
+    serial::resolve_serial_ports(ctxt)?;
+    // Locked DMA recognition is independent of device class. A driver may own
+    // a buffer, an async channel, both, or neither.
+    dma::resolve_dma(ctxt)?;
+    // Locked NIM recognition consumes the already-public sibling tables at
+    // composition time but owns only interface operations.
+    network::resolve_network_interfaces(ctxt)?;
     // Device-interrupt (construct #6): discover + validate + bind the
     // #[rseq::isr] handlers and force-materialize their instances before the
     // drain, exactly like the lifecycle callbacks. The pending attribute
@@ -3171,6 +2750,12 @@ fn construct_instances_and_resolve_cross_references(
     // another late-item path.
     let item_remap = ctxt.model.sort_items_by_f4();
     ctxt.handles.remap_item_ids(&item_remap);
+    // ISR/work-handler bodies are force-materialized after the first intrinsic
+    // pass. Calls first discovered in those bodies (for example an ISR's
+    // `self.work.submit()`) must receive the same intrinsic marker as calls in
+    // lifecycle roots before the backend computes its reachable closure.
+    intrinsic::materialise_intrinsics(ctxt);
+    deferred_work::validate_deferred_work_signatures(ctxt)?;
     const_::construct_const_memory_static_instances(ctxt)?;
     // Audit-finding regseq-driver-48 (spec.md section 26.6
     // `I-DiagLog-CallArity` carrier-survival contract): the
@@ -3236,6 +2821,10 @@ fn construct_instances_and_resolve_cross_references(
     // last — after every body is materialized, so it walks the recognized atomic
     // calls.
     atomic::validate_atomic_ops(&ctxt.model)?;
+    // DCT admission is synchronous and must be observed at the call site.
+    // This pass records no completion/correlation state; it only rejects a
+    // thrown-away Accepted/Rejected value.
+    transport::validate_submit_results(&ctxt.model)?;
     // Synchronization op / acquire-site recognition: walk the materialized
     // bodies and record each `lock()` acquire + its paired guard release into
     // the `SynchronizationTables` sibling table. Runs here — after the bodies
@@ -3258,39 +2847,6 @@ fn construct_instances_and_resolve_cross_references(
     // recorded — the same placement discipline, and the first pass that both
     // consumes and produces context markings (all intraprocedural/lexical, I04).
     synchronization::analyse_sync_contexts(&mut ctxt.model)?;
-    // DMA-management coherent-region call-site recognition (dma-management
-    // construct, M1 region path): walk the materialized bodies and record each
-    // `element_access` closure-borrow site (verb + view type `V` + index +
-    // lexical extent) onto its `DmaRegion` resource facts, disambiguating the
-    // generic read/write/update verbs from `Mmio<T>`'s by the receiver resource
-    // type (GRILL T06/T08). Runs here — after the bodies are materialized and the
-    // item sort has re-keyed `dma.drivers` — the same placement discipline as
-    // `synchronization::recognise_acquire_sites`.
-    dma::recognise_dma_region_sites(&mut ctxt.model)?;
-    // DMA-management streaming recognition + the fallibility lint (dma-management
-    // construct, M2/T07 + M2/T17): record `dma::stream(buf, flow)` sites into the
-    // owning driver's `streams` table, and reject a DISCARDED `Result` from a
-    // fallible DMA op (`stream`/`stage_transfer`/`start_transfer`/`remaining_bytes`
-    // — including the explicit `let _ = …` form `unused_must_use` misses, GRILL
-    // C10/I06). Runs right after the region call-site pass — same placement
-    // discipline.
-    dma::recognise_dma_streams_and_fallibility(&mut ctxt.model)?;
-    // DMA-management `stage_transfer` endpoint verify (dma-management construct,
-    // M3/T20, GRILL C06/I07): reject the bare `stage_transfer(&DmaRegion<T>)`
-    // anti-form (a region passed directly instead of a `region.span(range)`). The
-    // span-bounds (OOB/zero-length) check fires at span recognition; this pass owns
-    // the anti-form check. Runs after `recognise_dma_region_sites` recorded the
-    // region field markers it chases.
-    dma::validate_stage_transfer_endpoints(&ctxt.model)?;
-    // DMA-management C03 layout verify rule (dma-management construct, M4/T19,
-    // GRILL C03/D08): a TyCtxt-aware pass (the real `DmaPod` predicate reads the
-    // rustc `Ty` of the declared `T` AND every `element_access` reinterpret view
-    // `V`) enforcing `V: Sized + DmaPod`, `size_of::<V>() <= element_size`,
-    // `align_of::<V>() <= region_alignment`, `element_size % align_of::<V>() == 0`,
-    // and `i in [0, element_count)` (static). Runs after `recognise_dma_region_sites`
-    // recorded the per-access view sites; takes the full `BridgeCtxt` so `tcx` is in
-    // hand (the model-only `layout_validator` cannot inspect Drop/refs/generics).
-    dma::verify_dma_layout(ctxt)?;
     Ok(())
 }
 
@@ -4270,16 +3826,7 @@ fn resolve_closure_scratch(
     if !matches!(closure_rustc_ty.kind(), TyKind::Closure(..)) {
         return Ok(None);
     }
-    // dma-management T13: this per-closure pass runs after the call-site relax
-    // window has closed, so re-establish the narrow closure-reified-sig carve-out
-    // for exactly the closures recorded as DMA element-access arguments (and only
-    // those). The guard restores the flag on every exit; the shape gate keeps
-    // every non-closure-self binder rejected even within the window.
-    let relax = ctxt.dma_element_closure_defs.contains(&closure_hash);
-    let closure_ty_id = {
-        let mut guard = DmaElementClosureRelaxScope::enter_with(ctxt, relax);
-        ty::translate_ty(&mut guard, closure_rustc_ty)?
-    };
+    let closure_ty_id = ty::translate_ty(ctxt, closure_rustc_ty)?;
     let captures_struct_ty_id = match ctxt
         .model
         .closure_captures_struct_ty

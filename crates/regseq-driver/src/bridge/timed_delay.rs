@@ -90,10 +90,7 @@ pub(crate) fn validate_delay_signatures(cx: &mut BridgeCtxt<'_>) -> Result<(), B
             return Err(BridgeError::TimedCpuDelayValidation(
                 TimedCpuDelayDiagnostic::ArgTypeMismatch {
                     intrinsic: path.to_string(),
-                    detail: format!(
-                        "parameter type `{}` is not `regseq::Duration`",
-                        inputs[0]
-                    ),
+                    detail: format!("parameter type `{}` is not `regseq::Duration`", inputs[0]),
                 },
             ));
         }

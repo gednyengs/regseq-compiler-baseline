@@ -173,21 +173,21 @@ fn e1000_composed_six_stage_oracle() {
     // writes (mta[3] @0x520c, vfta[5] @0x5614, ra[1] @0x5408/0x540c with the
     // AV bit), and the read-clear ICR read.
     for line in [
-        "R32 @0xf0000000",                 // CTRL RMW read
-        "W32 @0xf0000000 = 0x00000040",    // CTRL write: SLU over regfile 0
-        "W32 @0xf0003804 = 0x00000001",    // TDBAH (HIGH first)
-        "W32 @0xf0003800 = 0x00002000",    // TDBAL (LOW second)
-        "W32 @0xf0003808 = 0x00000080",    // TDLEN
-        "W32 @0xf0003818 = 0x00000000",    // TDT doorbell, ring EMPTY
-        "R32 @0xf0000400",                 // TCTL RMW read
-        "W32 @0xf0000400 = 0x00000002",    // TCTL.EN write
-        "W32 @0xf000520c = 0x00000000",    // mta[3] (runtime index)
-        "W32 @0xf0005614 = 0x00000000",    // vfta[5] (runtime index)
-        "W32 @0xf0005408 = 0xaabbccdd",    // ra[1].ral (array-of-struct)
-        "W32 @0xf000540c = 0x80000000",    // ra[1].rah AV (write_field)
-        "R32 @0xf00000c0",                 // ICR read-clear
-        "W32 @0xf00000d8 = 0xffffffff",    // deinit: IMC mask-all
-        "W32 @0xf0000400 = 0x00000000",    // deinit: TCTL quiesce
+        "R32 @0xf0000000",              // CTRL RMW read
+        "W32 @0xf0000000 = 0x00000040", // CTRL write: SLU over regfile 0
+        "W32 @0xf0003804 = 0x00000001", // TDBAH (HIGH first)
+        "W32 @0xf0003800 = 0x00002000", // TDBAL (LOW second)
+        "W32 @0xf0003808 = 0x00000080", // TDLEN
+        "W32 @0xf0003818 = 0x00000000", // TDT doorbell, ring EMPTY
+        "R32 @0xf0000400",              // TCTL RMW read
+        "W32 @0xf0000400 = 0x00000002", // TCTL.EN write
+        "W32 @0xf000520c = 0x00000000", // mta[3] (runtime index)
+        "W32 @0xf0005614 = 0x00000000", // vfta[5] (runtime index)
+        "W32 @0xf0005408 = 0xaabbccdd", // ra[1].ral (array-of-struct)
+        "W32 @0xf000540c = 0x80000000", // ra[1].rah AV (write_field)
+        "R32 @0xf00000c0",              // ICR read-clear
+        "W32 @0xf00000d8 = 0xffffffff", // deinit: IMC mask-all
+        "W32 @0xf0000400 = 0x00000000", // deinit: TCTL quiesce
     ] {
         assert!(
             stdout.contains(line),
@@ -308,9 +308,17 @@ fn assert_recognition_facts(model: &RegseqModel) {
         region.binding.is_resolved(),
         "the L2 join must resolve the binding (A-10 trigger)"
     );
-    assert_eq!(region.binding.base, Some(0xf000_0000), "C04 dead-literal base");
+    assert_eq!(
+        region.binding.base,
+        Some(0xf000_0000),
+        "C04 dead-literal base"
+    );
     assert_eq!(region.binding.size, Some(0x2_0000), "C04 dead-literal size");
-    assert_eq!(region.binding.effective_bar, Some(0), "BAR0 (L2.bar ?? L1.bar)");
+    assert_eq!(
+        region.binding.effective_bar,
+        Some(0),
+        "BAR0 (L2.bar ?? L1.bar)"
+    );
 
     // -- register-access + config + diagnostics-logging + RegseqError: the
     //    domain-attr tables must carry all five MMIO op kinds, both config

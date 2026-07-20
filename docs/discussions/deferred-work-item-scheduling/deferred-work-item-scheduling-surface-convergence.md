@@ -10,6 +10,13 @@ under
 `~/regseq-eval/.claude/sekekama/grill-to-plan/specs/deferred-work-item-scheduling/`
 (`GRILL-2026-06-22-124836` + `PRD-2026-06-22-130922` + `PLAN-2026-06-22-145441`).
 
+> **C0-DWS addendum.** The historical surface, model, diagnostics, generic-C
+> contract, and tests below remain unchanged. The locked gap-closure disposition
+> supersedes only the historical real-backend rejection: Linux now maps the same
+> resource to `work_struct`/`INIT_WORK`/`schedule_work`/`cancel_work_sync`, and
+> Zephyr maps it to `k_work`/`k_work_init`/`k_work_submit`/`k_work_cancel_sync`.
+> This adds no L1/L2 vocabulary and does not create or count a fifth target.
+
 **Scope:** a driver declares a typed opaque `Work` field, binds a handler that runs
 **later in sleepable thread context**, and schedules it with `self.work.submit()`,
 with compiler-managed `init_work`/`cancel_work`. This is the OS-agnostic

@@ -215,7 +215,7 @@ pub fn west_build_with_workspace(
     // O4 set (backend-zephyr-c-e1000 T07, discovered fail-loud at first
     // build): CONFIG_PCIE compiles drivers/pcie/host + the DEVICE_PCIE
     // context machinery the generated scaffold consumes.
-    let prj_conf = match driver.bus {
+    let mut prj_conf = match driver.bus {
         StagedBus::Platform { .. } => {
             "CONFIG_LOG=y\nCONFIG_LOG_MODE_DEFERRED=y\nCONFIG_CBPRINTF_COMPLETE=y\nCONFIG_CBPRINTF_FULL_INTEGRAL=y\nCONFIG_DEVICE_DEINIT_SUPPORT=y\n".to_string()
         }
@@ -223,6 +223,36 @@ pub fn west_build_with_workspace(
             "CONFIG_LOG=y\nCONFIG_LOG_MODE_DEFERRED=y\nCONFIG_CBPRINTF_COMPLETE=y\nCONFIG_CBPRINTF_FULL_INTEGRAL=y\nCONFIG_DEVICE_DEINIT_SUPPORT=y\nCONFIG_PCIE=y\n".to_string()
         }
     };
+    if driver.tu.contains("DEVICE_API(uart,") {
+        // C1-serial: compile every emitted uart_driver_api slot, not only the
+        // polling prefix selected by a board default. These are build-harness
+        // facts; the portable model remains capability-gated.
+        prj_conf.push_str(
+            "CONFIG_SERIAL=y\nCONFIG_UART_INTERRUPT_DRIVEN=y\n\
+             CONFIG_UART_USE_RUNTIME_CONFIGURE=y\n",
+        );
+    }
+    if driver.tu.contains("<zephyr/drivers/dma.h>") {
+        // C2-DMA: force the generated channel helpers through the enabled
+        // public DMA surface instead of compiling only a disabled-header
+        // configuration.
+        prj_conf.push_str("CONFIG_DMA=y\n");
+    }
+    if driver.tu.contains("<zephyr/net/net_if.h>") {
+        // C4-NIM: compile the link-time net_if/admin/packet/property helpers
+        // against the enabled public networking surface. The qemu_cortex_a53
+        // gate has no entropy provider, while Zephyr net_if IPv6 reachability
+        // timing links sys_rand_get; use Zephyr's test-only timer RNG here.
+        prj_conf.push_str(
+            "CONFIG_NETWORKING=y\nCONFIG_NET_L2_ETHERNET=y\n\
+             CONFIG_TEST_RANDOM_GENERATOR=y\nCONFIG_TIMER_RANDOM_GENERATOR=y\n",
+        );
+    }
+    if driver.tu.contains("<zephyr/drivers/mbox.h>") {
+        // C3-DCT: compile and link the immediate mailbox admission API used by
+        // the generated submit operation.
+        prj_conf.push_str("CONFIG_MBOX=y\n");
+    }
     std::fs::write(app.join("prj.conf"), prj_conf).map_err(WestError::Io)?;
     // The DUT overlay, per bus form.
     let overlay = match driver.bus {
@@ -237,10 +267,17 @@ pub fn west_build_with_workspace(
             let interrupts_prop = interrupts
                 .map(|cells| format!("\t\t\tinterrupts = {cells};\n"))
                 .unwrap_or_default();
+            // Exercise the generated serial boot path in the real-header gate.
+            // Serial-free/initfail products retain the property-absent shape.
+            let serial_boot_prop = driver
+                .tu
+                .contains("_uart_boot_configure")
+                .then_some("\t\t\tcurrent-speed = <115200>;\n")
+                .unwrap_or_default();
             format!(
                 "/* The eval DUT node (GRILL D04): the second PL011, matched ONLY by\n \
                  * the generated driver's `{}` compatible. */\n\
-                 / {{\n\tsoc {{\n\t\tregseq_dut: uart@{base:x} {{\n\t\t\tcompatible = \"{}\";\n\t\t\treg = <{base_hi:#x} {base_lo:#x} 0x00 {size:#x}>;\n{interrupts_prop}\t\t\tstatus = \"okay\";\n\t\t}};\n\t}};\n}};\n",
+                 / {{\n\tsoc {{\n\t\tregseq_dut: uart@{base:x} {{\n\t\t\tcompatible = \"{}\";\n\t\t\treg = <{base_hi:#x} {base_lo:#x} 0x00 {size:#x}>;\n{interrupts_prop}{serial_boot_prop}\t\t\tstatus = \"okay\";\n\t\t}};\n\t}};\n}};\n",
                 driver.compatible, driver.compatible
             )
         }
@@ -251,12 +288,15 @@ pub fn west_build_with_workspace(
             // The PCIe-over-DT form (backend-zephyr-c-e1000 D08(4)): a
             // vendor/device-matched child under the board's pcie0 bus, NO
             // reg (probe-time BAR sizing) — the witnessed qemu_x86.dts eth0
-            // idiom, hermetically owned by the generated compatible.
+            // idiom, including its interrupt cells, hermetically owned by the
+            // generated compatible. Disable the board's native eth0 instance
+            // because this replacement owns the same QEMU device and IRQ 11.
             format!(
                 "/* The hermetic e1000 DUT node (backend-zephyr-c-e1000 D08(4)):\n \
                  * matched ONLY by the generated driver's `{}` compatible;\n \
                  * vendor-id/device-id feed the DEVICE_PCIE context (PCIE_DT_ID). */\n\
-                 &pcie0 {{\n\tregseq_dut: regseq_dut {{\n\t\tcompatible = \"{}\";\n\t\tvendor-id = <{vendor_id:#x}>;\n\t\tdevice-id = <{device_id:#x}>;\n\t\tstatus = \"okay\";\n\t}};\n}};\n",
+                 &eth0 {{\n\tstatus = \"disabled\";\n}};\n\
+                 &pcie0 {{\n\tregseq_dut: regseq_dut {{\n\t\tcompatible = \"{}\";\n\t\tvendor-id = <{vendor_id:#x}>;\n\t\tdevice-id = <{device_id:#x}>;\n\t\tinterrupts = <11 IRQ_TYPE_LOWEST_EDGE_RISING 3>;\n\t\tinterrupt-parent = <&intc>;\n\t\tstatus = \"okay\";\n\t}};\n}};\n",
                 driver.compatible, driver.compatible
             )
         }

@@ -1,0 +1,5 @@
+name = "dma-independent-lifetimes"
+kind = "rust"
+lifecycle_scenario = "orderly"
+covers = ["DMA-TWO-L1-ELEMENTS", "DMA-INDEPENDENT-LIFETIMES", "DMA-BUFFER-REUSE"]
+expect = "pass"

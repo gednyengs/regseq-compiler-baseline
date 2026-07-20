@@ -7,9 +7,9 @@
 
 use crate::bus_resource::BrmError;
 use crate::clock::ClockL2Error;
-use crate::dma::DmaL2Error;
 use crate::interrupt::InterruptL2Error;
 use crate::pinctrl::PinctrlL2Error;
+use crate::serial_hardware_ops::SerialHardwareOpsL2Error;
 
 /// An error surfaced by an [`crate::L2Binder`] tenant.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,8 +22,8 @@ pub enum L2Error {
     Clock(ClockL2Error),
     /// Pin-controller-and-GPIO-configuration surface diagnostic.
     Pinctrl(PinctrlL2Error),
-    /// DMA-management surface diagnostic.
-    Dma(DmaL2Error),
+    /// Backend-specific serial hardware capability gate.
+    SerialHardwareOps(SerialHardwareOpsL2Error),
 }
 
 impl L2Error {
@@ -34,7 +34,7 @@ impl L2Error {
             L2Error::Interrupt(e) => e.code(),
             L2Error::Clock(e) => e.code(),
             L2Error::Pinctrl(e) => e.code(),
-            L2Error::Dma(e) => e.code(),
+            L2Error::SerialHardwareOps(e) => e.code(),
         }
     }
 }
@@ -47,7 +47,7 @@ impl std::fmt::Display for L2Error {
             L2Error::Interrupt(e) => write!(f, "{e}"),
             L2Error::Clock(e) => write!(f, "{e}"),
             L2Error::Pinctrl(e) => write!(f, "{e}"),
-            L2Error::Dma(e) => write!(f, "{e}"),
+            L2Error::SerialHardwareOps(e) => write!(f, "{e}"),
         }
     }
 }
@@ -76,9 +76,9 @@ impl From<PinctrlL2Error> for L2Error {
     }
 }
 
-impl From<DmaL2Error> for L2Error {
-    fn from(e: DmaL2Error) -> Self {
-        L2Error::Dma(e)
+impl From<SerialHardwareOpsL2Error> for L2Error {
+    fn from(e: SerialHardwareOpsL2Error) -> Self {
+        L2Error::SerialHardwareOps(e)
     }
 }
 
@@ -114,7 +114,10 @@ impl std::fmt::Display for PlatformIdentityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PlatformIdentityError::UnknownOs { token, expected } => {
-                write!(f, "unknown [platform] os {token:?}; expected one of: {expected}")
+                write!(
+                    f,
+                    "unknown [platform] os {token:?}; expected one of: {expected}"
+                )
             }
         }
     }

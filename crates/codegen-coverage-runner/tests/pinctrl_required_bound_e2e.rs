@@ -33,7 +33,10 @@ fn pinctrl_pl011_required_bound_oracle() {
         .find(|f| f.manifest.name == "pinctrl-pl011-required-bound")
         .expect("pinctrl-pl011-required-bound fixture discovered");
 
-    assert!(fixture.platform.is_some(), "required-bound carries platform.toml");
+    assert!(
+        fixture.platform.is_some(),
+        "required-bound carries platform.toml"
+    );
 
     if std::env::var_os("BLESS").is_some() {
         let options = pipeline::backend_options_for(fixture).expect("backend options");

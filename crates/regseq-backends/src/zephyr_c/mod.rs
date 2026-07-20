@@ -3,7 +3,8 @@
 //! devicetree binding yaml, under the ratified F-1 independent-lowering
 //! contract: `generic_c` is the authoritative *reference* lowering and
 //! frozen oracle, `linux_c` is a structural sibling — this module owns its
-//! own emission shape and shares no code with either.
+//! OS-facing emission shape. Only model-structural core shim classification
+//! is backend-shared.
 //!
 //! Emission ordering is the ratified TU skeleton
 //! (`docs/discussions/zephyr-backend/zephyr-scaffold-and-dispatch.md` §1):
@@ -27,7 +28,9 @@
 
 mod body;
 mod clock;
+mod dma;
 mod naming;
+mod network;
 mod pinctrl;
 mod serial;
 mod sync;
@@ -148,6 +151,30 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
             "more than one recognized driver in the model; one Zephyr driver TU per driver".into(),
         ));
     }
+    if model
+        .network_interface
+        .drivers
+        .get(driver_item)
+        .is_some_and(|interface| interface.ops.set_published.is_some())
+    {
+        return Err(EmitError::Rejected(
+            "network-interface runtime publication is unsupported on Zephyr: net_if instances are link-time-created; no successful set_published lowering is synthesized".into(),
+        ));
+    }
+    // Locked capability absence: Zephyr exposes caller-buffer alignment but
+    // no owned DMA-buffer allocator. Reject before bus-specific scaffolding so
+    // this semantic absence cannot be masked by an unrelated scaffold error.
+    if model
+        .dma
+        .drivers
+        .get(driver_item)
+        .is_some_and(|dma| dma.buffer.is_some())
+        && !dma::descriptor_datapath(model, *driver_item)
+    {
+        return Err(EmitError::Rejected(
+            "DmaBuffer owned allocation is unsupported on Zephyr: the locked headers expose caller-buffer alignment but no owned-buffer allocator".into(),
+        ));
+    }
 
     // -- unit scope gates (GRILL D12; R04) -----------------------------------
     // Bus selector: the DT path (Platform, Amba folding into it per
@@ -164,14 +191,12 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         }
     };
 
-    // Device class: a declared non-Generic class registers class-neutral
-    // (the SAME NULL-api scaffold as ClassTag::Generic) with the C06 audit
-    // rendering — the former A-16 reject is replaced by the D14 audited
-    // class-neutral emission (backend-zephyr-c-e1000); class API delivery
-    // itself stays the deferred Device Class construct's territory (B-9).
+    // Device class: serial is delivered by this stage through a native
+    // uart_driver_api. Other non-Generic classes remain audited class-neutral
+    // until their own locked stage lands.
     let deferred_class: Option<String> = match &driver.descriptor.device_class {
-        ClassTag::Generic => None,
-        ClassTag::Serial => Some("serial".into()),
+        ClassTag::Generic | ClassTag::Serial => None,
+        ClassTag::Network if model.network_interface.drivers.contains_key(driver_item) => None,
         ClassTag::Network => Some("network".into()),
         ClassTag::Other(s) => Some(model.strings.resolve(*s).to_string()),
     };
@@ -183,7 +208,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
             "driver has an empty match set; a Zephyr DT instance needs a `compatible` entry".into(),
         ));
     }
-    let dt_compatibles: Vec<&str> = driver
+    let device_dt_compatibles: Vec<&str> = driver
         .descriptor
         .match_set
         .iter()
@@ -192,6 +217,15 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
             _ => None,
         })
         .collect();
+    let platform_compatible = model
+        .device_lifecycle
+        .platform_binding
+        .devicetree_compatible
+        .map(|compatible| model.strings.resolve(compatible));
+    let dt_compatibles: Vec<&str> = match platform_compatible {
+        Some(compatible) => vec![compatible],
+        None => device_dt_compatibles,
+    };
     let non_dt = driver
         .descriptor
         .match_set
@@ -377,27 +411,6 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         EmitError::Driver("driver struct type not present in the type interner".into())
     })?;
 
-    // -- serial device-class lowering (construct #7, T10/T11 / M3): replaces
-    //    the deferred/NULL-api treatment of ClassTag::Serial ADDITIVELY — only
-    //    when the driver actually implements the serial surface (`model.serial`);
-    //    a bare/deferred serial tag falls through to the class-neutral scaffold
-    //    (the C06 audited path below). The shared driver validation above
-    //    (bus gate, DT compatible, single region, A-10 binding) has run.
-    if matches!(driver.descriptor.device_class, ClassTag::Serial) {
-        if let Some(serial_node) = model.serial.drivers.get(driver_item) {
-            return serial::emit_zephyr_serial(
-                model,
-                *driver_item,
-                driver,
-                serial_node,
-                compatible,
-                &ignored_audits,
-                &drv,
-                driver_ty,
-            );
-        }
-    }
-
     // -- callback roots + reachable closure ---------------------------------
     let callbacks = [
         ("on_init", &driver.ops.on_init),
@@ -413,6 +426,30 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
             roots.push((name, id));
         }
     }
+    let serial_roots = serial::roots(model, *driver_item)?;
+    roots.extend(serial_roots.iter().copied());
+    let network_roots = network::roots(model, *driver_item)?;
+    roots.extend(network_roots.iter().copied());
+    let work_handlers: Vec<InstanceId> = model
+        .deferred_work
+        .drivers
+        .get(driver_item)
+        .map(|d| {
+            d.resources
+                .iter()
+                .map(|r| {
+                    r.handler
+                        .and_then(|h| resolve_instance_ref(model, h))
+                        .ok_or_else(|| {
+                            EmitError::Driver(
+                                "deferred-work handler does not resolve to an instance".into(),
+                            )
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
     // -- device-interrupt facts (construct #6, T11): guards + the handler
     //    body joins the lowered closure (leaf symbol); the void ISR wrapper
     //    is scaffold-synthesized before the init fn --------------------------
@@ -422,8 +459,9 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         roots
             .iter()
             .map(|(_, id)| *id)
-            .chain(irq.iter().map(|i| i.handler)),
-    );
+            .chain(irq.iter().map(|i| i.handler))
+            .chain(work_handlers.iter().copied()),
+    )?;
 
     // -- frame scan over the closure: op-shape rejections that must fire
     //    regardless of how far the body banks have grown (D12 frame) --------
@@ -488,6 +526,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
             reg_macros,
             base_symbol: base_symbol.clone(),
             pcie,
+            drv: drv.clone(),
         },
         width8_used: false,
         uses_log: false,
@@ -535,11 +574,16 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
     if !closure.is_empty() {
         bodies.push('\n');
     }
+
+    let serial_binding = serial::emit(&mut cx, *driver_item, &drv)?;
+    let dma_binding = dma::emit(&mut cx, *driver_item, &drv)?;
+    let network_binding = network::emit(&mut cx, *driver_item, &drv)?;
     for id in &closure {
         let f = body::emit_fn(&mut cx, *id).map_err(|e| with_fn_context(e, model, *id))?;
         bodies.push_str(&f);
         bodies.push('\n');
     }
+    bodies.push_str(&dma_binding);
 
     // -- the ratified OS-absent slot (amendments 4/7; D06/D10): the absent
     //    callback's body runs the COMPLETE body-lowering pipeline — its own
@@ -561,7 +605,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
                 "callback `on_surprise_remove` does not resolve to an instance".into(),
             )
         })?;
-        let absent_closure = reachable_closure(model, std::iter::once(id));
+        let absent_closure = reachable_closure(model, std::iter::once(id))?;
         // Any construct the delivered path rejects still yields the D.2
         // EmitError — the scan first, then full lowering (never scan-only).
         scan_closure_ops(model, &absent_closure, pcie)?;
@@ -576,6 +620,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
                 reg_macros: cx.driver.reg_macros.clone(),
                 base_symbol: cx.driver.base_symbol.clone(),
                 pcie: cx.driver.pcie,
+                drv: cx.driver.drv.clone(),
             },
             width8_used: false,
             uses_log: false,
@@ -627,16 +672,25 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
 
     // -- the init function (scaffold §3) + the fused errno adapter ----------
     let find = |name: &str| roots.iter().find(|(n, _)| *n == name).map(|(_, id)| *id);
+    let work = zephyr_work_emission(&cx, &drv)?;
+    if !work.fields.is_empty() {
+        cx.extra_includes.insert("<zephyr/kernel.h>");
+    }
     let mut init_fn = emit_init_fn(
         &mut cx,
         &drv,
         &base_symbol,
         has_region,
         pcie_preamble.as_ref(),
+        dma::descriptor_datapath(model, *driver_item),
         find("on_init"),
         find("on_init_failure"),
         irq.as_ref(),
+        &work,
+        &serial_binding.init,
+        &serial_binding.post_init,
     )?;
+    init_fn = format!("{}{init_fn}", work.wrappers);
     // The void ISR wrapper (construct #6, C04) precedes the init fn that
     // IRQ_CONNECTs it: recover the device from the build-time-constant
     // sw_isr_table parameter, run the authored handler over the embedded
@@ -652,9 +706,17 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
     // -- the deinit function (spec-convergence-pl011 C04): authored
     //    `on_deinit` only — unauthored leaves the scaffold byte-identical
     //    (I05: the absentslot/init-fail goldens stay frozen).
-    let deinit_fn = find("on_deinit")
-        .map(|id| emit_deinit_fn(&mut cx, &drv, id, irq.as_ref()))
-        .transpose()?;
+    let deinit_fn = if find("on_deinit").is_some() || !work.fields.is_empty() {
+        Some(emit_deinit_fn(
+            &mut cx,
+            &drv,
+            find("on_deinit"),
+            irq.as_ref(),
+            &work,
+        )?)
+    } else {
+        None
+    };
 
     // -- type definitions, now that every use is known -----------------------
     let type_defs = emit_type_defs(&mut cx, driver_ty)?;
@@ -680,6 +742,9 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         &bodies,
         &init_fn,
         deinit_fn.as_deref(),
+        &work,
+        &serial_binding,
+        &network_binding,
     )?;
     let binding_yaml = emit_binding_yaml(
         model,
@@ -687,6 +752,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         compatible,
         pcie,
         pinctrl::has_resolved_pinctrl(model, driver_ty),
+        model.serial_port.drivers.contains_key(driver_item),
         &ignored_audits,
     );
 
@@ -699,8 +765,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         .iter()
         .map(|(name, _)| capability::SlotEntry {
             slot: (*name).to_string(),
-            row: (*name == "on_deinit")
-                .then(|| capability::CAP_ZEPHYR_DT_DEINIT_1.id.to_string()),
+            row: (*name == "on_deinit").then(|| capability::CAP_ZEPHYR_DT_DEINIT_1.id.to_string()),
             citation: None,
         })
         .collect();
@@ -715,7 +780,11 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
                 .model_name()
                 .to_string(),
             row: Some(capability::CAP_ZEPHYR_STATICIRQ_DEREGISTER_1.id.to_string()),
-            citation: Some(capability::CAP_ZEPHYR_STATICIRQ_DEREGISTER_1.citation.to_string()),
+            citation: Some(
+                capability::CAP_ZEPHYR_STATICIRQ_DEREGISTER_1
+                    .citation
+                    .to_string(),
+            ),
         }]
     } else {
         Vec::new()
@@ -778,6 +847,74 @@ struct PciePreamble {
     bar: u8,
 }
 
+struct ZephyrWorkEmission {
+    fields: String,
+    wrappers: String,
+    init: String,
+    cancel: String,
+}
+
+fn zephyr_work_emission(
+    cx: &body::LowerCx<'_>,
+    drv: &str,
+) -> Result<ZephyrWorkEmission, EmitError> {
+    let driver_item = match &cx.model.types[cx.driver.driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => return Err(EmitError::Driver("driver type is not a struct".into())),
+    };
+    let Some(work) = cx.model.deferred_work.drivers.get(&driver_item) else {
+        return Ok(ZephyrWorkEmission {
+            fields: String::new(),
+            wrappers: String::new(),
+            init: String::new(),
+            cancel: String::new(),
+        });
+    };
+    // Zephyr's stock eth_e1000 services RX synchronously in e1000_isr
+    // (eth_e1000.c:189-205). The rich-e1000 descriptor seam uses the same
+    // non-blocking RX allocation (K_NO_WAIT), so its authored service body is
+    // lowered directly at the submit site instead of adding a system-workqueue
+    // hop to every received frame. Generic deferred work keeps the ordinary
+    // k_work realization below.
+    if dma::descriptor_datapath(cx.model, driver_item) {
+        return Ok(ZephyrWorkEmission {
+            fields: String::new(),
+            wrappers: String::new(),
+            init: String::new(),
+            cancel: String::new(),
+        });
+    }
+    let mut fields = String::new();
+    let mut wrappers = String::new();
+    let mut init = String::new();
+    let mut cancel = String::new();
+    for (idx, resource) in work.resources.iter().enumerate() {
+        let handler = resource
+            .handler
+            .and_then(|h| resolve_instance_ref(cx.model, h))
+            .and_then(|id| cx.fn_symbols.get(&id))
+            .ok_or_else(|| {
+                EmitError::Driver("deferred-work handler symbol is unavailable".into())
+            })?;
+        fields.push_str(&format!("\tstruct k_work __rseq_work_{idx};\n"));
+        wrappers.push_str(&format!(
+            "static void {drv}_work_{idx}(struct k_work *work)\n{{\n\tstruct {drv}_data *data = CONTAINER_OF(work, struct {drv}_data, __rseq_work_{idx});\n\n\t{handler}(&data->inner);\n}}\n\n"
+        ));
+        init.push_str(&format!(
+            "\tk_work_init(&data->__rseq_work_{idx}, {drv}_work_{idx});\n"
+        ));
+    }
+    for idx in (0..work.resources.len()).rev() {
+        cancel.push_str(&format!("\t{{ struct k_work_sync __sync; (void)k_work_cancel_sync(&data->__rseq_work_{idx}, &__sync); }}\n"));
+    }
+    Ok(ZephyrWorkEmission {
+        fields,
+        wrappers,
+        init,
+        cancel,
+    })
+}
+
 /// Synthesize the per-instance init function (scaffold §3): the one runtime
 /// dispatch hub — resource preamble (claim_regions = ZERO calls, the
 /// ratified elision; `DEVICE_MMIO_MAP` + the TU-static base install, A-2;
@@ -822,9 +959,13 @@ fn emit_init_fn(
     base_symbol: &str,
     has_region: bool,
     pcie: Option<&PciePreamble>,
+    needs_bus_master: bool,
     on_init: Option<InstanceId>,
     on_init_failure: Option<InstanceId>,
     irq: Option<&ZephyrIrq>,
+    work: &ZephyrWorkEmission,
+    serial_init: &str,
+    serial_post_init: &str,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
     out.push_str(&format!(
@@ -848,12 +989,15 @@ fn emit_init_fn(
         || on_init.is_some()
         || on_init_failure.is_some()
         || !atomic_init.is_empty()
-        || !sync_inits.is_empty();
+        || !sync_inits.is_empty()
+        || !work.fields.is_empty();
     if uses_data {
         out.push_str(&format!("\tstruct {drv}_data *data = dev->data;\n\n"));
     }
     if !sync_inits.is_empty() {
-        out.push_str("\t/* init_primitives (C05): locks initialized before region/IRQ/on_init */\n");
+        out.push_str(
+            "\t/* init_primitives (C05): locks initialized before region/IRQ/on_init */\n",
+        );
         for line in &sync_inits {
             out.push_str(&format!("\t{line}\n"));
         }
@@ -883,10 +1027,19 @@ fn emit_init_fn(
         out.push_str(
             "\t/* claim_regions: zero-call elision (the ratified zephyr claim\n\t * disposition) */\n",
         );
-        out.push_str(
-            "\t/* enable_device: MEM gate only — set_bus_master (PCIE_CONF_CMDSTAT_MASTER)\n\t * fires only when that op is authored; single-call fusion is a permitted\n\t * peephole when both gates fire (unexercised here) */\n",
-        );
-        out.push_str("\tpcie_set_cmd(data->pcie->bdf, PCIE_CONF_CMDSTAT_MEM, true);\n");
+        if needs_bus_master {
+            out.push_str(
+                "\t/* DMA requires both decode and bus mastering: stock eth_e1000.c:223-225\n\t * enables MEM|MASTER, while pinned QEMU hw/pci/pci.c:119-128,657-659\n\t * keeps the DMA address space disabled until PCI_COMMAND_MASTER is set. */\n",
+            );
+            out.push_str(
+                "\tpcie_set_cmd(data->pcie->bdf, PCIE_CONF_CMDSTAT_MEM |\n\t\t     PCIE_CONF_CMDSTAT_MASTER, true);\n",
+            );
+        } else {
+            out.push_str(
+                "\t/* enable_device: MEM gate only — set_bus_master (PCIE_CONF_CMDSTAT_MASTER)\n\t * fires only when that op is authored; single-call fusion is a permitted\n\t * peephole when both gates fire (unexercised here) */\n",
+            );
+            out.push_str("\tpcie_set_cmd(data->pcie->bdf, PCIE_CONF_CMDSTAT_MEM, true);\n");
+        }
         out.push_str(&format!(
             "\tdevice_map(&{base_symbol}, mbar.phys_addr, mbar.size, K_MEM_CACHE_NONE);\n\t/* TU-static base install (A-2; the single-instance BUILD_ASSERT below\n\t * covers BOTH TU-statics: base + __rseq_pcie) */\n\n"
         ));
@@ -946,16 +1099,20 @@ fn emit_init_fn(
             "\tIRQ_CONNECT(DT_INST_IRQN(0), {priority}, rseq_isr_{drv},\n\t\t    DEVICE_DT_INST_GET(0), 0);\n\n"
         ));
     }
+    out.push_str(&work.init);
+    out.push_str(serial_init);
     // Seed the Atomic fields before on_init (runs regardless of on_init).
     out.push_str(&atomic_init);
     if let Some(init_id) = on_init {
         let sym = cx.fn_symbols[&init_id].clone();
-        let failure_hook = on_init_failure.map(|fid| {
+        let mut hook = on_init_failure.map(|fid| {
             format!(
                 "\t\t\t/* authored on_init -> Err: the failure hook IS the cleanup\n\t\t\t * slot, sequenced before the error return (D12); its one and\n\t\t\t * only call site */\n\t\t\t(void){}(&data->inner);\n",
                 cx.fn_symbols[&fid]
             )
-        });
+        }).unwrap_or_default();
+        hook.push_str(&work.cancel.replace('\t', "\t\t\t"));
+        let failure_hook = (!hook.is_empty()).then_some(hook);
         out.push_str(
             "\t/* authored on_init over the embedded spec driver; an authored\n\t * RegseqError crosses the negated-errno adapter HERE and only here\n\t * (I10: native status — none exists in this preamble — would\n\t * propagate directly, never wrapped) */\n",
         );
@@ -967,6 +1124,7 @@ fn emit_init_fn(
         )?;
         out.push_str(&adapter);
     }
+    out.push_str(serial_post_init);
     if irq.is_some() {
         // The enable point (D02/R05/I01): only after on_init returned Ok —
         // the adapter above has already returned the negated errno on every
@@ -990,20 +1148,23 @@ fn emit_init_fn(
 fn emit_deinit_fn(
     cx: &mut body::LowerCx<'_>,
     drv: &str,
-    on_deinit: InstanceId,
+    on_deinit: Option<InstanceId>,
     irq: Option<&ZephyrIrq>,
+    work: &ZephyrWorkEmission,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
     out.push_str(&format!(
         "/* the teardown dispatch hub (spec-convergence-pl011 C04) */\nstatic int {drv}_deinit(const struct device *dev)\n{{\n"
     ));
     out.push_str(&format!("\tstruct {drv}_data *data = dev->data;\n\n"));
-    let sym = cx.fn_symbols[&on_deinit].clone();
-    out.push_str(
-        "\t/* authored on_deinit over the embedded spec driver; the authored\n\t * RegseqError crosses the negated-errno adapter exactly as in init\n\t * (kernel/device.c:199: the rc is returned verbatim; `initialized`\n\t * stays true on failure, clears on success) */\n",
-    );
-    let adapter = emit_result_adapter(cx, on_deinit, &format!("{sym}(&data->inner)"), None)?;
-    out.push_str(&adapter);
+    if let Some(on_deinit) = on_deinit {
+        let sym = cx.fn_symbols[&on_deinit].clone();
+        out.push_str(
+            "\t/* authored on_deinit over the embedded spec driver; the authored\n\t * RegseqError crosses the negated-errno adapter exactly as in init\n\t * (kernel/device.c:199: the rc is returned verbatim; `initialized`\n\t * stays true on failure, clears on success) */\n",
+        );
+        let adapter = emit_result_adapter(cx, on_deinit, &format!("{sym}(&data->inner)"), None)?;
+        out.push_str(&adapter);
+    }
     if irq.is_some() {
         // Interrupt teardown (construct #6, D09/R06): disable after the
         // teardown callback — then the deregister SLOT, where the static
@@ -1022,6 +1183,7 @@ fn emit_deinit_fn(
             out.push('\n');
         }
     }
+    out.push_str(&work.cancel);
     out.push_str(
         "\t/* postamble (integration §5.2): map_region's unmap mirror is a\n\t * deliberate NO-OP — no DEVICE_MMIO unmap exists on Zephyr; nothing\n\t * is invented (C04) */\n",
     );
@@ -1591,7 +1753,7 @@ fn resolve_instance_ref(model: &RegseqModel, target: InstanceRef) -> Option<Inst
 fn reachable_closure(
     model: &RegseqModel,
     roots: impl Iterator<Item = InstanceId>,
-) -> Vec<InstanceId> {
+) -> Result<Vec<InstanceId>, EmitError> {
     let mut seen: Vec<InstanceId> = Vec::new();
     let mut queue: Vec<InstanceId> = roots.collect();
     while let Some(id) = queue.pop() {
@@ -1599,6 +1761,14 @@ fn reachable_closure(
             continue;
         }
         seen.push(id);
+        if let Some(dependency) = crate::core_shims::classify(model, id)
+            .map_err(|message| EmitError::Unsupported(message.into()))?
+            .and_then(crate::core_shims::BackendShim::dependency)
+        {
+            if !seen.contains(&dependency) {
+                queue.push(dependency);
+            }
+        }
         let InstanceKind::Function(data) = &model.instances[id].kind else {
             continue;
         };
@@ -1612,8 +1782,11 @@ fn reachable_closure(
             {
                 // A recognized sync acquire/release/completion `Call` is replaced
                 // by its C02 primitive (T07); its callee is never lowered.
-                if sync::is_sync_call_block(model, body_ref, regseq_model::BlockId::from_u32(idx as u32))
-                    || intrinsic_of(model, *callee).is_some()
+                if sync::is_sync_call_block(
+                    model,
+                    body_ref,
+                    regseq_model::BlockId::from_u32(idx as u32),
+                ) || intrinsic_of(model, *callee).is_some()
                     || body::trivial_accessor_tail(model, *callee).is_some()
                 {
                     continue;
@@ -1624,7 +1797,7 @@ fn reachable_closure(
             }
         }
     }
-    seen
+    Ok(seen)
 }
 
 /// The intrinsic kind anchoring `instance`, if any.
@@ -1853,8 +2026,15 @@ fn emit_tu(
     bodies: &str,
     init_fn: &str,
     deinit_fn: Option<&str>,
+    work: &ZephyrWorkEmission,
+    serial_binding: &serial::Emission,
+    network_binding: &network::Emission,
 ) -> Result<String, EmitError> {
     let model = cx.model;
+    let driver_item = match &model.types[driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => return Err(EmitError::Driver("driver type is not a struct".into())),
+    };
     let inner_tag = cx.names.name_of(model, driver_ty)?;
     let log_demand = cx.uses_log;
 
@@ -1947,6 +2127,7 @@ fn emit_tu(
     // data (A-17), and the retained lifecycle state word (zero in the
     // static image).
     tu.push_str(type_defs);
+    tu.push_str(&network::descriptor_types(model, driver_item, &drv));
     tu.push_str(&format!("struct {drv}_config {{\n"));
     if pcie {
         tu.push_str(
@@ -1965,12 +2146,17 @@ fn emit_tu(
     tu.push_str(&format!(
         "\tstruct {inner_tag} inner;\n\tuint32_t __rseq_state; /* retained; zero in the static image */\n"
     ));
+    tu.push_str(&work.fields);
+    tu.push_str(&serial_binding.data_fields);
+    tu.push_str(&network_binding.data_fields);
+    tu.push_str(&dma::data_fields(model, driver_item));
     if pcie {
         tu.push_str(
             "\tstruct pcie_dev *pcie; /* PCIe context (scaffold §1 item 4;\n\t                        * witness eth_e1000_priv.h:93) */\n",
         );
     }
     tu.push_str("};\n\n");
+    tu.push_str(&serial_binding.globals);
     if has_region {
         tu.push_str(&format!(
             "/* the TU-static base every MMIO op reads (A-2: the faithful first\n * realization, paired with the single-instance BUILD_ASSERT below) */\nstatic mm_reg_t {base_symbol};\n\n"
@@ -1986,11 +2172,16 @@ fn emit_tu(
     // injected before the bodies that call them, gated on the demand flags the
     // body lowering set when a busy_wait/sleep was emitted.
     if cx.uses_delay_busy || cx.uses_delay_sleep {
-        tu.push_str(&body::delay_helpers(cx.uses_delay_busy, cx.uses_delay_sleep));
+        tu.push_str(&body::delay_helpers(
+            cx.uses_delay_busy,
+            cx.uses_delay_sleep,
+        ));
     }
     // §1 items 5-7: lowered helper/callback bodies, then the init function
     // — the one runtime dispatch hub (§3).
     tu.push_str(bodies);
+    tu.push_str(&serial_binding.text);
+    tu.push_str(&network_binding.text);
     tu.push_str(init_fn);
     tu.push('\n');
     if let Some(deinit) = deinit_fn {
@@ -2000,7 +2191,8 @@ fn emit_tu(
 
     // §1 item 8: the build-time instantiation block —
     // register/match/create/associate as build-time facts (§2); init level
-    // hardcoded (D13); api NULL for ClassTag::Generic ONLY (A-16). With an
+    // hardcoded (D13); api NULL for ClassTag::Generic and a native API for
+    // ClassTag::Serial. With an
     // authored on_deinit the macro swaps to DEVICE_DT_INST_DEINIT_DEFINE
     // (device.h:272→243 — DEVICE_DT_DEFINE plus the deinit_fn arg);
     // unauthored stays byte-identical (C04/I05).
@@ -2040,13 +2232,21 @@ fn emit_tu(
             capability::DEFERRED_CLASS_LICENSE
         ));
     }
+    let native_api = if network_binding.publishes_interface {
+        network_binding.api.as_str()
+    } else {
+        serial_binding.api.as_str()
+    };
+    let net_if_publication = network_binding.publishes_interface.then(|| {
+        "\\\n\tNET_L2_DATA_INIT(Z_DEVICE_DT_DEV_ID(DT_DRV_INST(n)), 0,\\\n\t\tNET_L2_GET_CTX_TYPE(ETHERNET_L2));\\\n\tNET_IF_INIT(Z_DEVICE_DT_DEV_ID(DT_DRV_INST(n)), 0, ETHERNET_L2,\\\n\t\tNET_ETH_MTU, NET_IF_MAX_CONFIGS)"
+    }).unwrap_or("");
     if deinit_fn.is_some() {
         tu.push_str(&format!(
-            "\tDEVICE_DT_INST_DEINIT_DEFINE(n, {drv}_init, {drv}_deinit, NULL,\\\n\t\t&{drv}_data_##n, &{drv}_config_##n,\\\n\t\tPOST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,\\\n\t\tNULL /* api: ClassTag::Generic only (A-16) */);\n"
+            "\tDEVICE_DT_INST_DEINIT_DEFINE(n, {drv}_init, {drv}_deinit, NULL,\\\n\t\t&{drv}_data_##n, &{drv}_config_##n,\\\n\t\tPOST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,\\\n\t\t{native_api});{net_if_publication}\n"
         ));
     } else {
         tu.push_str(&format!(
-            "\tDEVICE_DT_INST_DEFINE(n, {drv}_init, NULL,\\\n\t\t&{drv}_data_##n, &{drv}_config_##n,\\\n\t\tPOST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,\\\n\t\tNULL /* api: ClassTag::Generic only (A-16) */);\n"
+            "\tDEVICE_DT_INST_DEFINE(n, {drv}_init, NULL,\\\n\t\t&{drv}_data_##n, &{drv}_config_##n,\\\n\t\tPOST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE,\\\n\t\t{native_api});{net_if_publication}\n"
         ));
     }
     tu.push_str("DT_INST_FOREACH_STATUS_OKAY(RSEQ_INIT)\n\n");
@@ -2091,13 +2291,15 @@ fn emit_tu(
 /// (the witnessed intel,e1000.yaml:8 idiom) so vendor-id/device-id
 /// validate — required, with NO `reg` requirement — and renders each
 /// ignored Pci row's audit comment adjacent to the consumed `compatible:`
-/// surface (the R05 third render); the platform/Amba form is byte-frozen.
+/// surface (the R05 third render). Serial platform bindings include Zephyr's
+/// standard `uart-controller.yaml`; other platform/Amba forms stay byte-frozen.
 fn emit_binding_yaml(
     model: &RegseqModel,
     drv: &str,
     compatible: &str,
     pcie: bool,
     has_pinctrl: bool,
+    has_serial: bool,
     ignored_audits: &[crate::match_audit::MatchAudit],
 ) -> String {
     let name = model.strings.resolve(
@@ -2128,6 +2330,14 @@ fn emit_binding_yaml(
         };
         out.push_str(&format!(
             "compatible: \"{compatible}\"\n\ninclude: {includes}\n\nproperties:\n  vendor-id:\n    required: true\n  device-id:\n    required: true\n"
+        ));
+    } else if has_serial && has_pinctrl {
+        out.push_str(&format!(
+            "compatible: \"{compatible}\"\n\ninclude: [uart-controller.yaml, pinctrl-device.yaml]\n"
+        ));
+    } else if has_serial {
+        out.push_str(&format!(
+            "compatible: \"{compatible}\"\n\ninclude: uart-controller.yaml\n"
         ));
     } else if has_pinctrl {
         out.push_str(&format!(

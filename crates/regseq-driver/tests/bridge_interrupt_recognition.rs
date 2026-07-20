@@ -20,9 +20,7 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use regseq_driver::bridge::{run_bridge, BridgeInput};
-use regseq_model::{
-    ArmReachability, AttrData, DriverInterrupts, InterruptForm, RegseqModel,
-};
+use regseq_model::{ArmReachability, AttrData, DriverInterrupts, InterruptForm, RegseqModel};
 use rustc_middle::ty::TyCtxt;
 
 static INIT: Once = Once::new();
@@ -216,10 +214,7 @@ fn smallest_valid_spec_materialises_resource_binding_and_reachability() {
             InterruptForm::Single
         )]
     );
-    assert_eq!(
-        handlers,
-        vec![("handle_irq".to_string(), 0, false, true)]
-    );
+    assert_eq!(handlers, vec![("handle_irq".to_string(), 0, false, true)]);
 }
 
 #[test]
@@ -679,14 +674,17 @@ fn warnings_with_shared(model: &RegseqModel, shared: bool) -> Vec<String> {
 
 #[test]
 fn shared_line_with_present_but_unreachable_nothandled_still_warns_end_to_end() {
-    let (warnings, not_handled) =
-        with_model("irq_shared_warn", &source(UNREACHABLE_NOTHANDLED), |model| {
+    let (warnings, not_handled) = with_model(
+        "irq_shared_warn",
+        &source(UNREACHABLE_NOTHANDLED),
+        |model| {
             (
                 warnings_with_shared(model, true),
                 sole_interrupts(model).handlers[0].arms.not_handled,
             )
-        })
-        .expect("bridge accepts the spec");
+        },
+    )
+    .expect("bridge accepts the spec");
     // Whatever the analysis concluded for the dead arm (folded ->
     // ProvenUnreachable; surviving -> Unknown), it must NOT be proof.
     assert_ne!(not_handled, ArmReachability::ProvenReachable);
@@ -700,9 +698,11 @@ fn shared_line_with_present_but_unreachable_nothandled_still_warns_end_to_end() 
 
 #[test]
 fn unshared_line_with_same_handler_does_not_warn_end_to_end() {
-    let warnings = with_model("irq_unshared_nowarn", &source(UNREACHABLE_NOTHANDLED), |model| {
-        warnings_with_shared(model, false)
-    })
+    let warnings = with_model(
+        "irq_unshared_nowarn",
+        &source(UNREACHABLE_NOTHANDLED),
+        |model| warnings_with_shared(model, false),
+    )
     .expect("bridge accepts the spec");
     assert!(warnings.is_empty(), "got: {warnings:?}");
 }

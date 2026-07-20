@@ -49,6 +49,8 @@ fn pinctrl_fail_acquire_unmatched_id_fails_loud() {
                 "the guard message must name the unmatched id; got: {msg}"
             );
         }
-        other => panic!("expected a fail-loud BackendOption error for the unmatched id; got {other:?}"),
+        other => {
+            panic!("expected a fail-loud BackendOption error for the unmatched id; got {other:?}")
+        }
     }
 }

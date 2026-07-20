@@ -222,9 +222,16 @@ fn assert_recognition_facts(model: &RegseqModel) {
         region.binding.is_resolved(),
         "the L2 join must resolve the binding (A-10 trigger)"
     );
-    assert_eq!(region.binding.base, Some(0x0900_0000), "QEMU virt PL011 base");
+    assert_eq!(
+        region.binding.base,
+        Some(0x0900_0000),
+        "QEMU virt PL011 base"
+    );
     assert_eq!(region.binding.size, Some(0x1000), "QEMU virt PL011 size");
-    assert_eq!(region.binding.effective_bar, None, "no BAR on an AMBA region");
+    assert_eq!(
+        region.binding.effective_bar, None,
+        "no BAR on an AMBA region"
+    );
 
     // -- register-access + diagnostics-logging + RegseqError: the domain-attr
     //    tables must carry all five MMIO op kinds, all four log levels, and
@@ -271,8 +278,5 @@ fn assert_recognition_facts(model: &RegseqModel) {
             "log level {level:?} recognized"
         );
     }
-    assert!(
-        regseq_error_marked,
-        "RegseqError framework type recognized"
-    );
+    assert!(regseq_error_marked, "RegseqError framework type recognized");
 }

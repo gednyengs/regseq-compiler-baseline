@@ -84,8 +84,9 @@ pub(crate) fn recognise_submit_sites(model: &mut RegseqModel) -> Result<(), Brid
                 // form is design-in, not built (Out-of-Scope), so it is rejected.
                 return Err(BridgeError::DeferredWorkValidation(
                     DeferredWorkDiagnostic::SpoofedReceiver {
-                        receiver: "a `submit` receiver that does not resolve to a bound `Work` field"
-                            .to_string(),
+                        receiver:
+                            "a `submit` receiver that does not resolve to a bound `Work` field"
+                                .to_string(),
                     },
                 ));
             };

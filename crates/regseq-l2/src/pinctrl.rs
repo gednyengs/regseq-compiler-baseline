@@ -334,8 +334,12 @@ mod tests {
         // binding stays `resolved = false` (binds to `None`); validate accepts it.
         let mut model = model_with_pinctrl("uart_pins", false);
         let b = bindings("[mmio.regs]\nbase = 0\nsize = 16\n");
-        PinctrlBinder.bind(&mut model, &b).expect("bind is a no-op join");
-        PinctrlBinder.validate(&model).expect("optional-absent is allowed");
+        PinctrlBinder
+            .bind(&mut model, &b)
+            .expect("bind is a no-op join");
+        PinctrlBinder
+            .validate(&model)
+            .expect("optional-absent is allowed");
         let binding = sole_binding(&model);
         assert!(!binding.resolved);
         assert!(!binding.is_resolved());
@@ -348,7 +352,9 @@ mod tests {
         // (C06/D03), parallel to clock's CLK-L2-001.
         let mut model = model_with_pinctrl("uart_pins", true);
         let b = bindings("[mmio.regs]\nbase = 0\nsize = 16\n");
-        PinctrlBinder.bind(&mut model, &b).expect("bind is a no-op join");
+        PinctrlBinder
+            .bind(&mut model, &b)
+            .expect("bind is a no-op join");
         let err = PinctrlBinder.validate(&model).unwrap_err();
         assert_eq!(err.code(), "PIN-L2-001");
         assert!(err.to_string().contains("uart_pins"), "{err}");
@@ -385,7 +391,9 @@ mod tests {
         PinctrlBinder.bind(&mut model, &b).expect("bind");
         PinctrlBinder.validate(&model).expect("validate");
         for item in [ItemId::from_u32(0), ItemId::from_u32(1)] {
-            assert!(model.pinctrl.drivers[&item].resources[0].binding.is_resolved());
+            assert!(model.pinctrl.drivers[&item].resources[0]
+                .binding
+                .is_resolved());
         }
     }
 

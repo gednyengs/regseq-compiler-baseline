@@ -40,13 +40,7 @@ impl TypeNames {
             Ty::Struct { item, .. } | Ty::Enum { item, .. } | Ty::Union { item, .. } => c_ident(
                 path_leaf(model.strings.resolve(model.items[*item].def_path.rendered)),
             ),
-            Ty::Tuple { fields, .. } => {
-                let mut parts = vec!["rseq_tuple".to_string()];
-                for f in fields {
-                    parts.push(c_ident(&scalar_spelling_or_err(model, *f)?));
-                }
-                parts.join("_")
-            }
+            Ty::Tuple { fields, .. } => tuple_base_name(model, fields),
             other => {
                 return Err(EmitError::Unsupported(format!(
                     "C name for non-nominal type {other:?}"
@@ -70,16 +64,34 @@ impl TypeNames {
     }
 }
 
-/// The scalar spelling for a type when it has one (used for tuple name
-/// mangling); errors on non-scalars.
-fn scalar_spelling_or_err(model: &RegseqModel, ty: TyId) -> Result<String, EmitError> {
+/// Preserve the pre-C44 scalar tuple spelling (`rseq_tuple_u32_u32`), and use a
+/// stable fallback for tuples containing non-scalar fields such as enum match
+/// temporaries that do not have a scalar label.
+fn tuple_base_name(model: &RegseqModel, fields: &[TyId]) -> String {
+    if let Some(labels) = fields
+        .iter()
+        .map(|field| tuple_scalar_label(model, *field))
+        .collect::<Option<Vec<_>>>()
+    {
+        return format!("rseq_tuple_{}", labels.join("_"));
+    }
+
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for f in fields {
+        for b in f.as_u32().to_le_bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    format!("tuple_{h:016x}")
+}
+
+fn tuple_scalar_label(model: &RegseqModel, ty: TyId) -> Option<&'static str> {
     match &model.types[ty] {
-        Ty::Bool => Ok("bool".into()),
-        Ty::Int(k) => Ok(int_spelling(*k)?.into()),
-        Ty::Uint(k) => Ok(uint_spelling(*k)?.into()),
-        other => Err(EmitError::Unsupported(format!(
-            "tuple over non-scalar field {other:?}"
-        ))),
+        Ty::Bool => Some("bool"),
+        Ty::Int(kind) => int_spelling(*kind).ok(),
+        Ty::Uint(kind) => uint_spelling(*kind).ok(),
+        _ => None,
     }
 }
 

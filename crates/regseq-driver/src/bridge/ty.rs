@@ -256,10 +256,10 @@ fn is_authorized_pointee_self<'tcx>(
 /// `Fn*::Output` over fn-pointers); every other `Alias(Projection)` short-
 /// circuits to `NonRigidTy`. That is correct for *generic*/identity-signature
 /// translation, where a projection over a type param is genuinely non-rigid.
-/// But a *fully-monomorphic* instance signature (e.g. `<SerialErrors as
-/// core::ops::BitOr>::bitor`, whose return type is `<SerialErrors as
+/// But a *fully-monomorphic* instance signature (e.g. `<ErrBits as
+/// core::ops::BitOr>::bitor`, whose return type is `<ErrBits as
 /// BitOr>::Output`) carries projections that are rigid-after-normalization
-/// (`== SerialErrors`); rejecting them as `NonRigidTy` is a false negative
+/// (`== ErrBits`); rejecting them as `NonRigidTy` is a false negative
 /// that drops a usable operator-overload / trait-method instance.
 ///
 /// This helper is applied (via `fnsig::translate_fn_sig_monomorphic`) ONLY at
@@ -387,19 +387,7 @@ fn translate_erased_ty_inner<'tcx>(
         }
         TyKind::FnPtr(sig_tys, header) => {
             let binder = sig_tys.with(*header);
-            // dma-management T13 carve-out (paired with the `translate_generic_args`
-            // site): under the narrow `DmaElementClosureRelaxScope` window, a
-            // closure's OWN reified self-signature FnPtr (the exact RustCall +
-            // single-tuple-input shape WHOSE UNTUPLED form is non-substantive) is
-            // permitted; any other binder — including a relational/projection/
-            // output-region HRTB spelled in that same shape — is still rejected by
-            // the untuple-recheck in `closure_reified_sig_relaxable`. The global
-            // spec-§17.1 fn-ptr-binder guard is unchanged for all non-DMA code.
-            if !(cx.dma_element_closure_relax
-                && closure_reified_sig_relaxable(cx.input.tcx, ty))
-            {
-                reject_substantive_fn_ptr_binder(cx.input.tcx, ty, binder)?;
-            }
+            reject_substantive_fn_ptr_binder(cx.input.tcx, ty, binder)?;
             let sig = binder.skip_binder();
             // Spec section 13.1 closure-call shim rewrite: a RustCall
             // FnPtr that survived monomorphisation is the reified
@@ -970,23 +958,7 @@ fn translate_generic_args<'tcx>(
     for arg in args.iter() {
         match arg.kind() {
             ty::GenericArgKind::Type(ty) => {
-                // dma-management T13 carve-out: a borrow closure's reified
-                // self-signature `for<'r> extern "rust-call" fn((&'r mut V,))`
-                // rides as a closure-type generic arg. Under the narrow
-                // `DmaElementClosureRelaxScope` window AND only for that exact
-                // benign shape (RustCall + single-tuple-input WHOSE UNTUPLED form
-                // is non-substantive), erase its regions WITHOUT the
-                // substantive-HRTB reject. The untuple-recheck inside
-                // `closure_reified_sig_relaxable` keeps a relational / output-
-                // region / projection HRTB rejected even here. Everywhere else the
-                // global guard is unchanged.
-                let ty = if cx.dma_element_closure_relax
-                    && closure_reified_sig_relaxable(cx.input.tcx, ty)
-                {
-                    cx.input.tcx.erase_and_anonymize_regions(ty)
-                } else {
-                    erase_regions_or_reject(cx.input.tcx, ty)?
-                };
+                let ty = erase_regions_or_reject(cx.input.tcx, ty)?;
                 translated.push(GenericArg::Type(translate_erased_ty(cx, ty, true)?));
             }
             ty::GenericArgKind::Const(konst) => {
@@ -1825,100 +1797,6 @@ fn nominal_layout<'tcx>(
 ///
 /// Replaces the previous `ty.to_string()` substring-matching
 /// predicate (regseq-driver-37 audit-finding MEDIUM-37-3).
-/// Whether `ty` is exactly a closure's OWN reified-signature FnPtr shape —
-/// `for<'r> extern "rust-call" fn((<args tuple>))` — the synthetic
-/// `sig_as_fn_ptr_ty` component rustc carries in a `ClosureArgs`
-/// (dma-management T13) AND, once untupled, that signature is NON-substantive
-/// under the §17.1 analysis. This is the benign universal lifetime quantification
-/// EVERY borrow closure has (`|d: &mut V| …` ⇒ `for<'r> fn((&'r mut V,))`); it
-/// is NOT a substantive relational/projection HRTB. The gate is two-part:
-///   1. SHAPE: it requires the `RustCall` ABI AND a single tupled input
-///      (the closure-call argument tuple). A user-written fn-ptr at a real
-///      boundary is `extern "Rust"`/`"C"` (not `RustCall`) and is not
-///      tuple-wrapped, so this matches ONLY a closure's own reified self-sig.
-///   2. SUBSTANTIVE RE-CHECK: the args tuple is UNTUPLED and the EXACT §17.1
-///      substantive-HRTB analysis (the same one [`has_substantive_hrtb_fn_sig`]
-///      runs) is re-run with the tuple's fields as the positional inputs. The
-///      carve-out fires ONLY if the untupled form is non-substantive.
-///
-/// Rationale for the untuple-recheck (supersedes the originally-suggested
-/// DefId-keying): the tuple wrapping was the ONLY reason the benign single-borrow
-/// closure self-sig was mis-flagged by the global guard. A `&'r mut V` ref inside
-/// a tuple is classified `NonImmediateInput`, so the bound region there reads as
-/// substantive even though, as the closure's actual single-argument call
-/// signature, it is one ordinary immediate-input ref (count 1). Untupling subjects
-/// the closure's call signature to IDENTICAL §17.1 scrutiny as a normal fn-ptr:
-///   - the benign `(&'r mut V,)` untuples to one immediate-input ref
-///     (count 1, non-substantive) → relaxed;
-///   - the RELATIONAL shape `for<'a> fn((&'a mut u32, &'a mut u32))` untuples to
-///     two refs sharing one bound region (condition 4) → substantive → rejected;
-///   - the OUTPUT-REGION shape `for<'a> fn(()) -> &'a u32` has a bound region in
-///     output (condition 5) → substantive → rejected.
-/// The originating closure DefId is NOT available at the bare-FnPtr binder site,
-/// so the untuple-recheck enforces the actual safety property directly rather than
-/// via an identity proxy.
-///
-/// CAVEAT (defense-in-depth): an author CAN spell a RustCall-tuple fn-ptr
-/// directly on nightly via `#![feature(unboxed_closures)]`
-/// (`type F = for<'a> extern "rust-call" fn((&'a mut u32,));`). Even so, the
-/// untuple-recheck means a SUBSTANTIVE such sig (relational / output-region /
-/// projection / nested-binder) is REJECTED by shape-recheck alone — co-locating
-/// it in a DMA-element-access body does NOT bypass the §17.1 guard. The carve-out
-/// is additionally gated by the [`crate::bridge::DmaElementClosureRelaxScope`]
-/// window — set ONLY while translating a recognized `dma_element_*` call's callee
-/// / its closure-shim body / a body that contains such a call — kept as a second,
-/// independent line of defense so the (already non-substantive) relaxation cannot
-/// fire in general program code. The two gates together (window + untuple-recheck)
-/// keep the relaxation to exactly the benign closure self-signature.
-fn closure_reified_sig_relaxable<'tcx>(tcx: ty::TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> bool {
-    let TyKind::FnPtr(sig_tys, header) = ty.kind() else {
-        return false;
-    };
-    if header.abi != rustc_abi::ExternAbi::RustCall {
-        return false;
-    }
-    let inputs = sig_tys.skip_binder().inputs();
-    // SHAPE GATE: the RustCall closure-call shim signature is
-    // `(captures?, args_tuple)`. For the reified `sig_as_fn_ptr_ty` the single
-    // input is the args tuple.
-    let [last] = inputs else {
-        return false;
-    };
-    let TyKind::Tuple(tuple_fields) = last.kind() else {
-        return false;
-    };
-
-    // SUBSTANTIVE RE-CHECK: untuple the args tuple and run the EXACT §17.1
-    // analysis with the tuple's fields as positional inputs (mirrors
-    // `has_substantive_hrtb_fn_sig`). Relax ONLY if the untupled form is
-    // non-substantive.
-    let sig = sig_tys.skip_binder();
-    let mut checker = HrtbChecker::new(tcx);
-    for field in tuple_fields.iter() {
-        if checker.substantive {
-            return false;
-        }
-        checker.visit_input(field);
-    }
-    if checker.substantive {
-        return false;
-    }
-    checker.visit_output(sig.output());
-    if checker.substantive {
-        return false;
-    }
-    // Condition 4: a bound region in more than one immediate-input-ref slot is
-    // relational and must be rejected.
-    if checker
-        .immediate_ref_counts
-        .values()
-        .any(|&count| count > 1)
-    {
-        return false;
-    }
-    true
-}
-
 fn has_substantive_hrtb_ty<'tcx>(tcx: ty::TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> bool {
     match ty.kind() {
         TyKind::FnPtr(sig_tys, header) => {

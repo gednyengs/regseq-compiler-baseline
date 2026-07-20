@@ -24,7 +24,9 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use regseq_driver::bridge::{run_bridge, BridgeInput};
-use regseq_model::{ClassTag, DriverLifecycle, LifecycleOps, MatchEntry, RegseqModel, UserDataKind};
+use regseq_model::{
+    ClassTag, DriverLifecycle, LifecycleOps, MatchEntry, RegseqModel, UserDataKind,
+};
 use rustc_middle::ty::TyCtxt;
 
 static INIT: Once = Once::new();
@@ -52,7 +54,9 @@ fn fresh_test_dir(crate_name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system time should be after unix epoch")
         .as_nanos();
-    std::env::temp_dir().join(format!("regseq-bridge-device-lifecycle-{crate_name}-{nanos}"))
+    std::env::temp_dir().join(format!(
+        "regseq-bridge-device-lifecycle-{crate_name}-{nanos}"
+    ))
 }
 
 /// Bridge `source` and run `f` against the resulting model. Returns
@@ -296,6 +300,58 @@ pub fn regseq_main() -> Result<(), RegseqError> { Ok(()) }
 }
 
 #[test]
+fn canonical_mmio_requires_and_accepts_a_register_block_inner_type() {
+    let src = r#"
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
+pub mod regseq { pub struct Mmio<T> { inner: T } }
+
+#[repr(C)]
+#[rseq::register_block(endian = "little", access_width = 32)]
+pub struct Registers { value: u32 }
+
+#[rseq::driver(name = "canonical", compatible = ["acme,canonical"])]
+pub struct Canonical {
+    #[rseq::mmio(id = "regs")]
+    regs: regseq::Mmio<Registers>,
+}
+"#;
+    let resource_names = with_model("dl_canonical_mmio", src, |model| {
+        let driver = driver_by_name(model, "canonical").expect("canonical driver recognized");
+        driver
+            .handle
+            .resource_fields
+            .iter()
+            .map(|field| model.strings.resolve(field.name).to_string())
+            .collect::<Vec<_>>()
+    })
+    .expect("canonical Mmio<register_block> should bridge");
+    assert_eq!(resource_names, vec!["regs".to_string()]);
+}
+
+#[test]
+fn canonical_mmio_rejects_an_unmarked_inner_type() {
+    let src = r#"
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
+pub mod regseq { pub struct Mmio<T> { inner: T } }
+pub struct BareRegisters { value: u32 }
+
+#[rseq::driver(name = "lookalike", compatible = ["acme,lookalike"])]
+pub struct Lookalike {
+    #[rseq::mmio(id = "regs")]
+    regs: regseq::Mmio<BareRegisters>,
+}
+"#;
+    assert!(
+        with_model("dl_canonical_mmio_unmarked", src, |_model| ()).is_none(),
+        "canonical regseq::Mmio<T> must reject T without #[rseq::register_block]",
+    );
+}
+
+#[test]
 fn plain_struct_is_not_recognized_as_a_driver() {
     let (count, has_plain) = with_model("dl_plain", SOURCE, |model| {
         let count = model.device_lifecycle.drivers.len();
@@ -490,9 +546,13 @@ const DEVICE_CLASS_SOURCE: &str = r#"
 #![feature(register_tool)]
 #![register_tool(rseq)]
 
+pub trait SerialPort {}
+
 #[rseq::device_class(serial)]
 #[rseq::driver(name = "ser", compatible = ["acme,ser"])]
 pub struct Ser;
+
+impl SerialPort for Ser {}
 
 #[rseq::device_class(network)]
 #[rseq::driver(name = "net", compatible = ["acme,net"])]
@@ -618,7 +678,10 @@ fn scalar_user_data_fields_are_zero_init_in_decl_order() {
 pub struct UdScalar { count: u32, flag: bool }
 "#;
     let kinds = with_model("dl_ud_scalar", src, |model| {
-        user_data_kinds(model, driver_by_name(model, "ud_scalar").expect("recognized"))
+        user_data_kinds(
+            model,
+            driver_by_name(model, "ud_scalar").expect("recognized"),
+        )
     })
     .expect("bridge should succeed");
     assert_eq!(
@@ -628,6 +691,38 @@ pub struct UdScalar { count: u32, flag: bool }
             ("flag".to_string(), UserDataKind::ZeroInit),
         ],
         "scalar-whitelist fields classify as ZeroInit, in declaration order"
+    );
+}
+
+#[test]
+fn pod_struct_user_data_field_is_zero_init() {
+    let src = r#"
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
+#[derive(Clone, Copy)]
+pub enum StopBits { One, Two }
+
+#[derive(Clone, Copy)]
+pub enum Parity { None, Odd, Even }
+
+#[derive(Clone, Copy)]
+pub struct Timing { baud_rate: u32, stop_bits: StopBits }
+
+#[derive(Clone, Copy)]
+pub struct SerialParams { timing: Timing, data_bits: u8, parity: Parity }
+
+#[rseq::driver(name = "ud_pod", compatible = ["acme,ud"])]
+pub struct UdPod { applied: SerialParams }
+"#;
+    let kinds = with_model("dl_ud_pod", src, |model| {
+        user_data_kinds(model, driver_by_name(model, "ud_pod").expect("recognized"))
+    })
+    .expect("a recursively zero-initializable POD struct should bridge");
+    assert_eq!(
+        kinds,
+        vec![("applied".to_string(), UserDataKind::ZeroInit)],
+        "POD struct state classifies as ZeroInit"
     );
 }
 
@@ -690,6 +785,65 @@ pub struct UdArray { buf: [u8; 4] }
         outcome.is_none(),
         "a non-scalar user-data field ([u8; 4]) must be rejected (D3)"
     );
+}
+
+#[test]
+fn structs_with_non_pod_members_are_rejected() {
+    let cases = [
+        (
+            "empty",
+            r#"
+#[derive(Clone, Copy)]
+pub struct State;
+"#,
+        ),
+        (
+            "reference",
+            r#"
+#[derive(Clone, Copy)]
+pub struct State { value: &'static u32 }
+"#,
+        ),
+        (
+            "resource",
+            r#"
+#[derive(Clone, Copy)]
+pub struct Mmio<T> { inner: T }
+#[derive(Clone, Copy)]
+pub struct State { hidden: Mmio<u32> }
+"#,
+        ),
+        (
+            "union",
+            r#"
+#[derive(Clone, Copy)]
+pub union Bits { word: u32, bytes: [u8; 4] }
+#[derive(Clone, Copy)]
+pub struct State { bits: Bits }
+"#,
+        ),
+        (
+            "nested_array",
+            r#"
+#[derive(Clone, Copy)]
+pub struct Nested { bytes: [u8; 4] }
+#[derive(Clone, Copy)]
+pub struct State { nested: Nested }
+"#,
+        ),
+    ];
+
+    for (label, declarations) in cases {
+        let src = format!(
+            "#![feature(register_tool)]\n#![register_tool(rseq)]\n{declarations}\n\
+             #[rseq::driver(name = \"ud_bad_pod\", compatible = [\"acme,ud\"])]\n\
+             pub struct UdBadPod {{ state: State }}\n"
+        );
+        assert!(
+            with_model(&format!("dl_ud_bad_pod_{label}"), &src, |_model| ()).is_none(),
+            "a struct containing a {label} member must be rejected (D3)"
+        );
+    }
 }
 
 #[test]

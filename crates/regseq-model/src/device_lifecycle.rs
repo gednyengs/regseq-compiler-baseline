@@ -28,6 +28,37 @@ pub struct DeviceLifecycleTables {
     /// Recognized drivers, keyed by the driver-struct Item.
     #[serde(with = "ordered_driver_map")]
     pub drivers: BTreeMap<ItemId, DriverLifecycle>,
+    /// Optional L2 platform-instance binding identity. This remains separate
+    /// from each driver's authored device-wide match descriptor so backends can
+    /// override only the identity consumed by their ratified registration form.
+    #[serde(default, skip_serializing_if = "PlatformBindingIdentity::is_empty")]
+    pub platform_binding: PlatformBindingIdentity,
+}
+
+/// The platform instance's AMBA identity, joined from `[binding.amba]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AmbaPlatformBinding {
+    /// PrimeCell peripheral id of the bound instance.
+    pub periphid: u32,
+    /// Bits significant for matching the peripheral id.
+    pub mask: u32,
+}
+
+/// L2 instance binding identities, separate from the authored device match
+/// set. Each backend consumes only the form native to its registration path.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlatformBindingIdentity {
+    /// AMBA periphid/mask override for an `amba_driver` registration.
+    pub amba: Option<AmbaPlatformBinding>,
+    /// Devicetree compatible override for a static-DT registration.
+    pub devicetree_compatible: Option<StringId>,
+}
+
+impl PlatformBindingIdentity {
+    /// Whether no registration form has an L2 instance override.
+    pub fn is_empty(&self) -> bool {
+        self.amba.is_none() && self.devicetree_compatible.is_none()
+    }
 }
 
 /// One recognized device-lifecycle driver: its descriptor, handle, and the
@@ -59,15 +90,6 @@ pub struct DriverDescriptor {
     /// the field existed still deserialize.
     #[serde(default)]
     pub bus_type: Option<BusType>,
-    /// The DMA-Management surface-presence gating bit (bus-resource-management
-    /// construct #3, M3/T12). `set_bus_master` is gated on a PCI-capable bus
-    /// **AND** this bit (design §3). DMA-presence is properly defined by the DMA
-    /// construct (GRILL O2, not yet built), so this is a placeholder that
-    /// defaults `false` — no driver sets it today, so `set_bus_master` is not
-    /// emitted yet. Wiring it to a real DMA-surface fact is the DMA construct's
-    /// job. `#[serde(default)]` keeps pre-construct-#3 models deserializable.
-    #[serde(default)]
-    pub dma_present: bool,
 }
 
 /// The bus a device speaks, authored as `#[rseq::driver(bus = "…")]` (L1,
@@ -250,26 +272,16 @@ pub enum BarType {
 }
 
 /// Closed, append-only resource-family taxonomy. `Mmio` is the original
-/// occupant; the dma-management construct appends `DmaRegion`/`DmaChannel`.
+/// occupant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResourceKind {
     /// `Mmio<T>` register-access resource.
     Mmio,
-    /// `DmaRegion<T>` coherent DMA region resource (dma-management construct).
-    /// A device-coherent ring/buffer allocated at device lifetime; carries the
-    /// A2 addressing + closure `element_access` surface. Appended after `Mmio`,
-    /// append-only (GRILL C09/S14).
-    DmaRegion,
-    /// `DmaChannel` slave DMA channel resource (dma-management construct). A
-    /// framework-managed transport channel (request/release at device lifetime,
-    /// the 5-op transport surface). Appended after `DmaRegion`, append-only
-    /// (GRILL C09/S14).
-    DmaChannel,
 }
 
 /// A non-resource user-data field, classified per `user-data-initialization.md`
-/// (GRILL C10). Build-now is scalar-only; non-scalar shapes are rejected at
-/// construction (diagnostic), so they never reach this table this stage.
+/// (GRILL C10). Build-now admits scalar fields and recursively zero-initializable
+/// POD structs; other non-scalar shapes are rejected at construction.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserDataField {
     /// The struct field name.
@@ -296,7 +308,10 @@ mod ordered_driver_map {
     use super::*;
     use serde::{Deserializer, Serializer};
 
-    pub fn serialize<S>(map: &BTreeMap<ItemId, DriverLifecycle>, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(
+        map: &BTreeMap<ItemId, DriverLifecycle>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
@@ -304,7 +319,9 @@ mod ordered_driver_map {
         entries.serialize(serializer)
     }
 
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<BTreeMap<ItemId, DriverLifecycle>, D::Error>
+    pub fn deserialize<'de, D>(
+        deserializer: D,
+    ) -> Result<BTreeMap<ItemId, DriverLifecycle>, D::Error>
     where
         D: Deserializer<'de>,
     {
@@ -338,26 +355,16 @@ mod tests {
 
     #[test]
     fn resource_kind_variants_round_trip_and_are_distinct() {
-        // The dma-management construct appends `DmaRegion`/`DmaChannel` after the
-        // original `Mmio` occupant (append-only, GRILL C09/S14). All three
-        // round-trip serde and are pairwise distinct.
-        for kind in [
-            ResourceKind::Mmio,
-            ResourceKind::DmaRegion,
-            ResourceKind::DmaChannel,
-        ] {
+        // `Mmio` is the sole occupant after the scaffold strip; it round-trips
+        // serde.
+        for kind in [ResourceKind::Mmio] {
             round_trip(kind);
         }
-        assert_ne!(ResourceKind::Mmio, ResourceKind::DmaRegion);
-        assert_ne!(ResourceKind::Mmio, ResourceKind::DmaChannel);
-        assert_ne!(ResourceKind::DmaRegion, ResourceKind::DmaChannel);
     }
 
     #[test]
     fn match_entry_variants_round_trip() {
-        round_trip(MatchEntry::Devicetree {
-            compatible: sid(1),
-        });
+        round_trip(MatchEntry::Devicetree { compatible: sid(1) });
         round_trip(MatchEntry::Pci {
             vendor: 0x8086,
             device: 0x100E,
@@ -388,13 +395,9 @@ mod tests {
             DriverLifecycle {
                 descriptor: DriverDescriptor {
                     name: sid(2),
-                    match_set: vec![MatchEntry::Devicetree {
-                        compatible: sid(1),
-                    }],
+                    match_set: vec![MatchEntry::Devicetree { compatible: sid(1) }],
                     device_class: ClassTag::Generic,
                     bus_type: Some(BusType::Pci),
-                    // Exercise the M3 gating bit through serialize/deserialize.
-                    dma_present: true,
                 },
                 handle: DriverHandle::default(),
                 ops: LifecycleOps::default(),
@@ -417,7 +420,6 @@ mod tests {
                         }],
                         device_class: ClassTag::Serial,
                         bus_type: None,
-                        dma_present: false,
                     },
                     handle: DriverHandle::default(),
                     ops: LifecycleOps::default(),

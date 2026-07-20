@@ -1,0 +1,129 @@
+{
+  "addendum_lock_sha256": "52996affe191766dbbae4cd7a1eaa782a829d541f5ea9572af213d10f619c41a",
+  "authority_sha256": "708f08fcf18f934041d98e23f9811103fca59bea58418680c5395d2201e3bf17",
+  "outputs": [
+    {
+      "device": "pl011",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/pl011_linux.c",
+      "role": "source",
+      "sha256": "0c00f9e11e55341b63c5fdfc93aeb1969b31f4508f2139cdfdc645cb433630e5",
+      "target": "linux"
+    },
+    {
+      "device": "pl011",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/pl011_linux_initfail.c",
+      "role": "negative_source",
+      "sha256": "0c910a12672e40d274b3c091201ef13b8ab0eec0d267e5497d6fd9ab620b191c",
+      "target": "linux"
+    },
+    {
+      "device": "pl011",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/pl011.zephyr.c",
+      "role": "source",
+      "sha256": "215055c5df66285c38e443b17da9fe0903a30af8b11dc59872a9c72f35add62f",
+      "target": "zephyr"
+    },
+    {
+      "device": "pl011",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/pl011_zephyr_initfail.c",
+      "role": "negative_source",
+      "sha256": "300aa80ab79bf88d6cceb128ccc4a61f674598a2f55a288557a0f6a9c863cd7a",
+      "target": "zephyr"
+    },
+    {
+      "device": "pl011",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/pl011_zephyr.binding.yaml",
+      "role": "binding",
+      "sha256": "31955d85921a34ef83294c662df8ea6396554ff5715381dff4b07855f7077dee",
+      "target": "zephyr"
+    },
+    {
+      "device": "pl011",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/pl011_oracle.trace",
+      "role": "oracle",
+      "sha256": "3dac37719c67f04a5cac23aab2e86c8adb31d78a0a2e15c6e7a95b2d4b66dec6",
+      "target": "generic_c"
+    },
+    {
+      "device": "e1000",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/e1000_linux.c",
+      "role": "source",
+      "sha256": "724fd68120ea3ca65d68824801956f9affbdec3a8f2f243d69c5ac38c26cd5bd",
+      "target": "linux"
+    },
+    {
+      "device": "e1000",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/e1000_linux_initfail.c",
+      "role": "negative_source",
+      "sha256": "86c633df6906ebc45f043d728582be26b929485dacbcd7266e31abbeb9bb7101",
+      "target": "linux"
+    },
+    {
+      "device": "e1000",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/e1000.zephyr.c",
+      "role": "source",
+      "sha256": "3b023a89fea434b8de22c4d44b6c86fb0df4fe7f73b49754b4a84d47b0bcf681",
+      "target": "zephyr"
+    },
+    {
+      "device": "e1000",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/e1000_zephyr_initfail.c",
+      "role": "negative_source",
+      "sha256": "18b31d7bee060557034aa20498f551e4576d71056e82e706a210824865a12918",
+      "target": "zephyr"
+    },
+    {
+      "device": "e1000",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/e1000_zephyr.binding.yaml",
+      "role": "binding",
+      "sha256": "efef3b5f2f1777e65bf36919f85af82a480ea0634193c1c527bbe24750aa6f9e",
+      "target": "zephyr"
+    },
+    {
+      "device": "e1000",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/e1000_zephyr_initfail.binding.yaml",
+      "role": "negative_binding",
+      "sha256": "d6ba384f99ec379d2b9307d553cb9a09e3bbe762fd63af80afce7f594fb086c8",
+      "target": "zephyr"
+    },
+    {
+      "device": "e1000",
+      "path": "experiments/os-api-gap-closure/generated/C5-composition/e1000_oracle.trace",
+      "role": "oracle",
+      "sha256": "363a154750f75e352fdd20adcc67add610d104e5e42008ad08829ba05af89ada",
+      "target": "generic_c"
+    }
+  ],
+  "producer_models": [
+    {
+      "device": "pl011",
+      "path": "$RSEQ_EVAL_ROOT/pl011/spec/rich-pl011.rs",
+      "sha256": "62b00b67fb774ed63b6ab4765e71451e3430a23db3e4c640c13c63bd91ff123d"
+    },
+    {
+      "device": "e1000",
+      "path": "$RSEQ_EVAL_ROOT/e1000/spec/rich-e1000.rs",
+      "sha256": "36d74ab310a9fb414f04cbbc74be792736c564f2f0c045e4bbb34fba8b91ae9d"
+    }
+  ],
+  "schema": "gap-closure-generated-manifest/1",
+  "sources": [
+    {
+      "path": "$RSEQ_EVAL_ROOT/pl011/spec/rich-pl011.rs",
+      "sha256": "62b00b67fb774ed63b6ab4765e71451e3430a23db3e4c640c13c63bd91ff123d"
+    },
+    {
+      "path": "crates/codegen-coverage-runner/fixtures/_composition/c5-pl011-linux-initfail/input.rs",
+      "sha256": "df02df17903ac0e1c0417b12aa009621ae860c17588d7b88e8e80ed32d04531a"
+    },
+    {
+      "path": "$RSEQ_EVAL_ROOT/e1000/spec/rich-e1000.rs",
+      "sha256": "36d74ab310a9fb414f04cbbc74be792736c564f2f0c045e4bbb34fba8b91ae9d"
+    },
+    {
+      "path": "crates/codegen-coverage-runner/fixtures/_composed/e1000-initfail/input.rs",
+      "sha256": "20cc0dc5a46e0c1713609e1596abdbb064a82d180c58c89b5dec79d85a07adeb"
+    }
+  ],
+  "stage": "C5-composition"
+}

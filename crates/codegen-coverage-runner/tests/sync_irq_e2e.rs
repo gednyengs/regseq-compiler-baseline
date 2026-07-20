@@ -37,12 +37,16 @@ fn emit_for(binding: manifest::OsBinding) -> String {
     let mut model = unbound.clone();
     pipeline::bind_l2_platform(&mut model, &fixture).expect("L2 bind");
     match binding {
-        manifest::OsBinding::Linux => regseq_backends::emit_linux_c(&model)
-            .expect("emit_linux_c")
-            .tu,
-        manifest::OsBinding::Zephyr => regseq_backends::emit_zephyr_c(&model)
-            .expect("emit_zephyr_c")
-            .tu,
+        manifest::OsBinding::Linux => {
+            regseq_backends::emit_linux_c(&model)
+                .expect("emit_linux_c")
+                .tu
+        }
+        manifest::OsBinding::Zephyr => {
+            regseq_backends::emit_zephyr_c(&model)
+                .expect("emit_zephyr_c")
+                .tu
+        }
     }
 }
 
@@ -82,7 +86,9 @@ fn isr_wrapper_does_not_auto_acquire() {
     // The guard releases on BOTH ISR exits — the early `NotHandled` return and
     // the normal `Handled` (a branchy-CFG release, multiple release_blocks).
     assert_eq!(
-        lx_handler.matches("spin_unlock_irqrestore(&_1->lock,").count(),
+        lx_handler
+            .matches("spin_unlock_irqrestore(&_1->lock,")
+            .count(),
         2,
         "linux: the guard must release on BOTH branch exits of the ISR:\n{lx_handler}"
     );
@@ -123,7 +129,11 @@ fn isr_wrapper_does_not_auto_acquire() {
 
 /// Assert `first` appears before `second` in `tu`.
 fn assert_before(tu: &str, first: &str, second: &str, what: &str) {
-    let a = tu.find(first).unwrap_or_else(|| panic!("{what}: `{first}` not found"));
-    let b = tu.find(second).unwrap_or_else(|| panic!("{what}: `{second}` not found"));
+    let a = tu
+        .find(first)
+        .unwrap_or_else(|| panic!("{what}: `{first}` not found"));
+    let b = tu
+        .find(second)
+        .unwrap_or_else(|| panic!("{what}: `{second}` not found"));
     assert!(a < b, "{what}: expected `{first}` before `{second}`");
 }

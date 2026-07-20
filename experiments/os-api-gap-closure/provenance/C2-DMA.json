@@ -1,0 +1,144 @@
+{
+  "schema": "gap-closure-provenance/1",
+  "stage": "C2-DMA",
+  "authority": "addendum/dma-management.md (locked epoch 1), convergence/dma-management-DIFF.*, reuse/TRANSPLANT-PLAN.md",
+  "fixture_first_record": {
+    "status": "established-before-historical-matching",
+    "fixtures": [
+      "crates/codegen-coverage-runner/fixtures/_dma/dma-buffer-e1000",
+      "crates/codegen-coverage-runner/fixtures/_dma/dma-channel-pl011",
+      "crates/codegen-coverage-runner/fixtures/_dma/dma-independent-lifetimes",
+      "crates/codegen-coverage-runner/fixtures/_dma/dma-buffer-incomplete-reject",
+      "crates/codegen-coverage-runner/fixtures/_dma/dma-channel-incomplete-reject",
+      "crates/codegen-coverage-runner/fixtures/_dma/dma-streaming-map-reject",
+      "crates/codegen-coverage-runner/fixtures/_dma/dma-legacy-region-reject"
+    ],
+    "behavior": "New locked-semantics inputs and assertions were authored before reading and matching historical DMA implementation entry points; historical fixtures/goldens remain oracle-only. The PL011 channel fixture keeps completion absent, proves active and unsynchronized-terminated release attempts do not release ownership, and exercises capability-gated native status so both Linux and Zephyr real-header gates compile the status path."
+  },
+  "source_snapshots": [
+    {
+      "commit": "369acac51b1874a5c51924b4245bfa150c00cac1",
+      "root": "/home/nyengele/regseq-eval-worktrees/regseq-gap-closure/docs/experiments/os-api-gap-closure/convergence/branch-snapshots/369acac51b1874a5c51924b4245bfa150c00cac1",
+      "sha256": "b4eb6836313b4b04d72d033d6362a7b099e118b9d01fb5a413c98e83667c0f94"
+    },
+    {
+      "commit": "ebdbbb18dde2ff4e048f78dd5935e2d0bd9f0982",
+      "root": "/home/nyengele/regseq-eval-worktrees/regseq-gap-closure/docs/experiments/os-api-gap-closure/convergence/branch-snapshots/ebdbbb18dde2ff4e048f78dd5935e2d0bd9f0982",
+      "sha256": "162de4caa11478ed84086dd222cebc9116227078d95d47a64b3c1b9af8ff65fa"
+    }
+  ],
+  "transplants": [
+    {
+      "asset_id": "DMA-HIST-CORE",
+      "source_object": "369acac51b1874a5c51924b4245bfa150c00cac1",
+      "source_path": "crates/regseq-model/src/dma.rs; crates/regseq-driver/src/bridge/dma/**",
+      "source_scope": "model dma.rs:63-80 and 373-398 table/ordered-serde idioms plus bridge/dma/recognition.rs recognition structure; no byte-identical historical hunk",
+      "destination": "crates/regseq-model/src/dma.rs; crates/regseq-driver/src/bridge/dma.rs; crates/regseq-model/src/{lib.rs,model.rs}; crates/regseq-driver/src/bridge/mod.rs",
+      "target_commit": "89d4f230b01f5ab6cbf273330e2943b983a77b51",
+      "old_semantics": "A fused DmaRegion/DmaChannel declaration model also carried streaming maps, spans, descriptor-oriented element access, completion registration, and DMA-to-doorbell edges.",
+      "new_semantics": "Two independent optional elements: DmaBuffer allocate/address/length/free and AsyncTransferChannel exclusive acquire plus per-transfer prepare/submit/activate/finish-or-stop/synchronize/release.",
+      "behavior_delta": "Streaming mapping is removed from L1; buffer allocation, transfer address, channel status/control/callback/reuse are capability-gated; terminate requires synchronize and never creates completion.",
+      "reuse_mode": "adapted table/recognizer/serde idioms only; model and diagnostics re-authored",
+      "tests": ["regseq-model::dma_two_element_model_roundtrip_and_absence", "dma_locked_fixtures", "dma_os_lowering_e2e"],
+      "test_result": "sandbox cargo execution unavailable (permission denied); exact deterministic host commands are recorded in verification/C2-DMA.json"
+    },
+    {
+      "asset_id": "DMA-HIST-GC",
+      "source_object": "369acac51b1874a5c51924b4245bfa150c00cac1",
+      "source_path": "crates/regseq-backends/src/generic_c/{body_emit.rs,mod.rs,prelude.rs}#DMA hunks",
+      "source_scope": "generic_c/mod.rs:387-404 and body_emit.rs:8968-9055 placement/lifecycle idioms only; old DMA hooks and output spelling were excluded",
+      "destination": "crates/regseq-backends/src/generic_c/mod.rs",
+      "target_commit": "89d4f230b01f5ab6cbf273330e2943b983a77b51",
+      "old_semantics": "Generic C traced old regions/channels/spans/streaming and registered a completion that was never fired.",
+      "new_semantics": "Generic C executes newly authored buffer/channel behavior and emits an explicit two-lifetime capability/absence manifest.",
+      "behavior_delta": "Prepare, submit, and activate are distinct; termination carries no callback; synchronize-before-release and every unsupported capability are explicit.",
+      "reuse_mode": "adapted neutral capability-comment idiom; no historical golden text copied",
+      "tests": ["dma_locked_fixtures::locked_dma_positive_frontend_and_generic_c_behavior"],
+      "test_result": "sandbox cargo execution unavailable (permission denied); exact deterministic host command is recorded in verification/C2-DMA.json"
+    },
+    {
+      "asset_id": "DMA-HIST-TESTS",
+      "source_object": "369acac51b1874a5c51924b4245bfa150c00cac1",
+      "source_path": "crates/codegen-coverage-runner/tests/dma_*.rs; crates/regseq-driver/tests/bridge_dma_recognition.rs",
+      "source_scope": "dma_pl011_e2e.rs:36-82 and dma_covers.rs:126-150 runner discovery/execution structure only; no old assertion or golden",
+      "destination": "crates/codegen-coverage-runner/tests/{dma_locked_fixtures.rs,dma_os_lowering_e2e.rs,dma_real_headers_e2e.rs,dma_covers.rs}",
+      "target_commit": "89d4f230b01f5ab6cbf273330e2943b983a77b51",
+      "old_semantics": "Old tests asserted region/channel/streaming shapes, old diagnostics, and old coverage claims.",
+      "new_semantics": "Tests assert the locked two-element model, exact frontend negatives, capability absence, lifetime order, OS shapes, real headers, and boundary exclusions.",
+      "behavior_delta": "Old streaming and guaranteed-completion expectations are inverted; Zephyr owned-buffer allocation is a required rejection.",
+      "reuse_mode": "adapted runner discovery/bridge/build harness idioms only",
+      "tests": ["dma_locked_fixtures", "dma_os_lowering_e2e", "dma_real_headers_e2e", "dma_covers"],
+      "test_result": "non-cargo source/coverage/plan assertions passed; cargo and real-header commands are deferred to the deterministic host plan because cargo is non-executable locally"
+    },
+    {
+      "asset_id": "DMA-HEAD-LINUX",
+      "source_object": "90314f94923db553427b4fbabfc57b1bf6326bbe",
+      "source_path": "crates/regseq-backends/src/linux_c/dma.rs (staged in ebdbbb18dde2ff4e048f78dd5935e2d0bd9f0982 snapshot)",
+      "source_scope": "linux_c/dma.rs:138-170 native coherent-allocation/error spelling only; devres ownership, old field morphing, and unconditional addressing were excluded",
+      "destination": "crates/regseq-backends/src/linux_c/dma.rs; crates/regseq-backends/src/linux_c/mod.rs",
+      "target_commit": "89d4f230b01f5ab6cbf273330e2943b983a77b51",
+      "old_semantics": "A declaration-time coherent DmaRegion used devres allocation and unconditional CPU/DMA address morphing; channel lowering was absent.",
+      "new_semantics": "Explicit DmaBuffer allocation/free identity with capability-gated address exposure plus full Linux async-channel prepare/submit/issue/terminate/synchronize/release helpers.",
+      "behavior_delta": "Allocation failure propagates, free clears identity and occurs once, descriptor ownership passes at submit, endpoint is L2 input, optional status uses native dmaengine_tx_status, release rejects prepared/submitted/active or unsynchronized-terminated state, and no callback is invented.",
+      "reuse_mode": "adapted Linux DMA-API spelling and include idioms; no old region morph transplanted",
+      "tests": ["dma_os_lowering_e2e::dma_linux_buffer_and_channel_use_native_owned_lifetimes", "dma_real_headers_e2e::dma_linux_locked_output_builds_against_real_headers"],
+      "test_result": "static native-API/lifetime guards passed; cargo and real-header execution are deferred to the deterministic host plan because cargo is non-executable locally"
+    },
+    {
+      "asset_id": "DMA-HEAD-LINUX-BUILD",
+      "source_object": "c27b660f995cb3761deb6f2e9aaeb595b9b53c8e",
+      "source_path": "crates/codegen-coverage-runner/tests/dma_linux_kbuild_e2e.rs (staged in ebdbbb18dde2ff4e048f78dd5935e2d0bd9f0982 snapshot)",
+      "source_scope": "dma_linux_kbuild_e2e.rs:17-67 fixture/emission/kbuild outcome handling only; old generated expectations were excluded",
+      "destination": "crates/codegen-coverage-runner/tests/dma_real_headers_e2e.rs",
+      "target_commit": "89d4f230b01f5ab6cbf273330e2943b983a77b51",
+      "old_semantics": "The kbuild harness compiled old coherent-region output.",
+      "new_semantics": "The same environment contract compiles newly generated locked buffer and async-channel modules.",
+      "behavior_delta": "Both L1 elements are header-checked and old emitted expectations are discarded.",
+      "reuse_mode": "adapted kbuild harness call pattern",
+      "tests": ["dma_linux_locked_output_builds_against_real_headers"],
+      "test_result": "RSEQ_LINUX_KDIR is unset and cargo is non-executable locally; deterministic host real-header command recorded"
+    },
+    {
+      "asset_id": "DMA-HEAD-BUILD",
+      "source_object": "d1903393d47ac86fed0f6e046e3913a48a4e32bc",
+      "source_path": "crates/codegen-coverage-runner/tests/dma_zephyr_build_e2e.rs; src/zephyr_build.rs#harness (staged in ebdbbb18dde2ff4e048f78dd5935e2d0bd9f0982 snapshot)",
+      "source_scope": "dma_zephyr_build_e2e.rs:52-94 west staging/outcome idiom plus the Zephyr build harness DMA Kconfig gate; old affirmative buffer fixture was excluded",
+      "destination": "crates/codegen-coverage-runner/tests/dma_real_headers_e2e.rs; crates/codegen-coverage-runner/src/zephyr_build.rs#DMA Kconfig gate",
+      "target_commit": "89d4f230b01f5ab6cbf273330e2943b983a77b51",
+      "old_semantics": "The west harness compiled an affirmative Zephyr static owned-region realization.",
+      "new_semantics": "The west harness compiles only the supported async-channel output; owned DmaBuffer allocation is separately rejected.",
+      "behavior_delta": "Contradictory allocator behavior is removed; the channel becomes the sole positive Zephyr DMA plane, tracks configured/prepared/submitted/active state, and rejects release until an active transfer is complete or terminated and synchronized.",
+      "reuse_mode": "adapted west staging/build harness only",
+      "tests": ["dma_zephyr_locked_channel_builds_against_real_headers", "dma_zephyr_preserves_buffer_absence_and_lowers_channel"],
+      "test_result": "RSEQ_ZEPHYR_WORKSPACE is unset and cargo is non-executable locally; deterministic host real-header command recorded"
+    }
+  ],
+  "regression_repair": {
+    "source_object": "369acac51b1874a5c51924b4245bfa150c00cac1",
+    "source_path": "crates/regseq-driver/src/bridge/body/materialise.rs:172,933-941",
+    "destination": "crates/regseq-driver/src/bridge/body/materialise.rs; crates/regseq-backends/src/generic_c/mod.rs; crates/regseq-backends/src/generic_c/mod_tests.rs; crates/codegen-coverage-runner/tests/dma_locked_fixtures.rs",
+    "old_semantics": "The reviewed historical bridge materialized Item bodies only from local HIR body owners; the failed C2 mutation had broadened this to arbitrary cross-crate encoded MIR and made every dependency definition static.",
+    "new_semantics": "The bridge again leaves external core helpers model-bodyless. Generic C alone recognizes exact core crate/structured DefPath/Item/signature tuples for null_mut and PartialEq::ne, gives those helpers and the bodyful concrete eq dependency TU-local static-inline linkage, and resolves ne to exactly that eq.",
+    "behavior_delta": "StorageLive/StorageDead from sysroot MIR can no longer enter bridge validation; the two required helpers link and run through backend-owned definitions without a C11 external-inline reference, while unknown referenced non-foreign bodyless functions fail at emission instead of surviving as declaration-only symbols.",
+    "tests": [
+      "dma_locked_fixtures::locked_dma_positive_frontend_and_generic_c_behavior",
+      "regseq-backends::generic_c::tests::referenced_non_foreign_bodyless_function_fails_before_c_emission",
+      "complete C1 serial and C0 DWS test binaries",
+      "cargo test --workspace"
+    ]
+  },
+  "oracle_only": [
+    {"asset_id":"DMA-HIST-FIXTURES","source_object":"369acac51b1874a5c51924b4245bfa150c00cac1","disposition":"new fixtures were authored first; old E1000/PL011 inputs and goldens were not copied"},
+    {"asset_id":"DMA-HEAD-ZEPHYR","source_object":"1829bdf29b27f7428b7854b5916a883befeab3d2","disposition":"affirmative Zephyr owned-buffer allocator rejected; coding style inspected only"}
+  ],
+  "excluded_collateral": [
+    "DmaStreamBuffer/streaming map as an L1 element",
+    "descriptor layout, typed element access, publish/harvest, and DMA-to-doorbell ownership",
+    "unconditional dual-address exposure",
+    "fabricated completion/status/control success",
+    "affirmative Zephyr owned-buffer allocation",
+    "historical serial.rs and sync.rs edits",
+    "whole-branch restore, merge, or cherry-pick",
+    "historical maturity and coverage claims"
+  ]
+}

@@ -4,9 +4,7 @@ extern crate rustc_driver;
 
 use std::path::PathBuf;
 
-use regseq_config::{
-    ColorChoice, CompilerOptions, EmitSpec, LogLevel, ParamScope, RegseqParam,
-};
+use regseq_config::{ColorChoice, CompilerOptions, EmitSpec, LogLevel, ParamScope, RegseqParam};
 use regseq_driver::{regseq_mir_passes, RegseqCallbacks};
 
 fn sample_options() -> CompilerOptions {

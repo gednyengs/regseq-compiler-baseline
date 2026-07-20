@@ -661,9 +661,6 @@ fn build_descriptor(model: &mut RegseqModel, parsed: ParsedDriver) -> DriverDesc
         match_set,
         device_class,
         bus_type,
-        // DMA-presence is the DMA construct's fact (GRILL O2); not yet built, so
-        // it defaults absent and `set_bus_master` is not emitted (design §3, M3).
-        dma_present: false,
     }
 }
 

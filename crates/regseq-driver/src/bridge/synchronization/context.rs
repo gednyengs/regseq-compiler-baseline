@@ -110,7 +110,10 @@ pub(crate) fn analyse_sync_contexts(model: &mut RegseqModel) -> Result<(), Bridg
 
             // T10 — persist the spinning-kind regions (the produced marking).
             for r in &regions {
-                if matches!(r.kind, Some(SyncKind::SpinLock) | Some(SyncKind::IrqSpinLock)) {
+                if matches!(
+                    r.kind,
+                    Some(SyncKind::SpinLock) | Some(SyncKind::IrqSpinLock)
+                ) {
                     produced.push((
                         *driver_item,
                         SpinlockHeldRegion {
@@ -152,7 +155,11 @@ struct HeldRegion {
 /// guard is not yet held while the acquire `Call` executes) — unless a CFG
 /// back-edge re-reaches it while still held, which is itself a genuine
 /// re-acquire and is correctly included.
-fn held_region_blocks(body: &Body, acquire_block: BlockId, release_blocks: &[BlockId]) -> Vec<BlockId> {
+fn held_region_blocks(
+    body: &Body,
+    acquire_block: BlockId,
+    release_blocks: &[BlockId],
+) -> Vec<BlockId> {
     let releases: BTreeSet<BlockId> = release_blocks.iter().copied().collect();
     let mut region: BTreeSet<BlockId> = BTreeSet::new();
     let mut work: Vec<BlockId> = body.basic_blocks[acquire_block]
@@ -264,7 +271,10 @@ fn check_sleep_in_atomic(
 
     for region in regions {
         // Only a spinning-kind held region is an atomic section.
-        if !matches!(region.kind, Some(SyncKind::SpinLock) | Some(SyncKind::IrqSpinLock)) {
+        if !matches!(
+            region.kind,
+            Some(SyncKind::SpinLock) | Some(SyncKind::IrqSpinLock)
+        ) {
             continue;
         }
         let held_field = lock_field_name(model, driver, region.lock_id);

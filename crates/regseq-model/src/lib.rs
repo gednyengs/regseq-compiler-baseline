@@ -34,11 +34,12 @@ mod item;
 mod layout;
 mod layout_validator;
 mod model;
+mod network;
 pub mod operand;
-mod place;
-mod place_validator;
 mod pinctrl;
 mod pinctrl_semantics;
+mod place;
+mod place_validator;
 mod pretty;
 pub mod rvalue;
 mod serial;
@@ -68,31 +69,27 @@ pub use body_ty::{
 pub use bridge_input::BridgeInput;
 pub use build::BuildInfo;
 pub use cabi::{CAbiLowering, CAbiShape, SubstReason};
+pub use clock::{ClockBinding, ClockMode, ClockResource, ClockTables, DriverClocks};
 pub use const_interner::ConstInterner;
 pub use const_value::{canonical_const_bytes, Byte, Const};
 pub use crate_info::{CrateInfo, StableCrateId};
 pub use def_path::{
     def_path_data_sort_rank, render_def_path, DefPath, DefPathData, DefPathHash, DefPathSegment,
 };
-pub use clock::{ClockBinding, ClockMode, ClockResource, ClockTables, DriverClocks};
 pub use deferred_work::{
     DeferredWorkTables, DriverDeferredWork, SubmitSite, SubmitVariant, WorkResource,
 };
 pub use device_lifecycle::{
-    BarType, BusType, ClassTag, DeviceLifecycleTables, DriverDescriptor, DriverHandle,
-    DriverLifecycle, LifecycleOps, MatchEntry, MmioBinding, ResourceField, ResourceKind,
-    UserDataField, UserDataKind,
+    AmbaPlatformBinding, BarType, BusType, ClassTag, DeviceLifecycleTables, DriverDescriptor,
+    DriverHandle, DriverLifecycle, LifecycleOps, MatchEntry, MmioBinding, PlatformBindingIdentity,
+    ResourceField, ResourceKind, UserDataField, UserDataKind,
 };
 pub use dma::{
-    AccessEffects, CompletionBinding, DmaChannelBinding, DmaChannelFacts, DmaLayoutFacts,
-    DmaRegionBinding, DmaRegionFacts, DmaRegionSpan, DmaStreamBuffer, DmaStreamFacts, DmaTables,
-    DriverDma, ElementAccessFact, LexicalExtent, RegionCacheMaintenance, SpanAddr, StoreOrderEdge,
-    StoreOrderEndpoint,
+    AsyncTransferChannel, DmaBufferOps, DmaChannelOps, DmaTables, DriverDma, OwnedDmaBuffer,
 };
 pub use domain_attr::{
-    AtomicElement, AtomicOp, AttrData, ClockOp, ConfigOp, DeferredWorkOp, DmaFlow, DmaOp,
-    DomainAttrTables, ElementVerb, FetchOp, FieldPath, FrameworkType, IntrinsicKind, LogLevel,
-    MmioOp, PinctrlOp,
+    AtomicElement, AtomicOp, AttrData, ClockOp, ConfigOp, DeferredWorkOp, DomainAttrTables,
+    FetchOp, FieldPath, FrameworkType, IntrinsicKind, LogLevel, MmioOp, PinctrlOp,
 };
 pub use fn_sig::{canonical_fn_sig, FnSig};
 pub use fn_sig_interner::FnSigInterner;
@@ -112,41 +109,42 @@ pub use interrupt::{
     InterruptTables, IrqArmReachability, IsrHandler, TriggerPolarity, TriggerType,
 };
 pub use item::{BridgeItemFlags, InlineHint, Item, ItemKind, Linkage};
-pub use synchronization::{
-    AcquireSite, Cardinality, CompletionOpKind, CompletionSite, DriverSynchronization,
-    SpinlockHeldRegion, SyncKind, SyncOp, SyncResource, SynchronizationTables,
-};
 pub use layout::{
     EnumShape, FieldLayout, Layout, LayoutKind, TagEncoding, TagScalar, VariantLayout,
     VariantRange, WrappingRange, UNIT_LAYOUT,
 };
 pub use model::{invariant_descriptor, InvariantId, InvariantViolation, RegseqModel};
+pub use network::{DriverNetworkInterface, NetworkInterfaceOps, NetworkInterfaceTables};
 pub use operand::{LiteralValue, Operand};
-pub use place::{Place, PlaceElem};
-pub use place_validator::{
-    validate_body_places, PlaceLocation, PlaceSite, PlaceValidationError, PlaceValidationErrorKind,
-};
 pub use pinctrl::{
     recover_pinctrl_receiver, resolve_pin_state, DriverPinctrls, PinctrlBinding, PinctrlResource,
     PinctrlTables,
 };
 pub use pinctrl_semantics::{validate_pinctrl_semantics, PinctrlSemanticError};
+pub use place::{Place, PlaceElem};
+pub use place_validator::{
+    validate_body_places, PlaceLocation, PlaceSite, PlaceValidationError, PlaceValidationErrorKind,
+};
 pub use pretty::{PrettyPrintOptions, PrettyPrinter};
 pub use rvalue::{AggregateKind, BinOp, CastKind, PointerCoercion, Rvalue, UnOp};
 pub use serial::{
-    CauseEntry, CauseSetRepr, DriverSerial, EnumBinding, IrqSourceKind, IrqStateKind, RxErrorRepr,
-    SerialBaseOps, SerialCause, SerialInterruptOps, SerialLineConfigOps, SerialQueueControlOps,
-    SerialRxErrorKind, SerialTables, SerialTypeBindings,
+    DriverSerialPort, SerialEnumBinding, SerialHardwareOps, SerialPortOps, SerialPortTables,
+    SerialTypeBindings,
 };
 pub use source::{Position, SourceFile, Span};
 pub use statement::{CopyNonOverlapping, NonDivergingIntrinsic, Statement, StatementKind};
 pub use string_interner::StringInterner;
+pub use synchronization::{
+    AcquireSite, Cardinality, CompletionOpKind, CompletionSite, DriverSynchronization,
+    SpinlockHeldRegion, SyncKind, SyncOp, SyncResource, SynchronizationTables,
+};
 pub use synthetic::{
     ClosureCallKind, ContentHash, PrincipalTraitKey, ProjectionBindingsKey, SyntheticItemKind,
 };
 pub use synthetic_def_path::{synthetic_def_path_hash, synthetic_def_path_segments};
 pub use target::{
-    default_scalar_layouts, Endian, PlatformIdentity, ScalarLayouts, SizeAlign, TargetInfo, TargetOs,
+    default_scalar_layouts, Endian, PlatformIdentity, ScalarLayouts, SizeAlign, TargetInfo,
+    TargetOs,
 };
 pub use terminator::{AssertKind, CallCallee, SwitchTargets, Terminator, TerminatorKind};
 pub use ty::{

@@ -1,0 +1,28 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "qemu-virt"
+arch = "aarch64"
+
+[binding.amba]
+periphid = 0x00abc123
+mask = 0x00ffffff
+
+[serial-hardware-ops]
+break-send = true
+
+[mmio.regs]
+base = 0x09040000
+size = 0x1000
+
+[interrupt.irq]
+irq_number = 34
+trigger_type = "level"
+trigger_polarity = "active_high"
+shared = false
+
+[clock.uartclk]
+mode = "managed"
+default_frequency = 24000000
+provider = "uartclk"

@@ -21,9 +21,9 @@
 use std::collections::HashMap;
 
 use regseq_model::{
-    AttrData, Body, BlockId, Const, EnumShape, FrameworkType, InstanceId, InstanceKind,
-    InstanceRef, InterruptForm, IrqArmReachability, ItemId, LayoutKind, LocalId, Operand, Place,
-    RegseqModel, ArmReachability, Rvalue, StatementKind, StringId, TerminatorKind, Ty,
+    ArmReachability, AttrData, BlockId, Body, Const, EnumShape, FrameworkType, InstanceId,
+    InstanceKind, InstanceRef, InterruptForm, IrqArmReachability, ItemId, LayoutKind, LocalId,
+    Operand, Place, RegseqModel, Rvalue, StatementKind, StringId, TerminatorKind, Ty,
 };
 use rustc_ast::token::{Delimiter, LitKind as TokenLitKind, TokenKind};
 use rustc_ast::tokenstream::TokenTree;
@@ -223,20 +223,7 @@ pub(crate) fn resolve_isrs(cx: &mut BridgeCtxt<'_>) -> Result<Vec<PendingIsrAttr
                     },
                 ));
             }
-            // Serial-class relaxation (construct #7, B3): a serial driver's
-            // interrupt line is serviced by the compiler-SYNTHESIZED serial ISR
-            // (decode → service → re-arm, built from `irq_cause_decode` + the
-            // data path), not an authored `#[rseq::isr]`. So a serial-class
-            // driver legitimately has an `Interrupt` resource with zero authored
-            // handlers — do not raise MISSING-HANDLER. Non-serial drivers keep
-            // the authored-ISR requirement.
-            let serial_class = matches!(
-                cx.model.device_lifecycle.drivers[&item_id]
-                    .descriptor
-                    .device_class,
-                regseq_model::ClassTag::Serial
-            );
-            if count == 0 && !matches!(resource.form, InterruptForm::Optional) && !serial_class {
+            if count == 0 && !matches!(resource.form, InterruptForm::Optional) {
                 return Err(BridgeError::InterruptValidation(
                     InterruptDiagnostic::MissingHandler {
                         driver: driver_name,
@@ -426,7 +413,10 @@ fn validate_isr_signature(
     let array_bind = match inputs.len() {
         1 => false,
         2 => {
-            if !matches!(inputs[1].kind(), TyKind::Uint(rustc_middle::ty::UintTy::Usize)) {
+            if !matches!(
+                inputs[1].kind(),
+                TyKind::Uint(rustc_middle::ty::UintTy::Usize)
+            ) {
                 return err("second parameter must be `index: usize` (array-bind form)");
             }
             true
@@ -600,9 +590,8 @@ fn compute_arm_reachability(model: &RegseqModel, body: &Body) -> IrqArmReachabil
     let is_irq_local = |local: LocalId| -> bool {
         local.index() < body.local_decls.len() && body.local_decls[local].ty == ret_ty
     };
-    let bare_local = |place: &Place| -> Option<LocalId> {
-        place.projection.is_empty().then_some(place.local)
-    };
+    let bare_local =
+        |place: &Place| -> Option<LocalId> { place.projection.is_empty().then_some(place.local) };
 
     // Per-local may-value sets + flow edges, then a fixpoint.
     let n_locals = body.local_decls.len();
@@ -625,14 +614,12 @@ fn compute_arm_reachability(model: &RegseqModel, body: &Body) -> IrqArmReachabil
                         continue;
                     }
                     match rvalue {
-                        Rvalue::Use(Operand::Constant(cid)) => {
-                            match model.consts.resolve(*cid) {
-                                Const::EnumValue { variant_idx, .. } => {
-                                    sets[local.index()].add_variant(variant_idx.as_u32());
-                                }
-                                _ => sets[local.index()].top = true,
+                        Rvalue::Use(Operand::Constant(cid)) => match model.consts.resolve(*cid) {
+                            Const::EnumValue { variant_idx, .. } => {
+                                sets[local.index()].add_variant(variant_idx.as_u32());
                             }
-                        }
+                            _ => sets[local.index()].top = true,
+                        },
                         // A fieldless variant construction survives as an
                         // `Aggregate` at the bridge's mir-opt level.
                         Rvalue::Aggregate(regseq_model::AggregateKind::Enum(_, variant_idx), _) => {

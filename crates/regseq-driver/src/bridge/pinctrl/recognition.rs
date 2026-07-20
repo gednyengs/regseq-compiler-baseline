@@ -176,7 +176,9 @@ fn parse_id_attr(tcx: TyCtxt<'_>, def_id: DefId, leaf: &str) -> IdAttr {
     }
     match id {
         None => IdAttr::MissingId,
-        Some(s) if s.trim().is_empty() => IdAttr::Malformed("`id` is empty or whitespace".to_string()),
+        Some(s) if s.trim().is_empty() => {
+            IdAttr::Malformed("`id` is empty or whitespace".to_string())
+        }
         Some(s) => IdAttr::Id(s),
     }
 }

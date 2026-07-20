@@ -1,0 +1,56 @@
+{
+  "schema": "gap-closure-composition-coverage/1",
+  "stage": "C5-composition",
+  "authority_sha256": "708f08fcf18f934041d98e23f9811103fca59bea58418680c5395d2201e3bf17",
+  "addendum_lock_sha256": "52996affe191766dbbae4cd7a1eaa782a829d541f5ea9572af213d10f619c41a",
+  "compiler_baseline": "canonical-v3",
+  "construct_epochs": {
+    "device-class-serial": 1,
+    "device-command-transport": 2,
+    "dma-management": 1,
+    "network-interface-management": 1
+  },
+  "denominators": {
+    "pl011": [
+      "PL011-S01", "PL011-S02", "PL011-S03", "PL011-S04", "PL011-S05", "PL011-S06", "PL011-S07",
+      "PL011-S08", "PL011-S09", "PL011-S10", "PL011-S11", "PL011-S12", "PL011-S13", "PL011-S14",
+      "PL011-S15", "PL011-S16", "PL011-S17", "PL011-S18", "PL011-S19", "PL011-S20", "PL011-S21"
+    ],
+    "e1000": [
+      "E1000-S01", "E1000-S02", "E1000-S03", "E1000-S04", "E1000-S05", "E1000-S06", "E1000-S07", "E1000-S08", "E1000-S09", "E1000-S10",
+      "E1000-S11", "E1000-S12", "E1000-S13", "E1000-S14", "E1000-S15", "E1000-S16", "E1000-S17", "E1000-S18", "E1000-S19", "E1000-S20",
+      "E1000-S21", "E1000-S22", "E1000-S23", "E1000-S24", "E1000-S25", "E1000-S26", "E1000-S27", "E1000-S28", "E1000-S29", "E1000-S30",
+      "E1000-S31", "E1000-S32", "E1000-S33", "E1000-S34", "E1000-S35", "E1000-S36", "E1000-S37", "E1000-S38", "E1000-S39", "E1000-S40",
+      "E1000-S41", "E1000-S42", "E1000-S43", "E1000-S44", "E1000-S45", "E1000-S46", "E1000-S47", "E1000-S48", "E1000-S49", "E1000-S50",
+      "E1000-S51", "E1000-S52", "E1000-S53", "E1000-S54", "E1000-S55", "E1000-S56", "E1000-S57", "E1000-S58", "E1000-S59", "E1000-S60"
+    ]
+  },
+  "locked_matrices": [
+    {"stage": "C1-serial", "rows": 21},
+    {"stage": "C2-DMA", "rows": 15},
+    {"stage": "C3-DCT", "rows": 6},
+    {"stage": "C4-NIM", "rows": 20}
+  ],
+  "target_matrix": [
+    {"device": "pl011", "target": "linux", "source": "crates/codegen-coverage-runner/fixtures/_composition/c5-pl011-rich/input.rs", "output": "experiments/os-api-gap-closure/generated/C5-composition/pl011_linux.c", "frozen_rows": 21},
+    {"device": "pl011", "target": "zephyr", "source": "crates/codegen-coverage-runner/fixtures/_composition/c5-pl011-rich/input.rs", "output": "experiments/os-api-gap-closure/generated/C5-composition/pl011.zephyr.c", "frozen_rows": 21},
+    {"device": "e1000", "target": "linux", "source": "crates/codegen-coverage-runner/fixtures/_composition/c5-e1000-rich/input.rs", "output": "experiments/os-api-gap-closure/generated/C5-composition/e1000_linux.c", "frozen_rows": 60},
+    {"device": "e1000", "target": "zephyr", "source": "crates/codegen-coverage-runner/fixtures/_composition/c5-e1000-rich/input.rs", "output": "experiments/os-api-gap-closure/generated/C5-composition/e1000.zephyr.c", "frozen_rows": 60}
+  ],
+  "composition": [
+    {"device": "pl011", "authored": ["register-access", "device-lifecycle", "serial-port", "async-transfer-channel"], "backend_owned": ["AMBA/devicetree registration", "uart class", "DMA channel acquisition"]},
+    {"device": "e1000", "authored": ["register-access", "config-space", "device-lifecycle", "network-interface-management", "device-command-transport"], "backend_owned": ["PCI/devicetree registration", "netdev/net_if class", "ring scaffold", "transport endpoint"]}
+  ],
+  "negative_capabilities": [
+    {"target": "zephyr", "capability": "owned DmaBuffer allocation", "expected": "rejected"},
+    {"target": "zephyr", "capability": "runtime network publication", "expected": "rejected"},
+    {"target": "all", "capability": "transport terminal completion/correlation", "expected": "absent"},
+    {"target": "all", "capability": "packet canceled/completed event", "expected": "absent"}
+  ],
+  "authored_absence_matrix": [
+    {"device": "pl011", "target": "linux", "serial": ["set_signals", "get_signals", "subscribe_events", "purge", "abort"], "dma": ["buffer", "status", "pause", "resume", "suspend", "reload", "reclaim", "on_completion"]},
+    {"device": "pl011", "target": "zephyr", "serial": ["set_signals", "get_signals", "subscribe_events", "purge", "abort"], "dma": ["buffer", "status", "pause", "resume", "suspend", "reload", "reclaim", "on_completion"]},
+    {"device": "e1000", "target": "linux", "network": ["set_published", "report_dormant", "set_property", "register_observer", "unregister_observer"], "transport": ["terminal_completion", "correlation", "cancellation"]},
+    {"device": "e1000", "target": "zephyr", "network": ["set_published", "report_dormant", "set_property", "register_observer", "unregister_observer"], "transport": ["terminal_completion", "correlation", "cancellation"]}
+  ]
+}

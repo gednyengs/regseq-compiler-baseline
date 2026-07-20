@@ -68,9 +68,7 @@ pub(crate) fn init_primitive_lines(model: &RegseqModel, driver_ty: TyId) -> Vec<
 pub(crate) fn includes_for(kind: SyncKind) -> &'static [&'static str] {
     match kind {
         SyncKind::Mutex | SyncKind::Completion => &["<zephyr/kernel.h>"],
-        SyncKind::SpinLock | SyncKind::IrqSpinLock => {
-            &["<zephyr/kernel.h>", "<zephyr/spinlock.h>"]
-        }
+        SyncKind::SpinLock | SyncKind::IrqSpinLock => &["<zephyr/kernel.h>", "<zephyr/spinlock.h>"],
     }
 }
 

@@ -183,11 +183,17 @@ pub fn validate_bus_surface(model: &RegseqModel) -> Result<(), BrmError> {
             // BRM-002: a BAR (L1 `bar_index` or the L2-resolved `effective_bar`)
             // on a non-PCI bus.
             if !is_pci && (b.bar_index.is_some() || b.effective_bar.is_some()) {
-                return Err(BrmError::BarOnNonPci { id, bus: bus_name.to_string() });
+                return Err(BrmError::BarOnNonPci {
+                    id,
+                    bus: bus_name.to_string(),
+                });
             }
             // BRM-003: `type = "io"` on a non-PCI bus.
             if !is_pci && b.bar_type == BarType::Io {
-                return Err(BrmError::IoTypeOnNonPci { id, bus: bus_name.to_string() });
+                return Err(BrmError::IoTypeOnNonPci {
+                    id,
+                    bus: bus_name.to_string(),
+                });
             }
             // BRM-005: exactly one of `base`/`size` (most specific — checked
             // before BRM-006, which a half-pair would also trip).
@@ -265,7 +271,6 @@ mod tests {
                     match_set: Vec::new(),
                     device_class: ClassTag::Generic,
                     bus_type: Some(regseq_model::BusType::Pci),
-                    dma_present: false,
                 },
                 handle: DriverHandle {
                     resource_fields: vec![ResourceField {
@@ -341,7 +346,13 @@ mod tests {
         // as Mem (the L2 binding overrides the L1 carrier in either direction).
         let (mut model, item) = model_with_one_mmio_field(Some("regs"), Some(0));
         // Seed the L1 carrier as Io.
-        model.device_lifecycle.drivers.get_mut(&item).unwrap().handle.resource_fields[0]
+        model
+            .device_lifecycle
+            .drivers
+            .get_mut(&item)
+            .unwrap()
+            .handle
+            .resource_fields[0]
             .binding
             .bar_type = BarType::Io;
         let mut bindings = PlatformBindings::default();
@@ -378,8 +389,14 @@ mod tests {
         let b = field_binding(&model, item);
         assert_eq!(b.base, Some(0x4000_0000));
         assert_eq!(b.size, Some(0x1000));
-        assert_eq!(b.effective_bar, None, "a no-BAR DT region has no effective BAR");
-        assert!(b.is_resolved(), "base+size present => resolved even without a BAR");
+        assert_eq!(
+            b.effective_bar, None,
+            "a no-BAR DT region has no effective BAR"
+        );
+        assert!(
+            b.is_resolved(),
+            "base+size present => resolved even without a BAR"
+        );
     }
 
     // ----- BRM surface validation (construct #3 M6, T19/T20) -----
@@ -398,7 +415,6 @@ mod tests {
                     match_set: Vec::new(),
                     device_class: ClassTag::Generic,
                     bus_type: bus,
-                    dma_present: false,
                 },
                 handle: DriverHandle {
                     resource_fields: vec![ResourceField {
@@ -428,7 +444,9 @@ mod tests {
     #[test]
     fn validate_accepts_a_resolved_pci_region_and_skips_non_bus_drivers() {
         // A resolved PCI region is well-formed.
-        assert!(validate_bus_surface(&validation_model(Some(BusType::Pci), resolved(Some(0)))).is_ok());
+        assert!(
+            validate_bus_surface(&validation_model(Some(BusType::Pci), resolved(Some(0)))).is_ok()
+        );
         // A non-bus (register-access) driver is never validated, even with an
         // otherwise-rejectable binding (a bar + half-pair) — zero impact.
         let mut half = resolved(Some(0));
@@ -516,7 +534,8 @@ mod tests {
         let mut b = resolved(Some(2)); // a BAR on amba (non-PCI)
         b.base = None;
         b.size = None;
-        let err = crate::validate_l2_surface(&validation_model(Some(BusType::Amba), b)).unwrap_err();
+        let err =
+            crate::validate_l2_surface(&validation_model(Some(BusType::Amba), b)).unwrap_err();
         assert_eq!(err.code(), "BRM-002", "got {err}");
     }
 }

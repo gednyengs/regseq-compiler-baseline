@@ -6,9 +6,7 @@ use cargo_regseq::cli::CargoCli;
 use cargo_regseq::invoke::{build_cargo_command, invoke_cargo};
 use cargo_regseq::toolchain::ToolchainInfo;
 use clap::Parser;
-use regseq_config::{
-    ColorChoice, CompilerOptions, EmitSpec, LogLevel, ParamScope, RegseqParam,
-};
+use regseq_config::{ColorChoice, CompilerOptions, EmitSpec, LogLevel, ParamScope, RegseqParam};
 use tempfile::{NamedTempFile, TempDir};
 
 fn sample_options_and_toolchain(

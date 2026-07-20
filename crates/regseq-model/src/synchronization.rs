@@ -412,7 +412,11 @@ mod tests {
             kind: SyncKind::SpinLock,
             body: iref(99),
             acquire_block: BlockId::from_u32(0),
-            blocks: vec![BlockId::from_u32(1), BlockId::from_u32(2), BlockId::from_u32(4)],
+            blocks: vec![
+                BlockId::from_u32(1),
+                BlockId::from_u32(2),
+                BlockId::from_u32(4),
+            ],
         });
     }
 

@@ -1,0 +1,5 @@
+name = "serial-port-minimal"
+kind = "rust"
+lifecycle_scenario = "orderly"
+covers = ["SERIAL-CAPABILITY-ABSENCE", "SERIAL-NO-TERMINAL-EVENT"]
+expect = "pass"

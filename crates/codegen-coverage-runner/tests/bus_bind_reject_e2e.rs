@@ -66,8 +66,7 @@ fn half_specified_region_fails_at_bind_with_brm_005() {
     // is a valid bus+mmio driver — it bridges cleanly. We swap in a platform.toml
     // that supplies `base` but not `size`, which is a half-specified region
     // (BRM-005): `validate_l2_surface` rejects it at Stage::Bind.
-    let keystone =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_bus/brm-e1000-keystone");
+    let keystone = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_bus/brm-e1000-keystone");
     let bad = TempPlatform::new("version = \"1\"\n[mmio.regs]\nbar = 0\nbase = 0xf0000000\n");
 
     let fixture = Fixture {
@@ -117,8 +116,7 @@ fn bus_managed_region_with_no_platform_file_fails_at_bind_with_brm_006() {
     // PCI driver with `platform = None` — is UNRESOLVABLE (BRM-006) and must fail
     // at Stage::Bind, NOT false-green by skipping validation. (Codex T1–T3
     // review finding #1.)
-    let keystone =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_bus/brm-e1000-keystone");
+    let keystone = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_bus/brm-e1000-keystone");
 
     let fixture = Fixture {
         manifest: Manifest {
@@ -203,8 +201,7 @@ fn reject_fixture(
 fn reject_fixture_accepted_through_emit_is_red() {
     // The keystone binds successfully (resolved region) and emits — it is
     // ACCEPTED. Marked `expect = "reject"`, it must be RED, not vacuously green.
-    let keystone =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_bus/brm-e1000-keystone");
+    let keystone = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_bus/brm-e1000-keystone");
     let fixture = reject_fixture(
         "keystone-as-reject",
         &keystone,
@@ -224,8 +221,7 @@ fn reject_fixture_accepted_through_emit_is_red() {
 fn reject_fixture_with_wrong_diagnostic_is_red() {
     // The halfspec fixture genuinely fails at Bind with BRM-005, but the
     // expectation demands a different code → RED (failed for the wrong reason).
-    let halfspec =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_bus/brm-halfspec-reject");
+    let halfspec = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_bus/brm-halfspec-reject");
     let fixture = reject_fixture(
         "halfspec-wrong-diag",
         &halfspec,
@@ -245,8 +241,7 @@ fn reject_fixture_with_wrong_diagnostic_is_red() {
 fn reject_fixture_failing_at_wrong_stage_is_red() {
     // The halfspec fixture fails at Bind, but the expectation demands Acquire →
     // RED (failed, but not where it was meant to).
-    let halfspec =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_bus/brm-halfspec-reject");
+    let halfspec = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_bus/brm-halfspec-reject");
     let fixture = reject_fixture(
         "halfspec-wrong-stage",
         &halfspec,

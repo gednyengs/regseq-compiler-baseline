@@ -184,7 +184,10 @@ fn valid_orderings_are_accepted() {
             ),
         ),
     );
-    assert!(ok.is_ok(), "the valid M1 ordering slice must bridge: {ok:?}");
+    assert!(
+        ok.is_ok(),
+        "the valid M1 ordering slice must bridge: {ok:?}"
+    );
 }
 
 // ---- ordering matrix (C01) -------------------------------------------------
@@ -193,17 +196,26 @@ fn valid_orderings_are_accepted() {
 fn acqrel_on_load_is_degenerate() {
     let err = bridge(
         "atm_load_acqrel",
-        &program(U32_STATE, &u32_state_body("    let _ = s.f.load(Ordering::AcqRel);")),
+        &program(
+            U32_STATE,
+            &u32_state_body("    let _ = s.f.load(Ordering::AcqRel);"),
+        ),
     )
     .expect_err("AcqRel on load must reject");
-    assert!(err.contains("ATOMIC-ERR-DEGENERATE-ACQREL") || err.contains("not valid for load"), "got: {err}");
+    assert!(
+        err.contains("ATOMIC-ERR-DEGENERATE-ACQREL") || err.contains("not valid for load"),
+        "got: {err}"
+    );
 }
 
 #[test]
 fn release_on_load_is_degenerate() {
     let err = bridge(
         "atm_load_release",
-        &program(U32_STATE, &u32_state_body("    let _ = s.f.load(Ordering::Release);")),
+        &program(
+            U32_STATE,
+            &u32_state_body("    let _ = s.f.load(Ordering::Release);"),
+        ),
     )
     .expect_err("Release on load must reject");
     assert!(err.contains("not valid for load"), "got: {err}");
@@ -213,7 +225,10 @@ fn release_on_load_is_degenerate() {
 fn acquire_on_store_is_degenerate() {
     let err = bridge(
         "atm_store_acquire",
-        &program(U32_STATE, &u32_state_body("    s.f.store(1, Ordering::Acquire);")),
+        &program(
+            U32_STATE,
+            &u32_state_body("    s.f.store(1, Ordering::Acquire);"),
+        ),
     )
     .expect_err("Acquire on store must reject");
     assert!(err.contains("not valid for store"), "got: {err}");
@@ -223,10 +238,16 @@ fn acquire_on_store_is_degenerate() {
 fn relaxed_fence_is_rejected() {
     let err = bridge(
         "atm_fence_relaxed",
-        &program(U32_STATE, &u32_state_body("    atomic::fence(Ordering::Relaxed);")),
+        &program(
+            U32_STATE,
+            &u32_state_body("    atomic::fence(Ordering::Relaxed);"),
+        ),
     )
     .expect_err("fence(Relaxed) must reject");
-    assert!(err.contains("ATOMIC-ERR-FENCE-RELAXED") || err.contains("Relaxed fence"), "got: {err}");
+    assert!(
+        err.contains("ATOMIC-ERR-FENCE-RELAXED") || err.contains("Relaxed fence"),
+        "got: {err}"
+    );
 }
 
 #[test]
@@ -241,7 +262,10 @@ fn nonconst_ordering_is_rejected() {
         ),
     )
     .expect_err("a runtime Ordering must reject");
-    assert!(err.contains("ATOMIC-ERR-ORDERING-NONCONST") || err.contains("compile-time constant"), "got: {err}");
+    assert!(
+        err.contains("ATOMIC-ERR-ORDERING-NONCONST") || err.contains("compile-time constant"),
+        "got: {err}"
+    );
 }
 
 // ---- element / bit-test legality (C07/D08) ---------------------------------
@@ -256,17 +280,26 @@ fn signed_bit_test_is_rejected() {
         ),
     )
     .expect_err("bit_test on a signed atomic must reject");
-    assert!(err.contains("ATOMIC-ERR-BIT-TEST-TYPE") || err.contains("unsigned integer atomic"), "got: {err}");
+    assert!(
+        err.contains("ATOMIC-ERR-BIT-TEST-TYPE") || err.contains("unsigned integer atomic"),
+        "got: {err}"
+    );
 }
 
 #[test]
 fn const_out_of_range_bit_is_rejected() {
     let err = bridge(
         "atm_bit_oob",
-        &program(U32_STATE, &u32_state_body("    let _ = s.f.bit_test_set(40, Ordering::SeqCst);")),
+        &program(
+            U32_STATE,
+            &u32_state_body("    let _ = s.f.bit_test_set(40, Ordering::SeqCst);"),
+        ),
     )
     .expect_err("an out-of-range const bit index must reject");
-    assert!(err.contains("ATOMIC-ERR-BIT-TEST-TYPE") || err.contains("out of range"), "got: {err}");
+    assert!(
+        err.contains("ATOMIC-ERR-BIT-TEST-TYPE") || err.contains("out of range"),
+        "got: {err}"
+    );
 }
 
 #[test]
@@ -281,7 +314,10 @@ fn unsupported_element_type_is_rejected() {
         ),
     )
     .expect_err("Atomic<f32> must reject");
-    assert!(err.contains("ATOMIC-ERR-ELEMENT-TYPE") || err.contains("unsupported element type"), "got: {err}");
+    assert!(
+        err.contains("ATOMIC-ERR-ELEMENT-TYPE") || err.contains("unsupported element type"),
+        "got: {err}"
+    );
 }
 
 // ---- facade-signature residual (D15) ---------------------------------------
@@ -304,7 +340,11 @@ fn misdeclared_facade_missing_ordering_is_rejected() {
          \tlet s = S {{ f: Atomic::new(0) }};\n\tlet _ = s.f.load();\n}}\n"
     );
     let err = bridge("atm_missing_ord", &src).expect_err("mis-declared facade must reject");
-    assert!(err.contains("ATOMIC-ERR-MISSING-ORDERING") || err.contains("must take an explicit `Ordering`"), "got: {err}");
+    assert!(
+        err.contains("ATOMIC-ERR-MISSING-ORDERING")
+            || err.contains("must take an explicit `Ordering`"),
+        "got: {err}"
+    );
 }
 
 #[test]

@@ -93,8 +93,7 @@ fn e1000_composed_zephyr_six_stage_oracle() {
     // preamble feeding map_region with the zephyr-binding platform literals
     // (A-10: L2 is the trigger; bar=0), under the traced qemu_x86/x86
     // Zephyr identity.
-    let golden =
-        std::fs::read_to_string(&fixture.golden_c).expect("read golden.zephyr-oracle.c");
+    let golden = std::fs::read_to_string(&fixture.golden_c).expect("read golden.zephyr-oracle.c");
     assert!(
         golden.contains("regseq_bus_map_region(0xf0000000ull, 0x20000ull, 0);"),
         "golden must map the declared (base, size, bar) from platform.zephyr.toml"
@@ -113,8 +112,8 @@ fn e1000_composed_zephyr_six_stage_oracle() {
     // metadata, never compared by L3); the config-op and donor MMIO event
     // streams are the SAME spec behavior the linux-leg oracle pins (ONE
     // input.rs); teardown events included (authored on_deinit).
-    let stdout = std::fs::read_to_string(&fixture.expected_stdout)
-        .expect("read expected.zephyr.stdout");
+    let stdout =
+        std::fs::read_to_string(&fixture.expected_stdout).expect("read expected.zephyr.stdout");
     assert!(
         stdout.contains("LC register e1000 match=pci:0x8086:0x100e"),
         "the register marker keys on match_set.first() (D01); got:\n{stdout}"

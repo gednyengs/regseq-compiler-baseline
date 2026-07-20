@@ -206,9 +206,7 @@ fn join_clock_bindings(
             // default_frequency present and > 0 (C06 N5/N18, D15).
             let default_frequency = match spec.default_frequency {
                 Some(f) if f > 0 => f,
-                _ => {
-                    return Err(ClockL2Error::MissingDefaultFrequency { id: id.to_string() })
-                }
+                _ => return Err(ClockL2Error::MissingDefaultFrequency { id: id.to_string() }),
             };
             // The mode↔provider invariant (C06 N7/N8, D14/I03) — agrees exactly
             // with `ClockBinding::is_resolved`.
@@ -314,7 +312,10 @@ mod tests {
         assert_eq!(binding.default_frequency, Some(24_000_000));
         assert!(binding.provider.is_some());
         assert!(binding.resolved);
-        assert!(binding.is_resolved(), "a valid managed binding is fully resolved");
+        assert!(
+            binding.is_resolved(),
+            "a valid managed binding is fully resolved"
+        );
     }
 
     #[test]
@@ -327,14 +328,19 @@ mod tests {
         assert_eq!(binding.mode, ClockMode::Static);
         assert_eq!(binding.default_frequency, Some(48_000_000));
         assert!(binding.provider.is_none());
-        assert!(binding.is_resolved(), "a valid static binding is fully resolved");
+        assert!(
+            binding.is_resolved(),
+            "a valid static binding is fully resolved"
+        );
     }
 
     #[test]
     fn missing_section_on_required_clock_is_an_error() {
         let mut model = model_with_clock("uartclk");
         let b = bindings("[mmio.regs]\nbase = 0\nsize = 16\n");
-        ClockBinder.bind(&mut model, &b).expect("bind is a no-op join");
+        ClockBinder
+            .bind(&mut model, &b)
+            .expect("bind is a no-op join");
         let err = ClockBinder.validate(&model).unwrap_err();
         assert_eq!(err.code(), "CLK-L2-001");
         assert!(err.to_string().contains("uartclk"), "{err}");
@@ -379,7 +385,9 @@ mod tests {
         ClockBinder.bind(&mut model, &b).expect("bind");
         ClockBinder.validate(&model).expect("validate");
         for item in [ItemId::from_u32(0), ItemId::from_u32(1)] {
-            assert!(model.clock.drivers[&item].resources[0].binding.is_resolved());
+            assert!(model.clock.drivers[&item].resources[0]
+                .binding
+                .is_resolved());
         }
     }
 
@@ -401,11 +409,17 @@ mod tests {
         // No default_frequency.
         let mut model = model_with_clock("uartclk");
         let b = bindings("[clock.uartclk]\nmode = \"static\"\n");
-        assert_eq!(ClockBinder.bind(&mut model, &b).unwrap_err().code(), "CLK-L2-003");
+        assert_eq!(
+            ClockBinder.bind(&mut model, &b).unwrap_err().code(),
+            "CLK-L2-003"
+        );
         // default_frequency = 0 (D15: a 0 Hz clock cannot compute a baud divisor).
         let mut model = model_with_clock("uartclk");
         let b = bindings("[clock.uartclk]\nmode = \"static\"\ndefault_frequency = 0\n");
-        assert_eq!(ClockBinder.bind(&mut model, &b).unwrap_err().code(), "CLK-L2-003");
+        assert_eq!(
+            ClockBinder.bind(&mut model, &b).unwrap_err().code(),
+            "CLK-L2-003"
+        );
     }
 
     #[test]

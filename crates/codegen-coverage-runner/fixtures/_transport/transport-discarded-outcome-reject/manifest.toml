@@ -1,0 +1,8 @@
+name = "transport-discarded-outcome-reject"
+kind = "rust"
+covers = ["G-device-command-transport-06"]
+expect = "reject"
+
+[expected]
+stage = "acquire"
+diagnostic = "DCT-ERR-DISCARDED-OUTCOME"

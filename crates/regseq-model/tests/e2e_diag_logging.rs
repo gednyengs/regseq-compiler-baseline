@@ -194,15 +194,6 @@ fn diag_logging_post_peel_shape_and_attrs() {
                 AttrData::PinStateMarker { .. } => {
                     panic!("spurious AttrData on log callee: PinStateMarker")
                 }
-                AttrData::DmaRegionResource { .. } => {
-                    panic!("spurious AttrData on log callee: DmaRegionResource")
-                }
-                AttrData::DmaChannelResource { .. } => {
-                    panic!("spurious AttrData on log callee: DmaChannelResource")
-                }
-                AttrData::DmaCompletionBinding { .. } => {
-                    panic!("spurious AttrData on log callee: DmaCompletionBinding")
-                }
                 AttrData::WorkHandler { .. } => {
                     panic!("spurious AttrData on log callee: WorkHandler")
                 }

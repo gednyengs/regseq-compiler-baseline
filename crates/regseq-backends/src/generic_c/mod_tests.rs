@@ -9,11 +9,11 @@
 
 use super::*;
 use regseq_model::{
-    AutoTrait, CrateId, DefPath, Endian, EnumShape, FieldLayout, FnAbi, FnSig, GenericArgs,
-    Instance, InstanceKind, IntKind, Item, ItemKind, Layout, LayoutKind, Linkage, Mutability,
-    Provenance, Safety, ScalarLayouts, SizeAlign, SourceFileId, Span, StableCrateId, TagEncoding,
-    TagScalar, TargetInfo, Ty, TyId, UintKind, VariantIdx, VariantLayout, VariantRange,
-    WrappingRange,
+    AutoTrait, CrateId, CrateInfo, DefPath, DefPathData, Endian, EnumShape, FieldLayout, FnAbi,
+    FnSig, GenericArgs, Instance, InstanceKind, IntKind, Item, ItemKind, Layout, LayoutKind,
+    Linkage, Mutability, Provenance, Safety, ScalarLayouts, SizeAlign, SourceFileId, Span,
+    StableCrateId, TagEncoding, TagScalar, TargetInfo, Ty, TyId, UintKind, VariantIdx,
+    VariantLayout, VariantRange, WrappingRange,
 };
 
 // ---------------------------------------------------------------------------
@@ -91,7 +91,6 @@ fn lifecycle_trace_hooks_emitted_only_for_lifecycle_tu() {
                 match_set: Vec::new(),
                 device_class: regseq_model::ClassTag::Generic,
                 bus_type: None,
-                dma_present: false,
             },
             handle: regseq_model::DriverHandle::default(),
             ops: regseq_model::LifecycleOps::default(),
@@ -157,8 +156,7 @@ fn work_hooks_emitted_only_for_deferred_work_tu() {
 //   - M1 keystone base literal           bus_resource_keystone_maps_the_real_declared_base
 //   - M1 runtime based accessor (cc)      bus_resource_based_accessor_traces_the_real_mapped_address
 //   - M2/D02 effective-BAR override       bus_resource_map_region_records_the_effective_bar_override
-//   - M3 four-op canonical order + DMA    bus_resource_m3_preamble_emits_four_ops_in_canonical_order
-//                                         bus_resource_m3_set_master_gated_on_dma_presence
+//   - M3 four-op canonical order          bus_resource_m3_preamble_emits_four_ops_in_canonical_order
 //   - M3/M4 non-PCI degradation           bus_resource_m3_non_pci_omits_enable_and_master
 //                                         bus_resource_m4_non_pci_no_bar_acquire_degrades
 //   - M5 config-space host model          bus_resource_m5_config_read_witness_and_pci_id_caching
@@ -189,18 +187,16 @@ fn work_hooks_emitted_only_for_deferred_work_tu() {
 
 /// Build a lifecycle model with one driver carrying a single MMIO resource
 /// field whose binding is `binding` (bus-resource-management construct #3). The
-/// driver is on a PCI bus with DMA-presence absent (the keystone default).
+/// driver is on a PCI bus (the keystone default).
 fn model_with_bound_mmio_field(binding: regseq_model::MmioBinding) -> RegseqModel {
-    model_with_bound_mmio_field_cfg(binding, Some(regseq_model::BusType::Pci), false)
+    model_with_bound_mmio_field_cfg(binding, Some(regseq_model::BusType::Pci))
 }
 
-/// As [`model_with_bound_mmio_field`] but with the `bus_type` + DMA-presence
-/// gating bit explicit — exercises the M3 gating matrix (T12): `enable_device`
-/// PCI-only, `set_bus_master` PCI ∧ DMA-presence.
+/// As [`model_with_bound_mmio_field`] but with the `bus_type` explicit —
+/// exercises the M3 gating matrix (T12): `enable_device` PCI-only.
 fn model_with_bound_mmio_field_cfg(
     binding: regseq_model::MmioBinding,
     bus_type: Option<regseq_model::BusType>,
-    dma_present: bool,
 ) -> RegseqModel {
     let mut m = model();
     let driver_ty = push_struct_instance(&mut m, "Dev", struct_layout(0, 1, None, vec![]));
@@ -218,7 +214,6 @@ fn model_with_bound_mmio_field_cfg(
                 match_set: Vec::new(),
                 device_class: regseq_model::ClassTag::Generic,
                 bus_type,
-                dma_present,
             },
             handle: regseq_model::DriverHandle {
                 resource_fields: vec![regseq_model::ResourceField {
@@ -235,7 +230,7 @@ fn model_with_bound_mmio_field_cfg(
 }
 
 /// A resolved PCI MMIO binding (bar 0, base 0xf000_0000, size 0x2_0000) — the
-/// M3 gating-matrix tests vary only the bus/DMA cfg around this.
+/// M3 gating-matrix tests vary only the bus cfg around this.
 fn resolved_pci_binding() -> regseq_model::MmioBinding {
     regseq_model::MmioBinding {
         id: None,
@@ -302,10 +297,10 @@ fn bus_resource_map_region_records_the_effective_bar_override() {
     // `l2_bar_overrides_l1` join test proves `effective_bar = L2.bar ?? L1.bar`.
     let with = emit_generic_c(&model_with_bound_mmio_field(regseq_model::MmioBinding {
         id: None,
-        bar_index: Some(0),       // L1 default-decoded BAR
+        bar_index: Some(0), // L1 default-decoded BAR
         bar_type: regseq_model::BarType::Mem,
-        effective_bar: Some(2),   // L2 override -> resolution follows BAR 2
-        base: Some(0xc000_0000),  // the BAR-2 base
+        effective_bar: Some(2),  // L2 override -> resolution follows BAR 2
+        base: Some(0xc000_0000), // the BAR-2 base
         size: Some(0x1000),
     }))
     .unwrap();
@@ -320,48 +315,29 @@ fn bus_resource_m3_preamble_emits_four_ops_in_canonical_order() {
     // Construct #3 M3 (T11/T12/R04): a PCI driver with a resolved region emits
     // the full preamble in canonical order
     //   enable_device → claim_regions → get_resource_handle → map_region
-    // with `set_bus_master` ABSENT (DMA-presence defaults off, T12). The four
+    // with `set_bus_master` ABSENT (never synthesized). The four
     // managed ops are synthesized into the device-lifecycle preamble.
     let with = emit_generic_c(&model_with_bound_mmio_field_cfg(
         resolved_pci_binding(),
         Some(regseq_model::BusType::Pci),
-        false,
     ))
     .unwrap();
     let enable = idx_of(&with, "regseq_bus_enable_device();");
     let claim = idx_of(&with, "regseq_bus_claim_regions(0);");
     let handle = idx_of(&with, "regseq_bus_get_handle();");
-    let map = idx_of(&with, "regseq_bus_map_region(0xf0000000ull, 0x20000ull, 0);");
+    let map = idx_of(
+        &with,
+        "regseq_bus_map_region(0xf0000000ull, 0x20000ull, 0);",
+    );
     assert!(
         enable < claim && claim < handle && handle < map,
         "canonical order enable→claim→get_handle→map violated \
          (enable={enable} claim={claim} handle={handle} map={map}); got:\n{with}"
     );
-    // set_bus_master is gated on DMA-presence (absent here) — not emitted.
+    // set_bus_master is never emitted.
     assert!(
         !with.contains("regseq_bus_set_master();"),
-        "set_bus_master must be absent when DMA-presence is off; got:\n{with}"
-    );
-}
-
-#[test]
-fn bus_resource_m3_set_master_gated_on_dma_presence() {
-    // Construct #3 M3 (T12): on a PCI bus, `set_bus_master` IS emitted once the
-    // DMA-presence gating bit is set, and it sits between `claim_regions` and
-    // `get_resource_handle` in canonical order.
-    let with = emit_generic_c(&model_with_bound_mmio_field_cfg(
-        resolved_pci_binding(),
-        Some(regseq_model::BusType::Pci),
-        true, // DMA-presence on
-    ))
-    .unwrap();
-    let claim = idx_of(&with, "regseq_bus_claim_regions(0);");
-    let master = idx_of(&with, "regseq_bus_set_master();");
-    let handle = idx_of(&with, "regseq_bus_get_handle();");
-    assert!(
-        claim < master && master < handle,
-        "set_bus_master must sit between claim and get_handle \
-         (claim={claim} master={master} handle={handle}); got:\n{with}"
+        "set_bus_master must not be emitted; got:\n{with}"
     );
 }
 
@@ -374,14 +350,16 @@ fn bus_resource_m3_non_pci_omits_enable_and_master() {
     let with = emit_generic_c(&model_with_bound_mmio_field_cfg(
         resolved_pci_binding(),
         Some(regseq_model::BusType::Amba),
-        true, // even with DMA-presence on, a non-PCI bus emits no master
     ))
     .unwrap();
     // The surviving non-PCI ops keep canonical order claim → get_handle → map
     // (pinned as tightly as the PCI paths, not merely "present").
     let claim = idx_of(&with, "regseq_bus_claim_regions(0);");
     let handle = idx_of(&with, "regseq_bus_get_handle();");
-    let map = idx_of(&with, "regseq_bus_map_region(0xf0000000ull, 0x20000ull, 0);");
+    let map = idx_of(
+        &with,
+        "regseq_bus_map_region(0xf0000000ull, 0x20000ull, 0);",
+    );
     assert!(
         claim < handle && handle < map,
         "non-PCI acquire must keep canonical order claim→get_handle→map \
@@ -409,21 +387,23 @@ fn bus_resource_m4_non_pci_no_bar_acquire_degrades() {
     let with = emit_generic_c(&model_with_bound_mmio_field_cfg(
         regseq_model::MmioBinding {
             id: None,
-            bar_index: None,         // no L1 BAR
+            bar_index: None, // no L1 BAR
             bar_type: regseq_model::BarType::Mem,
             effective_bar: None,     // platform/DT region: no effective BAR
             base: Some(0x4000_0000), // the DT-reg base stand-in
             size: Some(0x1000),
         },
         Some(regseq_model::BusType::Amba),
-        false,
     ))
     .unwrap();
     // The acquire resolves + maps with `bar=-1` (no BAR), in canonical order
     // claim → get_handle → map.
     let claim = idx_of(&with, "regseq_bus_claim_regions(-1);");
     let handle = idx_of(&with, "regseq_bus_get_handle();");
-    let map = idx_of(&with, "regseq_bus_map_region(0x40000000ull, 0x1000ull, -1);");
+    let map = idx_of(
+        &with,
+        "regseq_bus_map_region(0x40000000ull, 0x1000ull, -1);",
+    );
     assert!(
         claim < handle && handle < map,
         "non-PCI no-BAR acquire must claim(-1)→get_handle→map(-1) in order \
@@ -431,8 +411,7 @@ fn bus_resource_m4_non_pci_no_bar_acquire_degrades() {
     );
     // The PCI-only elements are absent in the emitted C (the degradation).
     assert!(
-        !with.contains("regseq_bus_enable_device();")
-            && !with.contains("regseq_bus_set_master();"),
+        !with.contains("regseq_bus_enable_device();") && !with.contains("regseq_bus_set_master();"),
         "non-PCI degradation must omit enable_device + set_bus_master; got:\n{with}"
     );
 }
@@ -489,7 +468,9 @@ fn bus_resource_m5_config_read_witness_and_pci_id_caching() {
         "cc failed:\n{}",
         String::from_utf8_lossy(&compile.stderr)
     );
-    let run = std::process::Command::new(&bin).output().expect("run binary");
+    let run = std::process::Command::new(&bin)
+        .output()
+        .expect("run binary");
     assert!(
         run.status.success(),
         "config witness program returned non-zero (id mismatch or wrong COMMAND): {:?}",
@@ -562,7 +543,9 @@ fn bus_resource_based_accessor_traces_the_real_mapped_address() {
         "cc failed:\n{}",
         String::from_utf8_lossy(&compile.stderr)
     );
-    let run = std::process::Command::new(&bin).output().expect("run binary");
+    let run = std::process::Command::new(&bin)
+        .output()
+        .expect("run binary");
     let out = String::from_utf8_lossy(&run.stdout);
     assert!(
         out.contains("BUS map base=0xf0000000 size=0x20000"),
@@ -609,7 +592,9 @@ fn compile_and_run_oracle(tag: &str, bank: &str, main: &str) -> Option<(Option<i
         "cc failed for {tag}:\n{}",
         String::from_utf8_lossy(&compile.stderr)
     );
-    let run = std::process::Command::new(&bin).output().expect("run binary");
+    let run = std::process::Command::new(&bin)
+        .output()
+        .expect("run binary");
     let out = String::from_utf8_lossy(&run.stdout).into_owned();
     let code = run.status.code();
     let _ = std::fs::remove_dir_all(&dir);
@@ -682,13 +667,21 @@ fn t13_coupling_weaves_the_mask_logic_into_both_banks() {
     // grew the expected mask logic (the `replace_once` guard would already abort
     // if an anchor were missing/duplicated, but pin the woven result here).
     let irq = prelude::irq_helpers_masked();
-    assert_ne!(irq, prelude::IRQ_HELPERS, "the masked fire must differ from the base");
+    assert_ne!(
+        irq,
+        prelude::IRQ_HELPERS,
+        "the masked fire must differ from the base"
+    );
     assert!(
         irq.contains("if (regseq_local_irq_masked > 0u)") && irq.contains("masked\\n"),
         "the masked fire must gate on the mask + trace `masked`"
     );
     let sync = prelude::sync_helpers_masked();
-    assert_ne!(sync, prelude::SYNC_HELPERS, "the masked lock ops must differ from the base");
+    assert_ne!(
+        sync,
+        prelude::SYNC_HELPERS,
+        "the masked lock ops must differ from the base"
+    );
     assert!(
         sync.contains("regseq_local_irq_masked++") && sync.contains("regseq_local_irq_masked--"),
         "acquire must raise + release must lower the IRQ mask"
@@ -751,7 +744,6 @@ fn bus_resource_block_absent_without_a_resolved_binding() {
     let without = emit_generic_c(&model_with_bound_mmio_field_cfg(
         regseq_model::MmioBinding::default(),
         None, // no `bus` -> the register-access case
-        false,
     ))
     .unwrap();
     assert!(
@@ -772,7 +764,6 @@ fn bus_resource_m6_registration_selector() {
     let with = emit_generic_c(&model_with_bound_mmio_field_cfg(
         resolved_pci_binding(),
         Some(regseq_model::BusType::Pci),
-        false,
     ))
     .unwrap();
     // Anchor on the synthesized CALLS (with their `"` arg), not the helper
@@ -792,7 +783,6 @@ fn bus_resource_m6_registration_selector() {
     let unbound = emit_generic_c(&model_with_bound_mmio_field_cfg(
         regseq_model::MmioBinding::default(),
         Some(regseq_model::BusType::Amba),
-        false,
     ))
     .unwrap();
     assert!(
@@ -806,7 +796,6 @@ fn bus_resource_m6_registration_selector() {
     let nobus = emit_generic_c(&model_with_bound_mmio_field_cfg(
         resolved_pci_binding(),
         None,
-        false,
     ))
     .unwrap();
     assert!(
@@ -849,7 +838,6 @@ fn bus_resource_rejects_more_than_one_mapped_region_per_driver() {
                 match_set: Vec::new(),
                 device_class: regseq_model::ClassTag::Generic,
                 bus_type: Some(regseq_model::BusType::Pci),
-                dma_present: false,
             },
             handle: regseq_model::DriverHandle {
                 resource_fields: vec![resolved(a), resolved(b)],
@@ -2164,6 +2152,119 @@ fn fn_instance(
     })
 }
 
+#[test]
+fn referenced_non_foreign_bodyless_function_fails_before_c_emission() {
+    let mut m = model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::Rust, false);
+    let missing = fn_instance(&mut m, "missing", sig, None);
+    let caller = build_body(
+        0,
+        vec![unit],
+        vec![
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(missing),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(1)),
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+        ],
+    );
+    fn_instance(&mut m, "caller", sig, Some(caller));
+
+    let err = emit_generic_c(&m).unwrap_err();
+    assert!(
+        format!("{err:?}").contains("referenced non-foreign bodyless function"),
+        "unexpected bodyless-callee error: {err:?}",
+    );
+}
+
+#[test]
+fn exact_bodyless_core_u64_default_is_a_backend_owned_zero_shim() {
+    let mut m = model();
+    let core_name = m.strings.intern("core");
+    let core_crate = m.crates.push(CrateInfo {
+        name: core_name,
+        stable_crate_id: StableCrateId(2),
+    });
+    let default_name = m.strings.intern("default");
+    let rendered = m.strings.intern("core::default::{impl#7}::default");
+    let default_item = m.items.push(Item {
+        def_path: DefPath {
+            crate_id: core_crate,
+            segments: vec![
+                regseq_model::DefPathSegment {
+                    data: DefPathData::TypeNs(default_name),
+                    disambiguator: 0,
+                },
+                regseq_model::DefPathSegment {
+                    data: DefPathData::Impl,
+                    disambiguator: 7,
+                },
+                regseq_model::DefPathSegment {
+                    data: DefPathData::ValueNs(default_name),
+                    disambiguator: 0,
+                },
+            ],
+            rendered,
+        },
+        kind: ItemKind::Function,
+        span: span(),
+        linkage: Linkage::Default,
+        link_section: None,
+        inline_hint: regseq_model::InlineHint::None,
+        is_unsafe: false,
+        is_phantom_data: false,
+        is_unsafe_cell: false,
+        is_manually_drop: false,
+        opaque_handle_eligible: false,
+        is_result: false,
+    });
+    m.item_def_paths.push(regseq_model::DefPathHash {
+        stable_crate_id: StableCrateId(2),
+        local_hash: 1,
+    });
+    let u64_ty = m.types.intern(Ty::Uint(UintKind::U64));
+    let sig = fnsig(&mut m, vec![], u64_ty, FnAbi::Rust, false);
+    let emission_name = m.strings.intern("core_default_impl_7_default");
+    let default_instance = m.instances.push(Instance {
+        item: default_item,
+        generic_args: GenericArgs::new(),
+        emission_name,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body: None,
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+
+    let shim = backend_owned_shim(&m, default_instance)
+        .expect("classify exact core u64 Default::default")
+        .expect("u64 Default::default is backend-owned");
+    assert!(matches!(shim, BackendShim::U64Default));
+    assert_eq!(
+        emit_backend_shim_body(&build_instance_symbols(&m), shim),
+        " {\n    return 0;\n}\n"
+    );
+
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let u32_sig = fnsig(&mut m, vec![], u32_ty, FnAbi::Rust, false);
+    let InstanceKind::Function(data) = &mut m.instances[default_instance].kind else {
+        unreachable!()
+    };
+    data.fn_sig = u32_sig;
+    assert!(backend_owned_shim(&m, default_instance).unwrap().is_none());
+}
+
 /// Push a `Function` monomorphization for an *existing* `item` with explicit
 /// `generic_args` and `emission_name`, returning its `InstanceId`. Models the
 /// bridge minting one `emission_name` (the per-item, generic-agnostic
@@ -2350,6 +2451,40 @@ fn weak_link_section_and_inline_qualifiers() {
         "section:\n{tu}"
     );
     assert!(tu.contains("inline "), "inline:\n{tu}");
+}
+
+#[test]
+fn referenced_authored_inline_function_preserves_section17_qualifier() {
+    let mut m = model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::Rust, false);
+    let callee_body = build_body(0, vec![unit], vec![bb(vec![], tk(TerminatorKind::Return))]);
+    let callee = fn_instance(&mut m, "inline_callee", sig, Some(callee_body));
+    m.items[m.instances[callee].item].inline_hint = InlineHint::Hint;
+    let caller_body = build_body(
+        0,
+        vec![unit],
+        vec![
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(callee),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(1)),
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+        ],
+    );
+    fn_instance(&mut m, "inline_caller", sig, Some(caller_body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert_eq!(tu.matches("inline void inline_callee(void)").count(), 2);
+    assert!(!tu.contains("static inline void inline_callee(void)"));
 }
 
 #[test]
@@ -2600,6 +2735,7 @@ fn divergent_call_emits_unreachable() {
     let never_ty = never(&mut m);
     let dsig = fnsig(&mut m, vec![], never_ty, FnAbi::Rust, false);
     let diverge = fn_instance(&mut m, "diverge", dsig, None);
+    m.items[m.instances[diverge].item].linkage = Linkage::Foreign;
 
     let csig = fnsig(&mut m, vec![], u32t, FnAbi::Rust, false);
     let body = build_body(
@@ -7142,6 +7278,7 @@ fn const_memory_static_via_call_argument_is_re_typed_and_cast() {
     // The callee `consume(&[u32; 4])`.
     let consume_sig = fnsig(&mut m, vec![ref_arr], unit, FnAbi::Rust, false);
     let consume = fn_instance(&mut m, "consume", consume_sig, None);
+    m.items[m.instances[consume].item].linkage = Linkage::Foreign;
     // The CMS the carrier points at.
     let mut bytes = le32(1);
     bytes.extend(le32(2));

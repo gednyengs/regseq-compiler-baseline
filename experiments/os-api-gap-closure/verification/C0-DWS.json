@@ -1,0 +1,86 @@
+{
+  "schema": "gap-closure-verification-plan/1",
+  "stage": "C0-DWS",
+  "commands": [
+    {
+      "argv": ["cargo", "test", "--workspace"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "zephyr_e1000_e2e", "zephyr_e1000_snapshot_and_l0_structure", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dws_alias_recognition_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dws_reset_smoke_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dws_nosubmit_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dws_reject_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dws_reset_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "regseq-backends", "generic_c::tests::work_hooks_emitted_only_for_deferred_work_tu", "--", "--exact"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dws_os_lowering_e2e"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-lc", "test -n \"${RSEQ_LINUX_KDIR:-}\" && cargo test -p codegen-coverage-runner --test linux_kbuild_e2e generated_drivers_kbuild_against_the_campaign_tree -- --exact --nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-lc", "test -n \"${RSEQ_ZEPHYR_WORKSPACE:-}\" && cargo test -p codegen-coverage-runner --test zephyr_build_e2e zephyr_build_gate_over_deferred_work -- --exact --nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dws_reset_e2e", "deferred_work_reset_oracle", "--", "--exact", "--nocapture"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["cargo", "test", "-p", "codegen-coverage-runner", "--test", "dws_covers"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["bash", "--noprofile", "--norc", "-lc", "test ! -e crates/codegen-coverage-runner/fixtures/_deferred_work/deferred-work-reset/platform.toml && test ! -e crates/codegen-coverage-runner/fixtures/_deferred_work/deferred-work-nosubmit/platform.toml && test ! -e crates/codegen-coverage-runner/fixtures/_deferred_work/deferred-work-alias/platform.toml && ! rg -n 'DeferredWork|DWS' crates/regseq-model/src/target.rs && ! rg -n 'deferred_work|deferred-work|DeferredWork|DWS' crates/regseq-config crates/regseq-l2"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["python3", "-c", "import json; p=json.load(open('experiments/os-api-gap-closure/provenance/C0-DWS.json')); assert p['source_object'] == '1cb33bbde8fd74674aa3d42fe1fc56397f174474'; assert p['source_snapshot_sha256'] == '81654da75da2c035b75bf08035dbfe9cf40cf1f75b2486cb27024e25b97bf1ff'; assert p['reviewed_provenance_through'] == 'fe3b852'; a=p['target_accounting']; assert a == {'before': 4, 'after': 4, 'dws_is_target': False}; assert p['l1_vocabulary_added'] == []; s=p['snapshot_audit']; assert (s['manifest_entries'], s['byte_exact_destinations'], s['adapted_destinations'], s['missing_destinations']) == (76, 64, 12, 0)"],
+      "cwd": ".",
+      "expected_outputs": []
+    },
+    {
+      "argv": ["python3", "-c", "import hashlib,json,pathlib; r=pathlib.Path('.'); s=pathlib.Path('/home/nyengele/regseq-eval-worktrees/regseq-gap-closure/docs/experiments/os-api-gap-closure/convergence/branch-snapshots/1cb33bbde8fd74674aa3d42fe1fc56397f174474'); m=json.loads((s/'SNAPSHOT-MANIFEST.json').read_text()); rows=[(e['path'],hashlib.sha256((s/e['path']).read_bytes()).hexdigest(),None if not (r/e['path']).exists() else hashlib.sha256((r/e['path']).read_bytes()).hexdigest(),e['sha256']) for e in m['files']]; assert all(src==want for _,src,_,want in rows); assert not [p for p,_,dst,_ in rows if dst is None]; adapted=[p for p,_,dst,want in rows if dst!=want]; assert adapted==json.load(open('experiments/os-api-gap-closure/provenance/C0-DWS.json'))['snapshot_audit']['adapted_paths']; assert len(rows)-len(adapted)==64"],
+      "cwd": ".",
+      "expected_outputs": []
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+name = "transport-admission"
+kind = "rust"
+lifecycle_scenario = "orderly"
+covers = ["G-device-command-transport-01", "G-device-command-transport-02", "G-device-command-transport-03", "G-device-command-transport-04", "G-device-command-transport-05"]
+expect = "pass"

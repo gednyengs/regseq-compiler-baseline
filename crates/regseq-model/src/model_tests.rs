@@ -181,12 +181,13 @@ fn root_struct_exposes_spec_field_set() {
         domain_attrs,
         device_lifecycle,
         interrupt,
-        serial,
         synchronization,
         clock,
         pinctrl,
-        dma,
         deferred_work,
+        serial_port,
+        dma,
+        network_interface,
     } = m;
 
     assert_eq!(primary_crate, CrateId::ZERO);
@@ -209,12 +210,13 @@ fn root_struct_exposes_spec_field_set() {
     assert_eq!(domain_attrs, crate::DomainAttrTables::default());
     assert_eq!(device_lifecycle, crate::DeviceLifecycleTables::default());
     assert_eq!(interrupt, crate::InterruptTables::default());
-    assert_eq!(serial, crate::SerialTables::default());
     assert_eq!(synchronization, crate::SynchronizationTables::default());
     assert_eq!(clock, crate::ClockTables::default());
     assert_eq!(pinctrl, crate::PinctrlTables::default());
-    assert_eq!(dma, crate::DmaTables::default());
     assert_eq!(deferred_work, crate::DeferredWorkTables::default());
+    assert_eq!(serial_port, crate::SerialPortTables::default());
+    assert_eq!(dma, crate::DmaTables::default());
+    assert_eq!(network_interface, crate::NetworkInterfaceTables::default());
 }
 
 // ------------------------------------------------------------------
